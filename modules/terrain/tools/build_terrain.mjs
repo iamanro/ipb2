@@ -114,7 +114,12 @@ async function main() {
   let filled = 0;
   for (const file of sources) {
     const raster = await openRaster(file);
-    if (raster.east <= west || raster.west >= east || raster.north <= south || raster.south >= north)
+    if (
+      raster.east <= west ||
+      raster.west >= east ||
+      raster.north <= south ||
+      raster.south >= north
+    )
       continue;
     process.stdout.write(`  ${path.basename(file)}\n`);
     for (const [id, grid] of tiles) {

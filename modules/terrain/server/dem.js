@@ -38,7 +38,10 @@ export function metresBetween(a, b) {
 export function openTerrain(file) {
   const database = new DatabaseSync(file, { readOnly: true });
   const meta = Object.fromEntries(
-    database.prepare('SELECT key, value FROM meta').all().map((row) => [row.key, row.value]),
+    database
+      .prepare('SELECT key, value FROM meta')
+      .all()
+      .map((row) => [row.key, row.value]),
   );
   const cellsPerDegree = Number(meta.cells_per_degree || 3600);
   const bounds = JSON.parse(meta.bounds || '[0,0,0,0]');

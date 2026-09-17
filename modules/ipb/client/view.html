@@ -1,0 +1,67 @@
+<div class="workspace">
+  <aside class="control-panel" aria-label="IPB controls">
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">Analyst workbench</p>
+        <h1 id="step-title">Define the environment</h1>
+      </div>
+      <button class="text-button" id="print-worksheet" type="button">Print worksheet</button>
+    </div>
+
+    <div class="study-bar">
+      <button class="study-toggle" id="study-toggle" type="button" aria-expanded="false">
+        <span class="eyebrow">Study</span>
+        <strong id="study-name">No study selected</strong>
+      </button>
+      <div class="study-menu" id="study-menu" hidden>
+        <label class="search-field" for="study-search">
+          <span>Find or create <kbd>/</kbd></span>
+          <div class="search-control">
+            <span aria-hidden="true">⌕</span>
+            <input id="study-search" type="search" autocomplete="off" placeholder="Study name…" />
+          </div>
+        </label>
+        <div id="study-list" class="study-list"></div>
+        <button class="text-button" id="create-study" type="button">+ Create study</button>
+      </div>
+    </div>
+
+    <nav class="step-nav" id="step-nav" aria-label="IPB steps">
+      <button class="step-tab" data-step="1" type="button"><span>1</span>Environment</button>
+      <button class="step-tab" data-step="2" type="button" disabled><span>2</span>Effects</button>
+      <button class="step-tab" data-step="3" type="button" disabled><span>3</span>Threat</button>
+      <button class="step-tab" data-step="4" type="button" disabled><span>4</span>COAs</button>
+    </nav>
+
+    <div id="tool-panel" class="tool-panel"></div>
+  </aside>
+
+  <section class="map-panel" aria-label="Map">
+    <div id="map-target" class="map-target"></div>
+    <div class="map-overlay">
+      <div class="map-readout" id="map-readout">
+        <span class="readout-label">MGRS</span>
+        <span id="pointer-mgrs">—</span>
+      </div>
+      <div class="map-hint" id="map-hint" hidden></div>
+      <div class="map-click-info" id="map-click-info" hidden></div>
+    </div>
+    <div class="map-empty" id="map-empty">
+      <p class="eyebrow">No study open</p>
+      <h2>Create or select a study</h2>
+      <p>The map and worksheet activate once a study is open.</p>
+      <button class="primary-button" id="map-empty-create" type="button">+ New study</button>
+    </div>
+  </section>
+
+  <article class="detail-panel" id="detail-panel" aria-label="Worksheet">
+    <header class="worksheet-heading">
+      <p class="eyebrow">IPB worksheet</p>
+      <h2 id="worksheet-study-name">No study open</h2>
+    </header>
+    <section class="step-section" data-step="1" id="worksheet-1"></section>
+    <section class="step-section" data-step="2" id="worksheet-2"></section>
+    <section class="step-section" data-step="3" id="worksheet-3"></section>
+    <section class="step-section" data-step="4" id="worksheet-4"></section>
+  </article>
+</div>

@@ -158,9 +158,11 @@ export function openLandcover(file) {
             const shape = feature.toGeoJSON(x, y, TILE_ZOOM);
             const { type, coordinates } = shape.geometry;
             if (type === 'Polygon') fillRing(coordinates, cover);
-            else if (type === 'MultiPolygon') for (const rings of coordinates) fillRing(rings, cover);
+            else if (type === 'MultiPolygon')
+              for (const rings of coordinates) fillRing(rings, cover);
             else if (type === 'LineString') strokeLine(coordinates, cover);
-            else if (type === 'MultiLineString') for (const line of coordinates) strokeLine(line, cover);
+            else if (type === 'MultiLineString')
+              for (const line of coordinates) strokeLine(line, cover);
           }
         }
       }

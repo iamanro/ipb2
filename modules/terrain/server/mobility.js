@@ -73,7 +73,9 @@ export async function mobilityOverlay({
       const fromSlope = slopeClass(terrain.slopeDegrees(longitude, latitude));
       const fromCover = cover[index];
       const value =
-        fromSlope === UNKNOWN ? UNKNOWN : Math.max(fromSlope, fromCover === UNKNOWN ? 0 : fromCover);
+        fromSlope === UNKNOWN
+          ? UNKNOWN
+          : Math.max(fromSlope, fromCover === UNKNOWN ? 0 : fromCover);
       values[index] = value;
       counts.set(value, (counts.get(value) || 0) + 1);
     }

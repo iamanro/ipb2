@@ -11,10 +11,6 @@
     "format": "vp fmt --write",
     "lint": "vp lint"
   },
-  "devDependencies": {
-    "geotiff": "^3.1.0-beta.0",
-    "vite-plus": "0.3.0"
-  },
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",
     "mgrs": "^2.2.0",
@@ -23,5 +19,9 @@
     "ol-pmtiles": "^2.0.2",
     "pbf": "^5.1.2",
     "pmtiles": "^4.5.0"
+  },
+  "devDependencies": {
+    "geotiff": "^3.1.0-beta.0",
+    "vite-plus": "0.3.0"
   }
 }
