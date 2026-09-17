@@ -26,6 +26,8 @@ function createState() {
     requestedId: null,
     request: null,
     session: new AbortController(),
+    bookmarks: new Map(),
+    bookmarkPending: new Set(),
   };
 }
 
@@ -44,6 +46,9 @@ function queryElements(root) {
     detailEmpty: pick('#detail-empty'),
     detailPanel: pick('#detail-panel'),
     loadMore: pick('#load-more'),
+    bookmarkCount: pick('#bookmark-count'),
+    bookmarkError: pick('#bookmark-error'),
+    bookmarkList: pick('#bookmark-list'),
   };
 }
 
@@ -77,9 +82,14 @@ function isoLabel(entry) {
 }
 
 /** Every request dies with its mount, so a stale view never touches a newer one. */
-async function requestJson(path, signal = state.session.signal) {
-  const response = await fetch(path, { signal });
-  const payload = await response.json();
+async function requestJson(path, { method = 'GET', body, signal = state.session.signal } = {}) {
+  const options = { method, signal };
+  if (body !== undefined) {
+    options.headers = { 'Content-Type': 'application/json' };
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `Request failed: ${response.status}`);
   return payload;
 }
@@ -357,7 +367,12 @@ function renderCard(item, index) {
   body.append(meta);
   button.append(media, body);
   button.addEventListener('click', () => selectCard(item.identifier, true));
-  return button;
+
+  // The star sits outside the card button: a button cannot contain another
+  // interactive control, so the two are positioned siblings instead.
+  const wrap = createElement('div', 'equipment-card-wrap');
+  wrap.append(button, renderBookmarkStar(item.identifier));
+  return wrap;
 }
 
 function renderCards() {
@@ -398,10 +413,9 @@ async function loadCards(append = false) {
   elements.resultStatus.textContent = append ? 'Loading more records…' : 'Filtering local index…';
   elements.cardList.classList.add('is-loading');
   try {
-    const result = await requestJson(
-      `${API}/cards?${parameters}`,
-      AbortSignal.any([state.request.signal, state.session.signal]),
-    );
+    const result = await requestJson(`${API}/cards?${parameters}`, {
+      signal: AbortSignal.any([state.request.signal, state.session.signal]),
+    });
     state.cards = append ? [...state.cards, ...result.items] : result.items;
     state.total = result.total;
     elements.cardList.classList.remove('is-loading');
@@ -504,7 +518,7 @@ function renderSection(section, depth = 0) {
   return wrapper;
 }
 
-function renderDetail(card) {
+function renderDetail(card, identifier) {
   elements.detail.replaceChildren();
   const header = createElement('header', 'detail-header');
   const overline = createElement('div', 'detail-overline');
@@ -548,7 +562,7 @@ function renderDetail(card) {
     specifications.append(wrapper);
   }
   card.sections.forEach((section) => specifications.append(renderSection(section)));
-  elements.detail.append(header, summary, specifications);
+  elements.detail.append(header, renderBookmarkControl(identifier), summary, specifications);
 }
 
 async function selectCard(identifier, updateLocation) {
@@ -565,7 +579,7 @@ async function selectCard(identifier, updateLocation) {
   try {
     const card = await requestJson(`${API}/cards/${encodeURIComponent(identifier)}`);
     if (identifier !== state.selectedId) return;
-    renderDetail(card);
+    renderDetail(card, identifier);
     writeLocation();
     if (updateLocation) {
       elements.detailPanel.scrollTo({ top: 0 });
@@ -584,6 +598,144 @@ function clearDetail() {
   elements.detail.hidden = true;
   elements.detailEmpty.hidden = false;
   writeLocation();
+}
+
+// --- Bookmarks -------------------------------------------------------------
+
+function showBookmarkError(message) {
+  elements.bookmarkError.textContent = message;
+  elements.bookmarkError.hidden = false;
+}
+
+function clearBookmarkError() {
+  elements.bookmarkError.hidden = true;
+}
+
+function renderBookmarkStar(identifier) {
+  const bookmarked = state.bookmarks.has(identifier);
+  const star = createElement(
+    'button',
+    `bookmark-star${bookmarked ? ' is-bookmarked' : ''}`,
+    bookmarked ? '★' : '☆',
+  );
+  star.type = 'button';
+  star.title = bookmarked ? 'Remove bookmark' : 'Add bookmark';
+  star.setAttribute('aria-pressed', String(bookmarked));
+  star.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleBookmark(identifier);
+  });
+  return star;
+}
+
+function renderBookmarkControl(identifier) {
+  const bookmark = state.bookmarks.get(identifier);
+  const wrap = createElement('div', 'bookmark-control');
+  const toggle = createElement(
+    'button',
+    `bookmark-toggle${bookmark ? ' is-bookmarked' : ''}`,
+    bookmark ? '★ Bookmarked' : '☆ Bookmark this card',
+  );
+  toggle.type = 'button';
+  toggle.setAttribute('aria-pressed', String(Boolean(bookmark)));
+  toggle.addEventListener('click', () => toggleBookmark(identifier));
+  wrap.append(toggle);
+  if (bookmark) {
+    const note = document.createElement('textarea');
+    note.className = 'bookmark-note';
+    note.rows = 2;
+    note.placeholder = 'Add a note for this bookmark…';
+    note.value = bookmark.note;
+    const save = createElement('button', 'text-button', 'Save note');
+    save.type = 'button';
+    save.addEventListener('click', () => saveBookmarkNote(bookmark.id, note.value));
+    wrap.append(note, save);
+  }
+  return wrap;
+}
+
+function renderBookmarkList() {
+  elements.bookmarkCount.textContent = String(state.bookmarks.size);
+  if (!state.bookmarks.size) {
+    elements.bookmarkList.replaceChildren(
+      createElement('p', 'panel-note', 'Star a card to save it here.'),
+    );
+    return;
+  }
+  const rows = [...state.bookmarks.values()]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((bookmark) => {
+      const row = createElement('div', 'bookmark-row');
+      const name = createElement('button', 'bookmark-row-name', bookmark.name);
+      name.type = 'button';
+      name.title = bookmark.note || bookmark.name;
+      name.addEventListener('click', () => selectCard(bookmark.identifier, true));
+      const remove = createElement('button', 'bookmark-row-remove', 'Remove');
+      remove.type = 'button';
+      remove.addEventListener('click', () => toggleBookmark(bookmark.identifier));
+      row.append(name, remove);
+      return row;
+    });
+  elements.bookmarkList.replaceChildren(...rows);
+}
+
+/** Reflects a bookmark change everywhere it is shown, without a network round trip. */
+function refreshBookmarkUi(identifier) {
+  renderCards();
+  if (state.selectedId === identifier) {
+    elements.detail
+      .querySelector(':scope > .bookmark-control')
+      ?.replaceWith(renderBookmarkControl(identifier));
+  }
+  renderBookmarkList();
+}
+
+async function loadBookmarks() {
+  const result = await requestJson(`${API}/bookmarks`);
+  state.bookmarks = new Map(result.items.map((item) => [item.identifier, item]));
+  renderBookmarkList();
+  if (state.cards.length) renderCards();
+}
+
+/** Guarded so a fast double click cannot create two bookmarks for one card. */
+async function toggleBookmark(identifier) {
+  if (state.bookmarkPending.has(identifier)) return;
+  state.bookmarkPending.add(identifier);
+  clearBookmarkError();
+  try {
+    const existing = state.bookmarks.get(identifier);
+    if (existing) {
+      await requestJson(`${API}/bookmarks/${existing.id}`, { method: 'DELETE' });
+      state.bookmarks.delete(identifier);
+    } else {
+      const created = await requestJson(`${API}/bookmarks`, {
+        method: 'POST',
+        body: { identifier },
+      });
+      state.bookmarks.set(identifier, created);
+    }
+    refreshBookmarkUi(identifier);
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    showBookmarkError(error.message);
+  } finally {
+    state.bookmarkPending.delete(identifier);
+  }
+}
+
+async function saveBookmarkNote(id, note) {
+  clearBookmarkError();
+  try {
+    const updated = await requestJson(`${API}/bookmarks/${id}`, {
+      method: 'PATCH',
+      body: { note },
+    });
+    state.bookmarks.set(updated.identifier, updated);
+    refreshBookmarkUi(updated.identifier);
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    showBookmarkError(error.message);
+  }
 }
 
 // --- Wiring --------------------------------------------------------------
@@ -637,6 +789,10 @@ export function mount({ root, status }) {
   elements.loadMore.addEventListener('click', () => loadCards(true));
 
   readLocation();
+  loadBookmarks().catch((error) => {
+    if (error.name === 'AbortError') return;
+    showBookmarkError(error.message);
+  });
   loadFoundation(status)
     .then(() => loadCards())
     .catch((error) => {

@@ -3,7 +3,8 @@ import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { HttpError, integerParameter, sendJson } from '../../../server/http.js';
+import { HttpError, integerParameter, readJson, sendJson } from '../../../server/http.js';
+import { openBookmarks } from './bookmarks.js';
 import {
   KINDS,
   imagePath,
@@ -17,7 +18,9 @@ import {
 
 const ID = 'equipment';
 const DATA_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const STATE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state');
 const DATABASE = path.join(DATA_ROOT, 'unitgenerator.db');
+const BOOKMARKS_DATABASE = path.join(STATE_ROOT, 'bookmarks.db');
 const ODIN_ASSET_ROOT = 'https://odin.t2com.army.mil/dotcms/';
 
 const SIGNATURES = [
@@ -113,11 +116,67 @@ async function serveImage(database, response, encodedPath) {
   createReadStream(absolute).pipe(response);
 }
 
+/** A bookmark carries only an identifier; the card fields shown alongside it
+ * are presentation, so they are looked up here rather than stored twice. A
+ * card that has since disappeared from the reference data falls back to
+ * showing its bare identifier instead of failing the whole list. */
+function enrichBookmark(database, bookmark) {
+  const card = showCard(database, bookmark.identifier);
+  if (!card) {
+    return { ...bookmark, name: bookmark.identifier, title: bookmark.identifier, image_url: null };
+  }
+  const image = card.images[0];
+  return {
+    ...bookmark,
+    name: card.name,
+    title: card.title,
+    image_url: image ? publicImageUrl(bookmark.identifier, image) : null,
+  };
+}
+
+let bookmarkStore;
+
+async function handleBookmarks(database, { route, request, response }) {
+  bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+  const enrich = (bookmark) => enrichBookmark(database, bookmark);
+  const idMatch = /^bookmarks\/(\d+)$/.exec(route);
+
+  if (route === 'bookmarks') {
+    if (request.method === 'GET') {
+      sendJson(response, { items: bookmarkStore.list().map(enrich) });
+      return;
+    }
+    if (request.method === 'POST') {
+      const body = await readJson(request);
+      sendJson(response, enrich(bookmarkStore.create(body)), 201);
+      return;
+    }
+    throw new HttpError(405, 'Method not allowed.');
+  }
+
+  if (idMatch) {
+    const id = Number(idMatch[1]);
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      sendJson(response, enrich(bookmarkStore.update(id, body)));
+      return;
+    }
+    if (request.method === 'DELETE') {
+      bookmarkStore.remove(id);
+      sendJson(response, { deleted: true });
+      return;
+    }
+    throw new HttpError(405, 'Method not allowed.');
+  }
+
+  throw new HttpError(404, 'Unknown API route.');
+}
+
 let database;
 
 export default {
   id: ID,
-  async handle({ route, url, response }) {
+  async handle({ route, url, request, response }) {
     database ??= openDatabase(DATABASE);
     if (route === 'stats') sendJson(response, stats(database));
     else if (route === 'cards') sendJson(response, apiCards(database, url.searchParams));
@@ -126,10 +185,14 @@ export default {
     } else if (route === 'taxonomy') sendJson(response, apiTaxonomy(database, url.searchParams));
     else if (route.startsWith('images/')) {
       await serveImage(database, response, route.slice('images/'.length));
+    } else if (route === 'bookmarks' || route.startsWith('bookmarks/')) {
+      await handleBookmarks(database, { route, request, response });
     } else throw new HttpError(404, 'Unknown API route.');
   },
   close() {
     database?.close();
     database = undefined;
+    bookmarkStore?.close();
+    bookmarkStore = undefined;
   },
 };
