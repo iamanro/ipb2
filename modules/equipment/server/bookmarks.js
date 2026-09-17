@@ -62,7 +62,13 @@ function mutate(action, target, work) {
 // -- public interface ---------------------------------------------------------
 
 function list() {
-  return database.prepare('SELECT * FROM bookmarks ORDER BY created_at DESC').all().map(toBookmark);
+  // `created_at` has millisecond resolution; two bookmarks created in the
+  // same millisecond (a fast double-star) would otherwise sort arbitrarily.
+  // `id` is monotonic, so it breaks the tie in true creation order.
+  return database
+    .prepare('SELECT * FROM bookmarks ORDER BY created_at DESC, id DESC')
+    .all()
+    .map(toBookmark);
 }
 
 function create({ identifier }) {

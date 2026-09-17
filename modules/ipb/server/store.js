@@ -297,7 +297,7 @@ function listStudies() {
               (SELECT count(*) FROM features WHERE study_id = s.id) AS feature_count,
               (SELECT count(*) FROM coas WHERE study_id = s.id) AS coa_count
        FROM studies AS s
-       ORDER BY s.updated_at DESC`,
+       ORDER BY s.updated_at DESC, s.id DESC`,
     )
     .all();
   return {

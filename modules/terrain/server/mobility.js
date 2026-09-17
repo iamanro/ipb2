@@ -14,7 +14,7 @@ export const LEGEND = [
 const SLOW_GO_SLOPE = 10;
 const NO_GO_SLOPE = 30;
 
-function slopeClass(degrees) {
+export function slopeClass(degrees) {
   if (Number.isNaN(degrees)) return UNKNOWN;
   if (degrees >= NO_GO_SLOPE) return NO_GO;
   if (degrees >= SLOW_GO_SLOPE) return SLOW_GO;

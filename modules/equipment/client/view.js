@@ -663,7 +663,7 @@ function renderBookmarkList() {
     return;
   }
   const rows = [...state.bookmarks.values()]
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id)
     .map((bookmark) => {
       const row = createElement('div', 'bookmark-row');
       const name = createElement('button', 'bookmark-row-name', bookmark.name);
