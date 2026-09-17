@@ -12,6 +12,7 @@ const STUDIES = /^studies$/;
 const STUDY = /^studies\/(\d+)$/;
 const STUDY_CHILDREN = /^studies\/(\d+)\/(features|threats|coas|events|analyses)$/;
 const CHILD = /^(features|threats|coas|events|analyses)\/(\d+)$/;
+const CHILD_REORDER = /^(features|threats|coas|events|analyses)\/(\d+)\/reorder$/;
 
 function parseId(text) {
   return Number.parseInt(text, 10);
@@ -64,6 +65,15 @@ async function handle({ route, request, response }) {
     }
     if (method === 'DELETE') return sendJson(response, store.deleteChild(kind, id));
     throw new HttpError(405, 'Method not allowed.');
+  }
+
+  match = CHILD_REORDER.exec(route);
+  if (match) {
+    const [, kind, rawId] = match;
+    const id = parseId(rawId);
+    if (method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+    const body = await readJson(request);
+    return sendJson(response, store.reorderChild(kind, id, body.direction));
   }
 
   throw new HttpError(404, 'Unknown API route.');

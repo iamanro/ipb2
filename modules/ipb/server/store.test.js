@@ -212,6 +212,53 @@ describe('openStore: child validation contract', () => {
     expect(store.readStudy(studyId).study.revision).toBe(before);
   });
 
+  test('reorder swaps ordinal with the next sibling, and is reversible', () => {
+    const a = store.createChild('threats', studyId, { name: 'A' });
+    const b = store.createChild('threats', studyId, { name: 'B' });
+    const c = store.createChild('threats', studyId, { name: 'C' });
+    expect([a, b, c].map((row) => row.name)).toEqual(['A', 'B', 'C']);
+
+    const afterDown = store.reorderChild('threats', a.id, 'down');
+    expect(afterDown.items.map((row) => row.name)).toEqual(['B', 'A', 'C']);
+
+    const afterUp = store.reorderChild('threats', a.id, 'up');
+    expect(afterUp.items.map((row) => row.name)).toEqual(['A', 'B', 'C']);
+  });
+
+  test('reordering past either end is a no-op, not an error', () => {
+    const a = store.createChild('coas', studyId, { name: 'A', kind: 'most-likely' });
+    const b = store.createChild('coas', studyId, { name: 'B', kind: 'most-dangerous' });
+    const first = store.reorderChild('coas', a.id, 'up');
+    expect(first.items.map((row) => row.name)).toEqual(['A', 'B']);
+    const last = store.reorderChild('coas', b.id, 'down');
+    expect(last.items.map((row) => row.name)).toEqual(['A', 'B']);
+  });
+
+  test('reordering does not cross study boundaries', () => {
+    const a = store.createChild('threats', studyId, { name: 'A' });
+    const otherStudyId = store.createStudy({ name: 'Other study' }).id;
+    store.createChild('threats', otherStudyId, { name: 'Z' });
+    // A has no sibling in its own study, so moving it down must be a no-op,
+    // never reaching across into the other study's rows.
+    const result = store.reorderChild('threats', a.id, 'down');
+    expect(result.items.map((row) => row.name)).toEqual(['A']);
+  });
+
+  test('rejects reordering a non-ordinal kind and an invalid direction', () => {
+    const feature = store.createChild('features', studyId, {
+      layer: 'aoi',
+      kind: 'polygon',
+      geometry: POINT,
+    });
+    expectStatus(() => store.reorderChild('features', feature.id, 'up'), 400);
+    const threat = store.createChild('threats', studyId, { name: 'A' });
+    expectStatus(() => store.reorderChild('threats', threat.id, 'sideways'), 400);
+  });
+
+  test('reordering an unknown id is a 404', () => {
+    expectStatus(() => store.reorderChild('threats', 999999, 'up'), 404);
+  });
+
   test('analysis rows accept an array summary, not only an object', () => {
     const analysis = store.createChild('analyses', studyId, {
       kind: 'line-of-sight',

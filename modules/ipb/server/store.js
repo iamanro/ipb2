@@ -102,6 +102,7 @@ export function openStore(file) {
     createChild,
     updateChild,
     deleteChild,
+    reorderChild,
     close,
   };
 }
@@ -530,6 +531,48 @@ function updateChild(kind, id, patch) {
         .run(...params, id);
     },
     () => readChildRow(kind, id),
+  );
+}
+
+/**
+ * Swap an ordinal-kind row with its immediate sibling. There is no unique
+ * constraint on `ordinal`, so a plain two-row swap is safe: nothing else
+ * reads ordinals except `ORDER BY ordinal, id`.
+ */
+function reorderChild(kind, id, direction) {
+  const config = childConfig(kind);
+  if (!config.ordinal) throw new HttpError(400, `${kind} does not support reordering.`);
+  if (direction !== 'up' && direction !== 'down') {
+    throw new HttpError(400, 'direction must be "up" or "down".');
+  }
+  const row = database.prepare(`SELECT * FROM ${config.table} WHERE id = ?`).get(id);
+  if (!row) throw new HttpError(404, `Unknown ${kind} id ${id}.`);
+
+  const comparator = direction === 'up' ? '<' : '>';
+  const order = direction === 'up' ? 'DESC' : 'ASC';
+  const neighbor = database
+    .prepare(
+      `SELECT id, ordinal FROM ${config.table}
+       WHERE study_id = ? AND ordinal ${comparator} ?
+       ORDER BY ordinal ${order} LIMIT 1`,
+    )
+    .get(row.study_id, row.ordinal);
+  // Already first or last: a no-op, not an error.
+  if (!neighbor) return { items: listChildren(kind, row.study_id) };
+
+  return mutate(
+    row.study_id,
+    'reorder',
+    `${kind}:${id}`,
+    () => {
+      database
+        .prepare(`UPDATE ${config.table} SET ordinal = ? WHERE id = ?`)
+        .run(neighbor.ordinal, row.id);
+      database
+        .prepare(`UPDATE ${config.table} SET ordinal = ? WHERE id = ?`)
+        .run(row.ordinal, neighbor.id);
+    },
+    () => ({ items: listChildren(kind, row.study_id) }),
   );
 }
 

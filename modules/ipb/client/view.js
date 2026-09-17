@@ -1466,6 +1466,39 @@ function bindDebouncedCommit(element, key, commit) {
 
 // --- Step 3: evaluate the threat ------------------------------------------
 
+/** Shared by the order-of-battle table and the COA cards: both sort by ordinal. */
+async function reorderChild(kind, id, direction, worksheetElement, rerender) {
+  try {
+    const result = await requestJson(`${API}/${kind}/${id}/reorder`, {
+      method: 'POST',
+      body: { direction },
+    });
+    state.study[kind] = result.items;
+    rerender();
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    showError(worksheetElement, error.message);
+  }
+}
+
+function renderReorderButtons(kind, item, index, total, worksheetElement, rerender) {
+  const wrap = createElement('span', 'reorder-buttons');
+  const up = createElement('button', 'icon-button', '↑');
+  up.type = 'button';
+  up.title = 'Move up';
+  up.disabled = index === 0;
+  up.addEventListener('click', () => reorderChild(kind, item.id, 'up', worksheetElement, rerender));
+  const down = createElement('button', 'icon-button', '↓');
+  down.type = 'button';
+  down.title = 'Move down';
+  down.disabled = index === total - 1;
+  down.addEventListener('click', () =>
+    reorderChild(kind, item.id, 'down', worksheetElement, rerender),
+  );
+  wrap.append(up, down);
+  return wrap;
+}
+
 async function patchThreat(threat, body) {
   try {
     const updated = await requestJson(`${API}/threats/${threat.id}`, { method: 'PATCH', body });
@@ -1631,7 +1664,7 @@ function renderStep3Tools() {
   return container;
 }
 
-function renderThreatRow(threat) {
+function renderThreatRow(threat, index, total) {
   const row = document.createElement('tr');
 
   const nameCell = document.createElement('td');
@@ -1715,6 +1748,16 @@ function renderThreatRow(threat) {
   row.append(notesCell);
 
   const actionsCell = document.createElement('td');
+  actionsCell.append(
+    renderReorderButtons(
+      'threats',
+      threat,
+      index,
+      total,
+      elements.worksheet3,
+      renderStep3Worksheet,
+    ),
+  );
   const deleteButton = createElement('button', 'icon-button danger', 'Delete');
   deleteButton.type = 'button';
   deleteButton.addEventListener('click', () => deleteThreat(threat));
@@ -1767,7 +1810,9 @@ function renderStep3Worksheet() {
     row.append(cell);
     body.append(row);
   } else {
-    state.study.threats.forEach((threat) => body.append(renderThreatRow(threat)));
+    state.study.threats.forEach((threat, index, all) =>
+      body.append(renderThreatRow(threat, index, all.length)),
+    );
   }
   table.append(body);
   tableSection.append(table);
@@ -1832,7 +1877,7 @@ async function deleteCoa(coa) {
   }
 }
 
-function renderCoaCard(coa) {
+function renderCoaCard(coa, index, total) {
   const card = createElement('article', 'coa-card');
   const isSelected = String(coa.id) === String(state.selectedCoaId);
   if (isSelected) card.classList.add('active');
@@ -1844,6 +1889,9 @@ function renderCoaCard(coa) {
       `coa-kind coa-kind-${coa.kind}`,
       coa.kind === 'most-likely' ? 'Most likely' : 'Most dangerous',
     ),
+  );
+  header.append(
+    renderReorderButtons('coas', coa, index, total, elements.worksheet4, renderStep4Worksheet),
   );
   const selectButton = createElement('button', 'icon-button', isSelected ? 'Deselect' : 'Select');
   selectButton.type = 'button';
@@ -2057,7 +2105,11 @@ function renderEventMatrix(container) {
     else if (notObserved > observed) verdict = 'Trending denied';
     const cell = document.createElement('td');
     cell.className = 'tally-cell';
-    cell.append(
+    // The flex layout lives on this inner wrapper, not the <td> itself:
+    // a flex-display table cell confuses Chromium's print pagination once
+    // the row lands on a page break, collapsing every column into one.
+    const inner = createElement('div', 'tally-cell-inner');
+    inner.append(
       createElement(
         'span',
         null,
@@ -2065,6 +2117,7 @@ function renderEventMatrix(container) {
       ),
       createElement('strong', null, verdict),
     );
+    cell.append(inner);
     tallyRow.append(cell);
   });
   tallyRow.append(createElement('td', null, ''));
@@ -2158,7 +2211,9 @@ function renderStep4Worksheet() {
     coaSection.append(createElement('p', 'panel-note', 'No COAs created yet.'));
   } else {
     const cards = createElement('div', 'coa-cards');
-    state.study.coas.forEach((coa) => cards.append(renderCoaCard(coa)));
+    state.study.coas.forEach((coa, index, all) =>
+      cards.append(renderCoaCard(coa, index, all.length)),
+    );
     coaSection.append(cards);
   }
   container.append(coaSection);
