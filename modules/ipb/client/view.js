@@ -599,6 +599,7 @@ function reRenderContainingWorksheet(layer) {
 function cancelActiveTool() {
   if (!state.tool) return;
   if (state.tool.type === 'draw-feature') mapController.cancelDraw();
+  if (state.tool.type === 'modify-feature') mapController.stopModify();
   state.tool = null;
   state.losPicks = [];
   renderMapHint('');
@@ -620,6 +621,191 @@ async function showElevationReadout(lon, lat) {
   } catch (error) {
     elements.mapClickInfo.textContent = error.message;
   }
+}
+
+// --- Toast -------------------------------------------------------------------
+
+let toastTimer;
+
+function showToast(message) {
+  let node = elements.moduleRoot.querySelector(':scope > .ipb-toast');
+  if (!node) {
+    node = createElement('div', 'ipb-toast');
+    elements.moduleRoot.append(node);
+  }
+  node.textContent = message;
+  node.classList.add('visible');
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => node.classList.remove('visible'), 1600);
+}
+
+// --- Context menu --------------------------------------------------------
+
+function closeContextMenu() {
+  elements.moduleRoot?.querySelector(':scope > .context-menu')?.remove();
+  document.removeEventListener('mousedown', closeContextMenu, true);
+  document.removeEventListener('contextmenu', closeContextMenu, true);
+  document.removeEventListener('keydown', onContextMenuKeydown, true);
+}
+
+function onContextMenuKeydown(event) {
+  if (event.key === 'Escape') closeContextMenu();
+}
+
+/** Renders `items` into `menu`; a submenu item drills down in place with a
+ * "Back" entry, rather than opening a nested flyout. */
+function renderContextMenuItems(menu, items, onBack) {
+  menu.replaceChildren();
+  if (onBack) {
+    const back = createElement('li', 'context-menu-item context-menu-back', '← Back');
+    back.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onBack();
+    });
+    menu.append(back);
+  }
+  items.forEach((item) => {
+    const li = createElement('li', 'context-menu-item', item.label);
+    if (item.disabled) {
+      li.classList.add('disabled');
+    } else {
+      li.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (item.submenu) {
+          renderContextMenuItems(menu, item.submenu, () =>
+            renderContextMenuItems(menu, items, onBack),
+          );
+        } else {
+          closeContextMenu();
+          item.action();
+        }
+      });
+    }
+    menu.append(li);
+  });
+}
+
+function openContextMenu(x, y, items) {
+  closeContextMenu();
+  const menu = createElement('ul', 'context-menu');
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  renderContextMenuItems(menu, items);
+  elements.moduleRoot.append(menu);
+  // Clamp on-screen once the menu has a real size.
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = `${Math.max(0, x - rect.width)}px`;
+  if (rect.bottom > window.innerHeight) menu.style.top = `${Math.max(0, y - rect.height)}px`;
+  window.setTimeout(() => {
+    document.addEventListener('mousedown', closeContextMenu, true);
+    document.addEventListener('contextmenu', closeContextMenu, true);
+    document.addEventListener('keydown', onContextMenuKeydown, true);
+  }, 0);
+}
+
+async function copyCoordinates(lon, lat) {
+  const text = formatMgrs(lon, lat);
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`Copied ${text}`);
+  } catch {
+    showToast(`${text} (clipboard unavailable)`);
+  }
+}
+
+/** Feeds the existing pick-two-points line-of-sight flow without requiring
+ * the panel's "Pick two points" button to be armed first. */
+function setLosPoint(lon, lat, role) {
+  if (state.tool?.type !== 'los-pick') {
+    state.tool = { type: 'los-pick' };
+    state.losPicks = [];
+  }
+  if (role === 'observer') {
+    if (state.losPicks.length >= 1) state.losPicks[0] = { lon, lat };
+    else state.losPicks.push({ lon, lat });
+    syncMapFeatures();
+    renderMapHint('Click, or right-click and choose "Set as LOS target", to finish.');
+    return;
+  }
+  handleLosPick(lon, lat);
+}
+
+function armFeatureModify(feature) {
+  cancelActiveTool();
+  state.tool = { type: 'modify-feature', featureId: feature.id };
+  mapController.startModify(feature.id);
+  renderMapHint(
+    `Drag vertices to reshape "${feature.label || feature.layer}". Press Escape when done.`,
+  );
+}
+
+/** Layer/kind combinations offered by the toolbar, reused for "Draw here". */
+function drawHereItems(lon, lat) {
+  return Object.entries(FEATURE_LAYERS).map(([layer, config]) => ({
+    label: config.label,
+    submenu: config.kinds.map((kind) => {
+      const disabled = layer === 'coa' && !state.selectedCoaId;
+      return {
+        label: `${kind === 'point' ? 'Point here' : `Start ${kind}`}`,
+        disabled,
+        action: () => {
+          if (disabled) return;
+          if (kind === 'point') {
+            handleFeatureDrawn(
+              { layer, coaId: layer === 'coa' ? state.selectedCoaId : undefined },
+              'point',
+              {
+                type: 'Point',
+                coordinates: [lon, lat],
+              },
+            );
+          } else {
+            armFeatureDraw(layer, kind);
+          }
+        },
+      };
+    }),
+  }));
+}
+
+function buildMapContextMenu(lon, lat) {
+  return [
+    { label: 'Copy coordinates', action: () => copyCoordinates(lon, lat) },
+    {
+      label: 'Set as LOS point',
+      submenu: [
+        { label: 'Set as observer', action: () => setLosPoint(lon, lat, 'observer') },
+        { label: 'Set as target', action: () => setLosPoint(lon, lat, 'target') },
+      ],
+    },
+    { label: 'Run viewshed here', action: () => handleViewshedPick(lon, lat) },
+    { label: 'Draw here', submenu: drawHereItems(lon, lat) },
+    { label: 'Show elevation here', action: () => showElevationReadout(lon, lat) },
+  ];
+}
+
+function buildFeatureContextMenu(featureId, lon, lat) {
+  const feature = state.study?.features.find((entry) => String(entry.id) === String(featureId));
+  if (!feature) return buildMapContextMenu(lon, lat);
+  const [pointLon, pointLat] =
+    feature.kind === 'point' || feature.kind === 'symbol'
+      ? feature.geometry.coordinates
+      : [lon, lat];
+  return [
+    { label: 'Zoom to', action: () => mapController.fitFeature(feature.id) },
+    { label: 'Rename', action: () => renameFeature(feature) },
+    { label: 'Start modify (drag vertices)', action: () => armFeatureModify(feature) },
+    { label: 'Copy coordinates', action: () => copyCoordinates(pointLon, pointLat) },
+    { label: 'Delete', action: () => deleteFeature(feature) },
+  ];
+}
+
+function onMapContextMenu({ lon, lat, featureId, clientX, clientY }) {
+  const items =
+    featureId !== null
+      ? buildFeatureContextMenu(featureId, lon, lat)
+      : buildMapContextMenu(lon, lat);
+  openContextMenu(clientX, clientY, items);
 }
 
 function onMapPointerMove({ lon, lat }) {
@@ -2349,6 +2535,7 @@ export function mount({ root, status }) {
   root.innerHTML = template;
   state = createState();
   elements = queryElements(root);
+  elements.moduleRoot = root;
   const { session } = state;
 
   buildMastheadStatus(status);
@@ -2382,6 +2569,7 @@ export function mount({ root, status }) {
     center: DEFAULT_CENTER,
     zoom: DEFAULT_ZOOM,
     onClick: onMapClick,
+    onContextMenu: onMapContextMenu,
     onFeatureChange: onMapFeatureChange,
     onDraw: onMapDraw,
     onPointerMove: onMapPointerMove,
@@ -2421,8 +2609,11 @@ export function mount({ root, status }) {
   return () => {
     state.timers.forEach((id) => window.clearTimeout(id));
     state.timers.clear();
+    window.clearTimeout(toastTimer);
     document.removeEventListener('keydown', onGlobalKeydown);
     document.removeEventListener('click', handleOutsideClick);
+    closeContextMenu();
+    elements.moduleRoot?.querySelector(':scope > .ipb-toast')?.remove();
     session.abort();
     mapController?.destroy();
     mapController = null;

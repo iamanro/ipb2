@@ -375,6 +375,7 @@ export function createMap(options) {
     center = [0, 0],
     zoom = 10,
     onClick,
+    onContextMenu,
     onFeatureChange,
     onDraw,
     onPointerMove,
@@ -384,6 +385,7 @@ export function createMap(options) {
   const iconCache = new Map();
   const gridLayers = new Map();
   const listenerKeys = [];
+  const domCleanups = [];
   let selectedId = null;
   let drawInteraction = null;
   let modifyInteraction = null;
@@ -434,6 +436,30 @@ export function createMap(options) {
         onClick({ lon, lat, featureId: hit ? hit.getId() : null });
       }),
     );
+  }
+
+  if (onContextMenu) {
+    // OpenLayers does not synthesize a MapBrowserEvent for the browser's
+    // native contextmenu event; listen on the viewport directly.
+    const viewport = map.getViewport();
+    const handleContextMenu = (event) => {
+      event.preventDefault();
+      const pixel = map.getEventPixel(event);
+      const [lon, lat] = toLonLat(map.getCoordinateFromPixel(pixel), MAP_PROJECTION);
+      const hit = map.forEachFeatureAtPixel(pixel, (feature) => feature, {
+        layerFilter: (layer) => layer === featureLayer,
+        hitTolerance: 6,
+      });
+      onContextMenu({
+        lon,
+        lat,
+        featureId: hit ? hit.getId() : null,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+    };
+    viewport.addEventListener('contextmenu', handleContextMenu);
+    domCleanups.push(() => viewport.removeEventListener('contextmenu', handleContextMenu));
   }
 
   if (onPointerMove) {
@@ -615,6 +641,8 @@ export function createMap(options) {
     stopModify();
     listenerKeys.forEach((key) => unByKey(key));
     listenerKeys.length = 0;
+    domCleanups.forEach((cleanup) => cleanup());
+    domCleanups.length = 0;
     gridLayers.forEach((entry) => entry.layer.setSource(null));
     gridLayers.clear();
     iconCache.clear();
