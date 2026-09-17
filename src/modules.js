@@ -12,6 +12,7 @@
  * (`/api/terrain/...`) used by the IPB workspace.
  */
 import equipment from '../modules/equipment/module.js';
+import exercise from '../modules/exercise/module.js';
 import ipb from '../modules/ipb/module.js';
 
-export const modules = [ipb, equipment];
+export const modules = [ipb, exercise, equipment];
