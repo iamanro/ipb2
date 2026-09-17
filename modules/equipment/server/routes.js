@@ -1,0 +1,135 @@
+import { createReadStream } from 'node:fs';
+import { open } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { HttpError, integerParameter, sendJson } from '../../../server/http.js';
+import {
+  KINDS,
+  imagePath,
+  listCardExtras,
+  listCards,
+  openDatabase,
+  showCard,
+  stats,
+  taxonomy,
+} from './db.js';
+
+const ID = 'equipment';
+const DATA_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const DATABASE = path.join(DATA_ROOT, 'unitgenerator.db');
+const ODIN_ASSET_ROOT = 'https://odin.t2com.army.mil/dotcms/';
+
+const SIGNATURES = [
+  [[0xff, 0xd8, 0xff], 'image/jpeg'],
+  [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'image/png'],
+  [[0x47, 0x49, 0x46, 0x38], 'image/gif'],
+  [[0x42, 0x4d], 'image/bmp'],
+  [[0x49, 0x49, 0x2a, 0x00], 'image/tiff'],
+  [[0x4d, 0x4d, 0x00, 0x2a], 'image/tiff'],
+];
+
+function publicImageUrl(identifier, image) {
+  if (image.local_path)
+    return `/api/${ID}/images/${encodeURIComponent(identifier)}/${image.ordinal}`;
+  if (image.source_path)
+    return new URL(image.source_path.replace(/^\/+/, ''), ODIN_ASSET_ROOT).href;
+  return null;
+}
+
+/** Local image files carry no extension, so sniff the first bytes. */
+async function imageContentType(file) {
+  const { buffer, bytesRead } = await file.read(Buffer.alloc(512), 0, 512, 0);
+  const head = buffer.subarray(0, bytesRead);
+  for (const [magic, type] of SIGNATURES) {
+    if (magic.every((byte, index) => head[index] === byte)) return type;
+  }
+  if (
+    head.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    head.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  if (head.toString('latin1').toLowerCase().includes('<svg')) return 'image/svg+xml';
+  return 'application/octet-stream';
+}
+
+function apiCards(database, query) {
+  const limit = integerParameter(query, 'limit', 100, 1, 200);
+  const offset = integerParameter(query, 'offset', 0, 0, Number.MAX_SAFE_INTEGER);
+  const filters = Object.fromEntries(KINDS.map((kind) => [kind, query.getAll(kind)]));
+  const { items, total } = listCards(database, { text: query.get('q'), filters, limit, offset });
+  const { images, classifications } = listCardExtras(
+    database,
+    items.map((item) => item.identifier),
+  );
+  for (const item of items) {
+    const image = images.get(item.identifier);
+    item.image_url = image ? publicImageUrl(item.identifier, image) : null;
+    item.domains = classifications.get(item.identifier).domain;
+    item.origins = classifications.get(item.identifier).origin;
+  }
+  return { items, count: items.length, offset, total };
+}
+
+function apiCard(database, identifier) {
+  const card = showCard(database, identifier);
+  if (!card) throw new HttpError(404, 'Equipment card not found.');
+  for (const image of card.images) image.url = publicImageUrl(identifier, image);
+  return card;
+}
+
+function apiTaxonomy(database, query) {
+  const kind = query.get('kind');
+  if (kind !== null && !KINDS.includes(kind)) throw new HttpError(400, 'Unknown taxonomy kind.');
+  const usedOnly = ['1', 'true', 'yes'].includes((query.get('used_only') || '').toLowerCase());
+  return taxonomy(database, kind, usedOnly);
+}
+
+async function serveImage(database, response, encodedPath) {
+  const parts = encodedPath.split('/');
+  const ordinal = Number.parseInt(parts[1], 10);
+  if (parts.length !== 2 || Number.isNaN(ordinal)) throw new HttpError(400, 'Bad image path.');
+  const localPath = imagePath(database, decodeURIComponent(parts[0]), ordinal);
+  if (!localPath) throw new HttpError(404, 'Image not found.');
+  const absolute = path.resolve(DATA_ROOT, localPath);
+  if (!absolute.startsWith(DATA_ROOT + path.sep)) throw new HttpError(400, 'Bad image path.');
+  let file;
+  try {
+    file = await open(absolute, 'r');
+  } catch {
+    throw new HttpError(404, 'Image not found.');
+  }
+  try {
+    const [type, info] = await Promise.all([imageContentType(file), file.stat()]);
+    response.writeHead(200, {
+      'Content-Type': type,
+      'Content-Length': info.size,
+      'Cache-Control': 'public, max-age=86400',
+    });
+  } finally {
+    await file.close();
+  }
+  createReadStream(absolute).pipe(response);
+}
+
+let database;
+
+export default {
+  id: ID,
+  async handle({ route, url, response }) {
+    database ??= openDatabase(DATABASE);
+    if (route === 'stats') sendJson(response, stats(database));
+    else if (route === 'cards') sendJson(response, apiCards(database, url.searchParams));
+    else if (route.startsWith('cards/')) {
+      sendJson(response, apiCard(database, decodeURIComponent(route.slice('cards/'.length))));
+    } else if (route === 'taxonomy') sendJson(response, apiTaxonomy(database, url.searchParams));
+    else if (route.startsWith('images/')) {
+      await serveImage(database, response, route.slice('images/'.length));
+    } else throw new HttpError(404, 'Unknown API route.');
+  },
+  close() {
+    database?.close();
+    database = undefined;
+  },
+};

@@ -1,0 +1,27 @@
+{
+  "name": "ipb",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev --host :: --port 5180 --strictPort",
+    "build": "vp build",
+    "start": "vp preview --host :: --port 8000 --strictPort",
+    "check": "vp check",
+    "format": "vp fmt --write",
+    "lint": "vp lint"
+  },
+  "devDependencies": {
+    "geotiff": "^3.1.0-beta.0",
+    "vite-plus": "0.3.0"
+  },
+  "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
+    "mgrs": "^2.2.0",
+    "milsymbol": "^3.0.4",
+    "ol": "^10.10.0",
+    "ol-pmtiles": "^2.0.2",
+    "pbf": "^5.1.2",
+    "pmtiles": "^4.5.0"
+  }
+}

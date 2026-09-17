@@ -1,0 +1,56 @@
+<div class="workspace">
+  <aside class="filter-panel" aria-label="Equipment filters">
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">Classification matrix</p>
+        <h1>Find equipment</h1>
+      </div>
+      <button class="text-button" id="clear-filters" type="button">Clear</button>
+    </div>
+
+    <label class="search-field" for="equipment-search">
+      <span>Search cards and specifications <kbd>/</kbd></span>
+      <div class="search-control">
+        <span aria-hidden="true">⌕</span>
+        <input
+          id="equipment-search"
+          type="search"
+          autocomplete="off"
+          placeholder="Radar, engine, designation…"
+        />
+      </div>
+    </label>
+
+    <div id="filter-groups" class="filter-groups" aria-live="polite"></div>
+    <p class="scope-note">
+      Public, live ODIN WEG records. The importer stores records and image assets locally. Selecting
+      a region or a parent category also includes everything under it.
+    </p>
+  </aside>
+
+  <section class="results-panel" aria-labelledby="results-title">
+    <div class="results-heading">
+      <div class="results-heading-row">
+        <div>
+          <p class="eyebrow">Equipment cards</p>
+          <h2 id="results-title"><span id="result-count">—</span> records</h2>
+        </div>
+        <span class="source-order" id="result-order">Source order</span>
+      </div>
+      <div id="active-filters" class="active-filters" aria-label="Active filters" hidden></div>
+    </div>
+    <div id="result-status" class="loading-state">Reading local index…</div>
+    <div id="card-list" class="card-list"></div>
+    <button id="load-more" class="load-more" type="button" hidden>Load more records</button>
+  </section>
+
+  <article class="detail-panel" id="detail-panel" aria-live="polite">
+    <div class="detail-empty" id="detail-empty">
+      <div class="locator" aria-hidden="true"><span></span></div>
+      <p class="eyebrow">Card viewer</p>
+      <h2>Select an equipment card</h2>
+      <p>Choose a record to inspect its images, classification, and specifications.</p>
+    </div>
+    <div id="card-detail" hidden></div>
+  </article>
+</div>
