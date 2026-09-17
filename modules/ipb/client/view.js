@@ -86,6 +86,7 @@ function createState() {
     equipmentResults: [],
     equipmentLoading: false,
     equipmentRequest: null,
+    equipmentBookmarks: [],
     studyRequest: null,
     timers: new Map(),
   };
@@ -1547,6 +1548,29 @@ async function addThreatFromEquipment(item) {
   }
 }
 
+/** Shared by search results and the bookmarked-equipment list: both pick a
+ * card by clicking it. Bookmark items carry `title` but not `display_name`
+ * or `domains`, so the fallbacks matter for both callers. */
+function renderEquipmentRow(item) {
+  const row = createElement('button', 'equipment-result');
+  row.type = 'button';
+  const media = createElement('span', 'equipment-result-media');
+  if (item.image_url) {
+    const image = document.createElement('img');
+    image.src = item.image_url;
+    image.alt = '';
+    media.append(image);
+  }
+  const body = createElement('span', 'equipment-result-body');
+  body.append(createElement('strong', null, item.display_name || item.name));
+  body.append(
+    createElement('span', 'equipment-result-meta', item.domains?.[0] || item.title || ''),
+  );
+  row.append(media, body);
+  row.addEventListener('click', () => addThreatFromEquipment(item));
+  return row;
+}
+
 function renderEquipmentResults(container) {
   container.replaceChildren();
   if (state.equipmentLoading) {
@@ -1561,25 +1585,33 @@ function renderEquipmentResults(container) {
     container.append(createElement('p', 'panel-note', 'No equipment matches.'));
     return;
   }
-  state.equipmentResults.forEach((item) => {
-    const row = createElement('button', 'equipment-result');
-    row.type = 'button';
-    const media = createElement('span', 'equipment-result-media');
-    if (item.image_url) {
-      const image = document.createElement('img');
-      image.src = item.image_url;
-      image.alt = '';
-      media.append(image);
-    }
-    const body = createElement('span', 'equipment-result-body');
-    body.append(createElement('strong', null, item.display_name || item.name));
-    body.append(
-      createElement('span', 'equipment-result-meta', item.domains?.[0] || item.title || ''),
+  state.equipmentResults.forEach((item) => container.append(renderEquipmentRow(item)));
+}
+
+async function loadEquipmentBookmarks() {
+  try {
+    const result = await requestJson(`${EQUIPMENT_API}/bookmarks`);
+    state.equipmentBookmarks = result.items;
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    // Non-critical: the lookup still works by search without it.
+    state.equipmentBookmarks = [];
+  }
+}
+
+function renderBookmarkedEquipment(container) {
+  container.replaceChildren();
+  if (!state.equipmentBookmarks.length) {
+    container.append(
+      createElement(
+        'p',
+        'panel-note',
+        'No equipment bookmarked yet. Star cards in the Equipment module to see them here.',
+      ),
     );
-    row.append(media, body);
-    row.addEventListener('click', () => addThreatFromEquipment(item));
-    container.append(row);
-  });
+    return;
+  }
+  state.equipmentBookmarks.forEach((item) => container.append(renderEquipmentRow(item)));
 }
 
 async function searchEquipment(query, container) {
@@ -1660,6 +1692,13 @@ function renderStep3Tools() {
   lookupGroup.append(searchField, results);
   renderEquipmentResults(results);
   container.append(lookupGroup);
+
+  const bookmarksGroup = createElement('div', 'field-group');
+  bookmarksGroup.append(createElement('h3', null, 'Your bookmarks'));
+  const bookmarksList = createElement('div', 'equipment-results');
+  renderBookmarkedEquipment(bookmarksList);
+  bookmarksGroup.append(bookmarksList);
+  container.append(bookmarksGroup);
 
   return container;
 }
@@ -2360,6 +2399,9 @@ export function mount({ root, status }) {
       elements.statusDataset.textContent = meta.elevation.dataset;
     }),
     loadStudies(),
+    loadEquipmentBookmarks().then(() => {
+      if (state.step === 3) renderToolPanel();
+    }),
   ])
     .then(() => {
       if (
