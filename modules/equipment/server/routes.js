@@ -75,10 +75,16 @@ function cardsParamsFromQuery(query) {
   };
 }
 
-/** POST carries filters in a JSON body, which has no practical size limit
- * for this data, so a wide multi-select across taxonomies stays safe. */
-async function cardsParamsFromBody(request) {
-  const body = await readJson(request);
+/**
+ * Search parameters from a POST body. POST carries filters in a JSON body,
+ * which has no practical size limit for this data, so a wide multi-select
+ * across taxonomies stays safe. The body is untrusted: anything but a JSON
+ * object is a 400, and every field is clamped or dropped rather than trusted.
+ */
+export function cardsParams(body) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'The body must be a JSON object.');
+  }
   const filters = body.filters && typeof body.filters === 'object' ? body.filters : {};
   return {
     text: typeof body.text === 'string' ? body.text : null,
@@ -212,7 +218,7 @@ export default {
     else if (route === 'cards') {
       const params =
         request.method === 'POST'
-          ? await cardsParamsFromBody(request)
+          ? cardsParams(await readJson(request))
           : cardsParamsFromQuery(url.searchParams);
       sendJson(response, apiCards(database, params));
     } else if (route.startsWith('cards/')) {
