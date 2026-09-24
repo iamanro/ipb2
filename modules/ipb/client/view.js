@@ -11,13 +11,22 @@ const EQUIPMENT_API = '/api/equipment';
 const DEFAULT_CENTER = [17.5, 49.7];
 const DEFAULT_ZOOM = 11;
 
-/** The one basemap that needs internet; every other one is served locally. */
-const ONLINE_IMAGERY = {
-  url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-  maxZoom: 19,
-  attributions:
-    // Esri's credit for this item (arcgis.com item 10df2279f9684e4a9f6a7f08febac2a9).
-    'Tiles © Esri — Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+/** The only basemaps that need internet; everything else is served locally. */
+const ONLINE_BASEMAPS = {
+  'topo-online': {
+    url: 'https://{a-c}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    maxZoom: 17,
+    attributions:
+      'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)',
+  },
+  'satellite-online': {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    maxZoom: 19,
+    dark: true,
+    attributions:
+      // Esri's credit for this item (arcgis.com item 10df2279f9684e4a9f6a7f08febac2a9).
+      'Tiles © Esri — Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+  },
 };
 const BASEMAPS = [
   { id: 'roads', label: 'Roads' },
@@ -32,10 +41,38 @@ const BASEMAPS = [
     missing: 'No imagery yet: run node modules/terrain/tools/build_satellite.mjs',
   },
   {
+    id: 'topo-online',
+    label: 'Topo',
+    note: 'online',
+    title: 'Streams OpenTopoMap; needs an internet connection',
+  },
+  {
     id: 'satellite-online',
     label: 'Satellite HD',
     note: 'online',
     title: 'Streams Esri World Imagery; needs an internet connection',
+  },
+];
+const NO_ELEVATION = 'No elevation data yet: run node modules/terrain/tools/build_terrain.mjs';
+const OVERLAYS = [
+  {
+    id: 'contours',
+    label: 'Contour lines',
+    hint: '10 m, labelled every 50 m, when zoomed in',
+    missing: NO_ELEVATION,
+  },
+  { id: 'slope', label: 'Slope classes', missing: NO_ELEVATION },
+  {
+    id: 'roads',
+    label: 'Roads & water',
+    hint: 'for the satellite basemaps',
+    missing: 'No vector basemap: see the README, Terrain section',
+  },
+  {
+    id: 'places',
+    label: 'Place names',
+    missing:
+      'vector.pmtiles was built without place/name layers: rebuild it with the Planetiler command in the README',
   },
 ];
 
@@ -111,6 +148,7 @@ function createState() {
     selectedCoaId: null,
     terrainMeta: null,
     basemap: 'roads',
+    overlays: { contours: false, slope: false, roads: false, places: false },
     equipmentQuery: '',
     equipmentResults: [],
     equipmentLoading: false,
@@ -138,6 +176,7 @@ function queryElements(root) {
     pointerMgrs: pick('#pointer-mgrs'),
     gridToggle: pick('#grid-toggle'),
     basemapSwitch: pick('#basemap-switch'),
+    overlayList: pick('#overlay-list'),
     mapHint: pick('#map-hint'),
     mapClickInfo: pick('#map-click-info'),
     mapEmpty: pick('#map-empty'),
@@ -689,11 +728,71 @@ function basemapSpec(id) {
           maxZoom: meta.imagery.maxZoom,
           extent: meta.imagery.bounds,
           attributions: meta.imagery.attribution,
+          dark: true,
         },
       }
     );
   }
-  return { imagery: ONLINE_IMAGERY };
+  return { imagery: ONLINE_BASEMAPS[id] };
+}
+
+/** The map.setOverlays spec for the checked overlays that have data. */
+function overlaySpec() {
+  const meta = state.terrainMeta;
+  const on = (id) => state.overlays[id] && overlayAvailable(id);
+  return {
+    slope: on('slope') && {
+      url: meta.slope.url,
+      minZoom: meta.slope.minZoom,
+      maxZoom: meta.slope.maxZoom,
+      extent: meta.elevation.bounds,
+    },
+    contours: on('contours') && { ...meta.contours, extent: meta.elevation.bounds },
+    roads: Boolean(on('roads')),
+    places: Boolean(on('places')),
+  };
+}
+
+function overlayAvailable(id) {
+  const meta = state.terrainMeta;
+  if (!meta) return false;
+  if (id === 'roads') return meta.basemap.layers.includes('transportation');
+  if (id === 'places') return meta.basemap.layers.includes('place');
+  return true;
+}
+
+function renderOverlayList() {
+  elements.overlayList.replaceChildren(
+    ...OVERLAYS.map((overlay) => {
+      const available = overlayAvailable(overlay.id);
+      const row = createElement('label', 'overlay-option');
+      row.title = available ? '' : overlay.missing;
+      row.classList.toggle('unavailable', !available);
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.dataset.overlay = overlay.id;
+      checkbox.checked = state.overlays[overlay.id];
+      checkbox.disabled = !available;
+      const text = createElement('span', 'overlay-text', overlay.label);
+      if (overlay.hint) text.append(createElement('small', null, overlay.hint));
+      if (overlay.id === 'slope' && available) {
+        const legend = createElement('span', 'overlay-legend');
+        state.terrainMeta.slope.legend.forEach((entry) => {
+          const chip = createElement('span', 'overlay-chip', `${entry.code} ${entry.range}`);
+          chip.style.setProperty('--chip', entry.color);
+          legend.append(chip);
+        });
+        text.append(legend);
+      }
+      row.append(checkbox, text);
+      return row;
+    }),
+  );
+}
+
+function applyOverlays() {
+  mapController.setOverlays(overlaySpec());
+  renderOverlayList();
 }
 
 function renderBasemapSwitch() {
@@ -2686,9 +2785,16 @@ export function mount({ root, status }) {
   });
   mapController.setMgrsGrid(true);
   renderBasemapSwitch();
+  renderOverlayList();
   elements.basemapSwitch.addEventListener('click', (event) => {
     const button = event.target.closest('[data-basemap]');
     if (button && !button.disabled) applyBasemap(button.dataset.basemap);
+  });
+  elements.overlayList.addEventListener('change', (event) => {
+    const id = event.target.dataset.overlay;
+    if (!id) return;
+    state.overlays[id] = event.target.checked;
+    applyOverlays();
   });
   elements.gridToggle.addEventListener('click', () => {
     const visible = elements.gridToggle.getAttribute('aria-pressed') !== 'true';
@@ -2708,6 +2814,7 @@ export function mount({ root, status }) {
       elements.statusDataset.textContent = meta.elevation.dataset;
       // Now that attribution and local tile sources are known.
       applyBasemap(state.basemap);
+      applyOverlays();
     }),
     loadStudies(),
     loadEquipmentBookmarks().then(() => {

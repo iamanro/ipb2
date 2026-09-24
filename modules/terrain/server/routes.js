@@ -10,9 +10,11 @@ import {
   serveFile,
 } from '../../../server/http.js';
 import { encodePng } from '../../../server/png.js';
+import { contourTile } from './contours.js';
 import { openTerrain } from './dem.js';
-import { renderHillshade } from './hillshade.js';
+import { SLOPE_LEGEND, renderHillshade, renderSlopeClasses } from './rasterTiles.js';
 import { openImagery } from './imagery.js';
+import { vectorLayerNames } from './landcover.js';
 import { LEGEND, mobilityOverlay } from './mobility.js';
 
 const ID = 'terrain';
@@ -22,12 +24,18 @@ const BASEMAP = path.join(DATA_ROOT, 'vector.pmtiles');
 const BASEMAP_URL = `/api/${ID}/tiles/vector.pmtiles`;
 const IMAGERY_DATABASE = path.join(DATA_ROOT, 'satellite.mbtiles');
 
-const HILLSHADE_TILE = /^hillshade\/(\d+)\/(\d+)\/(\d+)\.png$/;
+/** Raster overlays rendered from the elevation model, by URL segment. */
+const RASTER_RENDERERS = { hillshade: renderHillshade, slope: renderSlopeClasses };
+const RASTER_TILE = /^(hillshade|slope)\/(\d+)\/(\d+)\/(\d+)\.png$/;
 const SATELLITE_TILE = /^satellite\/(\d+)\/(\d+)\/(\d+)\.jpg$/;
+const CONTOUR_TILE = /^contours\/(\d+)\/(\d+)\/(\d+)\.json$/;
+/** contours.js draws nothing below 10; past 14 the client reuses zoom-14 tiles. */
+const CONTOUR_MIN_ZOOM = 10;
+const CONTOUR_MAX_ZOOM = 14;
 /** Past this the 30 m DEM has no more detail; the client upscales. */
-const HILLSHADE_MAX_ZOOM = 14;
-const HILLSHADE_MIN_ZOOM = 5;
-const HILLSHADE_CACHE_LIMIT = 512;
+const RASTER_MAX_ZOOM = 14;
+const RASTER_MIN_ZOOM = 5;
+const TILE_CACHE_LIMIT = 1024;
 /** Tile URLs carry the data's build time, so a rebuilt dataset gets new URLs. */
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
@@ -77,27 +85,26 @@ function imageryArchive() {
   return imagery ?? null;
 }
 
+/** `{ z, x, y }` from the last three captures of a tile-route match. */
 function tileAddress(match) {
-  const [z, x, y] = match.slice(1).map(Number);
+  const [z, x, y] = match.slice(-3).map(Number);
   if (x >= 2 ** z || y >= 2 ** z) throw new HttpError(404, 'No such tile.');
   return { z, x, y };
 }
 
-const hillshadeCache = new Map();
+/** Encoded tiles generated on request, least recently used evicted first. */
+const tileCache = new Map();
 
-function hillshadePng(model, { z, x, y }) {
-  const key = `${z}/${x}/${y}`;
-  let png = hillshadeCache.get(key);
-  if (png) {
-    hillshadeCache.delete(key);
+function cachedTile(key, render) {
+  let body = tileCache.get(key);
+  if (body) {
+    tileCache.delete(key);
   } else {
-    png = encodePng(256, 256, renderHillshade(model.elevation, z, x, y));
-    if (hillshadeCache.size >= HILLSHADE_CACHE_LIMIT) {
-      hillshadeCache.delete(hillshadeCache.keys().next().value);
-    }
+    body = render();
+    if (tileCache.size >= TILE_CACHE_LIMIT) tileCache.delete(tileCache.keys().next().value);
   }
-  hillshadeCache.set(key, png);
-  return png;
+  tileCache.set(key, body);
+  return body;
 }
 
 export default {
@@ -108,13 +115,31 @@ export default {
       await serveFile(request, response, BASEMAP, 'application/octet-stream');
       return;
     }
-    let match = HILLSHADE_TILE.exec(route);
+    let match = RASTER_TILE.exec(route);
     if (match) {
-      const address = tileAddress(match);
-      if (address.z < HILLSHADE_MIN_ZOOM || address.z > HILLSHADE_MAX_ZOOM) {
-        throw new HttpError(404, 'No hillshade at this zoom.');
+      const kind = match[1];
+      const { z, x, y } = tileAddress(match);
+      if (z < RASTER_MIN_ZOOM || z > RASTER_MAX_ZOOM) {
+        throw new HttpError(404, `No ${kind} tiles at this zoom.`);
       }
-      sendBytes(response, hillshadePng(elevationModel(), address), 'image/png', IMMUTABLE);
+      const model = elevationModel();
+      const png = cachedTile(`${kind}/${z}/${x}/${y}`, () =>
+        encodePng(256, 256, RASTER_RENDERERS[kind](model.elevation, z, x, y)),
+      );
+      sendBytes(response, png, 'image/png', IMMUTABLE);
+      return;
+    }
+    match = CONTOUR_TILE.exec(route);
+    if (match) {
+      const { z, x, y } = tileAddress(match);
+      if (z < CONTOUR_MIN_ZOOM || z > CONTOUR_MAX_ZOOM) {
+        throw new HttpError(404, 'No contours at this zoom.');
+      }
+      const model = elevationModel();
+      const json = cachedTile(`contours/${z}/${x}/${y}`, () =>
+        Buffer.from(JSON.stringify(contourTile(model.elevation, z, x, y))),
+      );
+      sendBytes(response, json, 'application/geo+json', IMMUTABLE);
       return;
     }
     match = SATELLITE_TILE.exec(route);
@@ -144,11 +169,23 @@ export default {
         basemap: {
           url: BASEMAP_URL,
           attribution: '© OpenMapTiles © OpenStreetMap contributors',
+          layers: await vectorLayerNames(BASEMAP),
         },
         hillshade: {
           url: `/api/${ID}/hillshade/{z}/{x}/{y}.png${version(model.meta.built_at)}`,
-          minZoom: HILLSHADE_MIN_ZOOM,
-          maxZoom: HILLSHADE_MAX_ZOOM,
+          minZoom: RASTER_MIN_ZOOM,
+          maxZoom: RASTER_MAX_ZOOM,
+        },
+        slope: {
+          url: `/api/${ID}/slope/{z}/{x}/{y}.png${version(model.meta.built_at)}`,
+          minZoom: RASTER_MIN_ZOOM,
+          maxZoom: RASTER_MAX_ZOOM,
+          legend: SLOPE_LEGEND,
+        },
+        contours: {
+          url: `/api/${ID}/contours/{z}/{x}/{y}.json${version(model.meta.built_at)}`,
+          minZoom: CONTOUR_MIN_ZOOM,
+          maxZoom: CONTOUR_MAX_ZOOM,
         },
         imagery: archive && {
           url: `/api/${ID}/satellite/{z}/{x}/{y}.jpg${version(archive.meta.builtAt)}`,
@@ -219,6 +256,6 @@ export default {
     terrain = undefined;
     imagery?.close();
     imagery = undefined;
-    hillshadeCache.clear();
+    tileCache.clear();
   },
 };

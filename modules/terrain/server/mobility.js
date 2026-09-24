@@ -11,8 +11,8 @@ export const LEGEND = [
 ];
 
 /** Slope band thresholds in degrees, per doctrinal cross-country mobility. */
-const SLOW_GO_SLOPE = 10;
-const NO_GO_SLOPE = 30;
+export const SLOW_GO_SLOPE = 10;
+export const NO_GO_SLOPE = 30;
 
 export function slopeClass(degrees) {
   if (Number.isNaN(degrees)) return UNKNOWN;

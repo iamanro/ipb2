@@ -64,6 +64,23 @@ function fileSource(file) {
 }
 
 /**
+ * Names of the vector layers in a basemap archive (e.g. `transportation`,
+ * `place`), from its metadata, or [] when the file is missing or unreadable.
+ * Lets the client offer only the labels the built basemap can actually draw.
+ */
+export async function vectorLayerNames(file) {
+  const source = fileSource(file);
+  try {
+    const metadata = await new PMTiles(source).getMetadata();
+    return (metadata?.vector_layers ?? []).map((layer) => layer.id);
+  } catch {
+    return [];
+  } finally {
+    await source.close();
+  }
+}
+
+/**
  * Obstacle overlay read from the offline vector basemap.
  *
  * `classify(grid)` rasterises water, waterways, buildings, forest and built-up

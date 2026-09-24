@@ -6,8 +6,9 @@ public equipment catalogue, threat courses of action with an event matrix, and
 a classroom exercise layer (collection requirements, reports, RFIs, scenario
 clock, AAR export).
 Runs as one Node process against local SQLite databases — no Docker, no
-external services, no accounts. (One opt-in exception: the "Satellite HD"
-basemap streams Esri imagery and needs internet; see [Basemaps](#basemaps).)
+external services, no accounts. (Opt-in exceptions: the "Topo" and
+"Satellite HD" basemaps stream online tiles and need internet; see
+[Basemaps](#basemaps).)
 
 ```mermaid
 graph LR
@@ -105,6 +106,11 @@ first run also downloads ~1 GB of OpenMapTiles base sources (water polygons,
 Natural Earth). Any existing `.pmtiles` archive with the same schema works
 too.
 
+The "Place names" overlay additionally needs the `place`, `mountain_peak` and
+`water_name` layers. The command above (Planetiler's default profile) includes
+them; an archive built with `--only-layers` or trimmed to the five layers above
+does not, and the overlay is then greyed out.
+
 ### Satellite imagery (optional)
 
 ```bash
@@ -130,12 +136,23 @@ The map's top-right switch picks the basemap:
 | Roads (default) | `vector.pmtiles`                                                                                           | yes     |
 | Terrain         | Roads plus hillshade rendered from `terrain.db`                                                            | yes     |
 | Satellite       | `satellite.mbtiles` inside its bounds, Roads around it                                                     | yes     |
+| Topo            | [OpenTopoMap](https://opentopomap.org): names, peaks, paths, contours (CC BY-SA)                           | **no**  |
 | Satellite HD    | [Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9), sub-metre | **no**  |
 
 A basemap whose data has not been built is greyed out, with the command to
-build it in its tooltip. Satellite HD is the only part of the app that talks
-to an outside service, and only while it is selected; Esri's terms require
-the on-map attribution and do not allow caching its tiles for offline use.
+build it in its tooltip. Topo and Satellite HD are the only parts of the app
+that talk to an outside service, and only while selected. Both require the
+on-map attribution; neither allows bulk-caching its tiles for offline use.
+
+Below the switch, **Layers** adds overlays that work over any basemap, all
+offline:
+
+| Overlay       | Source                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------- |
+| Contour lines | Traced from `terrain.db`: 10 m lines, 50 m labelled index lines, coarser zoomed out    |
+| Slope classes | `terrain.db` slope in the MCOO bands: SLOW-GO 10–30° (amber), NO-GO ≥ 30° (red)        |
+| Roads & water | Roads, rivers and lakes from `vector.pmtiles`, drawn to read over the satellite layers |
+| Place names   | Towns, villages, peaks and waters from `vector.pmtiles` (needs its name layers, above) |
 
 ## Modules
 

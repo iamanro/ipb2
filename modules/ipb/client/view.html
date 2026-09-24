@@ -38,7 +38,13 @@
 
   <section class="map-panel" aria-label="Map">
     <div id="map-target" class="map-target"></div>
-    <div class="basemap-switch" id="basemap-switch" role="radiogroup" aria-label="Basemap"></div>
+    <div class="map-controls">
+      <div class="basemap-switch" id="basemap-switch" role="radiogroup" aria-label="Basemap"></div>
+      <details class="overlay-panel">
+        <summary>Layers</summary>
+        <div class="overlay-list" id="overlay-list"></div>
+      </details>
+    </div>
     <div class="map-overlay">
       <div class="map-readout" id="map-readout">
         <span class="readout-label">MGRS</span>

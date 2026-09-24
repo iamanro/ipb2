@@ -9,7 +9,9 @@ import VectorLayer from 'ol/layer/Vector.js';
 import ImageLayer from 'ol/layer/Image.js';
 import TileLayer from 'ol/layer/Tile.js';
 import VectorSource from 'ol/source/Vector.js';
+import VectorTileSource from 'ol/source/VectorTile.js';
 import XYZ from 'ol/source/XYZ.js';
+import { createXYZ } from 'ol/tilegrid.js';
 import ImageCanvasSource from 'ol/source/ImageCanvas.js';
 import { PMTilesVectorSource } from 'ol-pmtiles';
 import Draw from 'ol/interaction/Draw.js';
@@ -123,6 +125,112 @@ function basemapStyle(feature) {
       return undefined;
   }
 }
+
+// -- Reference overlays: roads & water, place names, contours ------------------
+
+/** Basemap roads with a dark casing, water as outlines, so imagery stays visible. */
+const HYBRID_STYLE_CACHE = new Map();
+const HYBRID_WATER_COLOR = '#7fb2e5';
+const HYBRID_WATERWAY_STYLE = new Style({
+  stroke: new Stroke({ color: HYBRID_WATER_COLOR, width: 1.4 }),
+});
+const HYBRID_WATER_STYLE = new Style({
+  stroke: new Stroke({ color: HYBRID_WATER_COLOR, width: 1 }),
+  fill: new Fill({ color: 'rgba(127, 178, 229, 0.25)' }),
+});
+
+function hybridStyle(feature) {
+  const layer = feature.get('layer');
+  if (layer === 'waterway') return HYBRID_WATERWAY_STYLE;
+  if (layer === 'water') return HYBRID_WATER_STYLE;
+  if (layer !== 'transportation') return undefined;
+  const key = ROAD_WIDTH[feature.get('class')] ? feature.get('class') : 'minor';
+  if (!HYBRID_STYLE_CACHE.has(key)) {
+    HYBRID_STYLE_CACHE.set(key, [
+      new Style({
+        stroke: new Stroke({ color: 'rgba(0, 0, 0, 0.5)', width: ROAD_WIDTH[key] + 1.6 }),
+      }),
+      new Style({ stroke: new Stroke({ color: ROAD_COLOR[key], width: ROAD_WIDTH[key] }) }),
+    ]);
+  }
+  return HYBRID_STYLE_CACHE.get(key);
+}
+
+const LABEL_HALO = new Stroke({ color: 'rgba(255, 255, 255, 0.92)', width: 3 });
+
+/** One reusable style per label class; the text is set per feature at render time. */
+function labelStyle(font, color) {
+  return new Style({
+    text: new TextStyle({ font, fill: new Fill({ color }), stroke: LABEL_HALO, overflow: true }),
+  });
+}
+
+const PLACE_LABEL = {
+  city: labelStyle('700 15px system-ui, sans-serif', '#1b1b1b'),
+  town: labelStyle('700 13px system-ui, sans-serif', '#1b1b1b'),
+  village: labelStyle('600 12px system-ui, sans-serif', '#262626'),
+  minor: labelStyle('500 11px system-ui, sans-serif', '#3a3a3a'),
+  peak: labelStyle('600 11px system-ui, sans-serif', '#5a3d1e'),
+  water: labelStyle('italic 500 11px system-ui, sans-serif', '#2f5d8a'),
+};
+/** Hamlets and neighbourhoods only from about zoom 13, or they bury villages. */
+const MINOR_PLACE_MAX_RESOLUTION = 20;
+
+/** Place, peak and water names from an OpenMapTiles-schema basemap. */
+function placeLabelStyle(feature, resolution) {
+  const name = feature.get('name');
+  if (!name) return undefined;
+  let style;
+  let text = name;
+  switch (feature.get('layer')) {
+    case 'place': {
+      const kind = feature.get('class');
+      if (kind === 'city' || kind === 'town' || kind === 'village') style = PLACE_LABEL[kind];
+      else if (resolution <= MINOR_PLACE_MAX_RESOLUTION) style = PLACE_LABEL.minor;
+      break;
+    }
+    case 'mountain_peak': {
+      const ele = feature.get('ele');
+      style = PLACE_LABEL.peak;
+      text = `▲ ${name}${ele ? ` ${ele} m` : ''}`;
+      break;
+    }
+    case 'water_name':
+      style = PLACE_LABEL.water;
+      break;
+    default:
+      return undefined;
+  }
+  style?.getText().setText(text);
+  return style;
+}
+
+/** Contour inks for a pale basemap and for dark imagery. */
+const CONTOUR_TONES = {
+  dark: { line: 'rgba(140, 90, 45, 0.55)', index: 'rgba(140, 90, 45, 0.9)', halo: '#ffffff' },
+  light: {
+    line: 'rgba(255, 214, 160, 0.55)',
+    index: 'rgba(255, 214, 160, 0.95)',
+    halo: 'rgba(0, 0, 0, 0.75)',
+  },
+};
+
+function contourStyles(tone) {
+  const ink = CONTOUR_TONES[tone];
+  return {
+    line: new Style({ stroke: new Stroke({ color: ink.line, width: 0.7 }) }),
+    index: new Style({
+      stroke: new Stroke({ color: ink.index, width: 1.3 }),
+      text: new TextStyle({
+        font: '600 10px "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace',
+        placement: 'line',
+        fill: new Fill({ color: ink.index }),
+        stroke: new Stroke({ color: ink.halo, width: 3 }),
+      }),
+    }),
+  };
+}
+const CONTOUR_STYLE = { dark: contourStyles('dark'), light: contourStyles('light') };
 
 // -- Feature overlay style --------------------------------------------------
 
@@ -492,10 +600,47 @@ export function createMap(options) {
   // visible around it, and hillshade is a translucent overlay by design.
   const imageryLayer = new TileLayer({ visible: false });
   const reliefLayer = new TileLayer({ visible: false });
+  /** Set by setBasemap: dark imagery switches the grid and contours to light ink. */
+  let darkBase = false;
+
+  // Reference overlays, all off until setOverlays. Roads and places restyle
+  // the basemap's own tiles, so they share its source.
+  const slopeLayer = new TileLayer({ visible: false });
+  const contourLayer = new VectorTileLayer({
+    visible: false,
+    declutter: true,
+    style: (feature) => {
+      const styles = CONTOUR_STYLE[darkBase ? 'light' : 'dark'];
+      if (!feature.get('index')) return styles.line;
+      styles.index.getText().setText(String(feature.get('ele')));
+      return styles.index;
+    },
+  });
+  const roadsLayer = new VectorTileLayer({
+    source: basemapSource,
+    visible: false,
+    style: hybridStyle,
+  });
+  const placesLayer = new VectorTileLayer({
+    source: basemapSource,
+    visible: false,
+    declutter: true,
+    style: placeLabelStyle,
+  });
 
   const map = new OlMap({
     target,
-    layers: [basemapLayer, imageryLayer, reliefLayer, mgrsLayer, featureLayer],
+    layers: [
+      basemapLayer,
+      imageryLayer,
+      reliefLayer,
+      slopeLayer,
+      contourLayer,
+      roadsLayer,
+      placesLayer,
+      mgrsLayer,
+      featureLayer,
+    ],
     view: new View({
       projection: MAP_PROJECTION,
       center: fromLonLat(center, MAP_PROJECTION),
@@ -726,7 +871,8 @@ export function createMap(options) {
   /**
    * Choose what sits under the analysis layers, bottom to top:
    *   vector   { attributions } shows the vector basemap, null hides it
-   *   imagery  XYZ spec over it; with an `extent`, the vector map shows around it
+   *   imagery  XYZ spec over it; with an `extent`, the vector map shows around it;
+   *            `dark: true` (satellite) switches grid and contours to light ink
    *   relief   XYZ spec drawn over both (translucent hillshade)
    * An XYZ spec is `{ url, attributions, minZoom?, maxZoom?, extent? }` with
    * `extent` in lon/lat.
@@ -736,7 +882,47 @@ export function createMap(options) {
     if (vector) basemapSource.setAttributions(vector.attributions);
     applyTileSpec(imageryLayer, imagery);
     applyTileSpec(reliefLayer, relief);
-    if (mgrsLayer.getVisible()) renderMgrsGrid(); // grid tone follows the basemap
+    darkBase = Boolean(imagery?.dark);
+    contourLayer.changed();
+    if (mgrsLayer.getVisible()) renderMgrsGrid();
+  }
+
+  /**
+   * Reference overlays, drawn over any basemap and under analysis results:
+   *   slope     XYZ spec (slope-class tint), or null
+   *   contours  `{ url, minZoom, maxZoom, extent? }` GeoJSON tiles, or null
+   *   roads     true draws basemap roads and water over imagery
+   *   places    true draws place, peak and water names from the basemap
+   */
+  function setOverlays({ slope = null, contours = null, roads = false, places = false }) {
+    applyTileSpec(slopeLayer, slope);
+    if (contours) {
+      if (contourLayer.get('tileUrl') !== contours.url) {
+        contourLayer.setSource(
+          new VectorTileSource({
+            format: new GeoJSON(),
+            url: contours.url,
+            // 256 px tiles, so the tile zoom (which sets the contour interval)
+            // matches the view zoom; the default 512 px would lag it by one.
+            tileGrid: createXYZ({
+              tileSize: 256,
+              minZoom: contours.minZoom,
+              maxZoom: contours.maxZoom,
+            }),
+          }),
+        );
+        contourLayer.set('tileUrl', contours.url);
+      }
+      contourLayer.setMinZoom(contours.minZoom);
+      contourLayer.setExtent(
+        contours.extent
+          ? transformExtent(contours.extent, DATA_PROJECTION, MAP_PROJECTION)
+          : undefined,
+      );
+    }
+    contourLayer.setVisible(Boolean(contours));
+    roadsLayer.setVisible(roads);
+    placesLayer.setVisible(places);
   }
 
   function renderMgrsGrid() {
@@ -756,7 +942,7 @@ export function createMap(options) {
       drawExtent: toLonLatExtent(bufferExtent(extent, getWidth(extent) / 2)),
       spacing: mgrsGridSpacing(metresPerPixel),
     });
-    const tone = imageryLayer.getVisible() ? 'light' : 'dark';
+    const tone = darkBase ? 'light' : 'dark';
     const features = lines.map(({ rank, coordinates }) => {
       const feature = new Feature(
         new LineString(coordinates.map((point) => fromLonLat(point, MAP_PROJECTION))),
@@ -815,6 +1001,7 @@ export function createMap(options) {
     setGrid,
     clearGrid,
     setBasemap,
+    setOverlays,
     setMgrsGrid,
     destroy,
   };
