@@ -226,14 +226,18 @@ const FORECAST_FIELDS = [
 const FORECAST_HOURS = 48;
 
 /**
- * Current conditions plus 48 h hourly forecast, wind in m/s, unix times. One
- * hour more than shown: hourly sums cover the *preceding* hour, so the last
- * window needs the value at its end.
+ * Current conditions plus 48 h hourly forecast for `points` (`[{ lon, lat,
+ * elevation? }]`), wind in m/s, unix times. One hour more than shown: hourly
+ * sums cover the *preceding* hour, so the last window needs the value at its
+ * end. With every point's ground height known, it is sent: Open-Meteo then
+ * corrects temperature from its model cell's height to the real ground (on
+ * a ridge or in a valley that is often 0.5-1 °C); otherwise it uses its own
+ * 90 m terrain model.
  */
-export function forecastUrl(lon, lat) {
+export function forecastUrl(points) {
   const params = new URLSearchParams({
-    latitude: lat.toFixed(4),
-    longitude: lon.toFixed(4),
+    latitude: points.map((point) => point.lat.toFixed(4)).join(','),
+    longitude: points.map((point) => point.lon.toFixed(4)).join(','),
     current: FORECAST_FIELDS.filter((field) => field !== 'precipitation_probability').join(','),
     hourly: FORECAST_FIELDS.join(','),
     forecast_hours: String(FORECAST_HOURS + 1),
@@ -241,7 +245,22 @@ export function forecastUrl(lon, lat) {
     timeformat: 'unixtime',
     timezone: 'GMT',
   });
+  if (points.every((point) => Number.isFinite(point.elevation))) {
+    params.set('elevation', points.map((point) => Math.round(point.elevation)).join(','));
+  }
   return `${OPEN_METEO_API}?${params}`;
+}
+
+/**
+ * A multi-point forecast response (one object for a single point) as one
+ * parseForecast result per point, in request order, each with `cell`: the
+ * model grid cell Open-Meteo used and the height it corrected to.
+ */
+export function parseForecasts(json, everyHours = 3) {
+  return (Array.isArray(json) ? json : [json]).map((entry) => ({
+    cell: { lon: entry?.longitude, lat: entry?.latitude, elevation: entry?.elevation ?? null },
+    ...parseForecast(entry, everyHours),
+  }));
 }
 
 /**

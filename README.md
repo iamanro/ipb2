@@ -224,18 +224,41 @@ with the time of its data and refreshed while switched on:
 | Lightning           | EUMETSAT Meteosat Third Generation Lightning Imager, accumulated flash area (yellow → red: more flashes)                        | every 5 min  |
 | Wind (10 m)         | [Open-Meteo](https://open-meteo.com) model wind on a lattice over the view: arrows point downwind, labels m/s (gusts)           | every 15 min |
 
-Step 1's **Weather forecast** (button **Get forecast**) adds a 48-hour
-Open-Meteo forecast for the AOI centre: current conditions, then one row per
-3 h with weather, temperature, wind and gusts, precipitation total and
-chance, total and low cloud, and visibility. It prints with the worksheet;
-the printed map caption lists each weather layer with its data time.
+Each study has a **weather point**: by default the AOI centre (area-weighted;
+for a strongly curved AOI set the point yourself), or a point you set in
+step 1's tool panel
+(MGRS/UTM/decimal degrees, or **Pick on map**) or by right-clicking the map →
+**Set weather point here**; **Use AOI centre** goes back to automatic. In
+step 1 the map marks it, plus the AOI's highest and lowest ground, found
+offline from `terrain.db` inside the AOI polygon.
+
+Step 1's **Weather** block (button **Get weather**) then shows:
+
+- a 48-hour Open-Meteo forecast at the weather point: current conditions,
+  then one row per 3 h with weather, temperature, wind and gusts,
+  precipitation total and chance, total and low cloud, and visibility.
+  Temperatures are corrected to the real ground height from `terrain.db`
+  (the model's own grid cell can sit tens of metres higher or lower);
+- **Across the AOI**: temperature, wind, low cloud and visibility at the
+  weather point / highest / lowest ground side by side (ridge exposure,
+  hill fog, valley fog and frost);
+- **Nearest observation**: the latest measured report (METAR) of the
+  closest reporting airfield, with distance and bearing, decoded to metric
+  (wind m/s, visibility km, cloud and ceiling in metres above the station)
+  plus the raw report. It comes from aviationweather.gov (NOAA) through this
+  server (`GET /api/ipb/weather/station?at=lon,lat`), because that service
+  does not answer browsers directly. Around Libavá the closest is Ostrava,
+  ~45 km away; military airfields do not publish.
+
+It all prints with the worksheet; the printed map caption lists each weather
+layer with its data time.
 
 Nothing weather-related is cached for offline use, and none of it starts on
 its own: every request tells the service which area is being looked at
-(forecast: the AOI centre), so switch these on only where that is acceptable.
-Terms: RainViewer's free API is for personal and educational use; Open-Meteo's
-free API is non-commercial (data CC BY 4.0); EUMETSAT imagery is credited on
-the map.
+(the weather point and the AOI's highest and lowest ground), so use these
+only where that is acceptable. Terms: RainViewer's free API is for personal
+and educational use; Open-Meteo's free API is non-commercial (data CC BY
+4.0); EUMETSAT imagery is credited on the map; NOAA data is public domain.
 
 ## Modules
 

@@ -15,7 +15,7 @@ import {
   compassPoint,
   forecastUrl,
   latestWmsTime,
-  parseForecast,
+  parseForecasts,
   parseWind,
   radarFrames,
   weatherText,
@@ -287,8 +287,16 @@ function createState() {
         loading: false,
         error: null,
       },
-      /** `key` is the location last asked for, `dataKey` the one `data` is for. */
+      /**
+       * Where the study's weather is read, resolved offline from terrain.db:
+       * the weather point with its ground height, and the AOI's highest and
+       * lowest ground. `key` says which study/AOI/point it was resolved for.
+       */
+      site: { key: null, value: null, loading: false, error: null },
+      /** `key` is the site last asked for, `dataKey` the one `data` is for. */
       forecast: { key: null, dataKey: null, data: null, fetchedAt: 0, loading: false, error: null },
+      /** Latest report of the nearest station, for the weather point `dataKey`. */
+      station: { key: null, dataKey: null, data: null, loading: false, error: null },
     },
   };
 }
@@ -467,6 +475,37 @@ function polygonAreaSquareKm(geometry) {
     const area = ringAreaSquareKm(ring, kmPerDegLon, kmPerDegLat);
     return index === 0 ? total + area : total - area;
   }, 0);
+}
+
+/**
+ * Area-weighted centre of a polygon's outer ring, `[lon, lat]`; for an
+ * irregular AOI it sits where the area is, unlike the envelope's middle.
+ * Falls back to the envelope's middle for a degenerate ring.
+ */
+function aoiCentre(geometry) {
+  const ring =
+    geometry.type === 'MultiPolygon' ? geometry.coordinates[0][0] : geometry.coordinates[0];
+  // Relative to the first vertex: products of raw degrees (~17 × 49) would
+  // cancel away the small differences that carry the shape.
+  const [originLon, originLat] = ring[0];
+  let twiceArea = 0;
+  let sumLon = 0;
+  let sumLat = 0;
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    const x0 = ring[index][0] - originLon;
+    const y0 = ring[index][1] - originLat;
+    const x1 = ring[index + 1][0] - originLon;
+    const y1 = ring[index + 1][1] - originLat;
+    const cross = x0 * y1 - x1 * y0;
+    twiceArea += cross;
+    sumLon += (x0 + x1) * cross;
+    sumLat += (y0 + y1) * cross;
+  }
+  if (Math.abs(twiceArea) < 1e-14) {
+    const [west, south, east, north] = geometryBounds(geometry);
+    return [(west + east) / 2, (south + north) / 2];
+  }
+  return [originLon + sumLon / (3 * twiceArea), originLat + sumLat / (3 * twiceArea)];
 }
 
 function jumpToCoordinate(lon, lat) {
@@ -801,6 +840,27 @@ function visibleFeatures() {
   state.viewshedPosts.forEach((post, index) => {
     features.push(marker(`viewshed-post-${index}`, `OP ${index + 1}`, post));
   });
+  if (state.step === 1) {
+    // A map-centre point moves with the map, so it gets no marker.
+    const point = weatherPoint(study);
+    if (point.source !== 'map')
+      features.push(marker('weather-point', 'Weather point', point, 'weather'));
+    const site = state.weather.site;
+    const resolved = site.key === siteKey(study) ? site.value : null;
+    for (const [role, label] of [
+      ['high', 'Highest'],
+      ['low', 'Lowest'],
+    ]) {
+      const place = resolved?.[role];
+      if (place) {
+        features.push(
+          marker(`weather-${role}`, `${label} ${Math.round(place.elevation)} m`, place, 'weather', {
+            draft: true,
+          }),
+        );
+      }
+    }
+  }
   if (state.step === 2) {
     // Suggestions shown dashed until the analyst accepts them as features.
     (state.keyTerrain.candidates ?? []).forEach((candidate, index) => {
@@ -1465,6 +1525,7 @@ function buildMapContextMenu(lon, lat) {
     { label: 'Add observation post here', action: () => handleViewshedPick(lon, lat) },
     { label: 'Draw here', submenu: drawHereItems(lon, lat) },
     { label: 'Show elevation here', action: () => showElevationReadout(lon, lat) },
+    { label: 'Set weather point here', action: () => setWeatherPoint({ lon, lat }) },
   ];
 }
 
@@ -1511,6 +1572,12 @@ function onMapClick({ lon, lat }) {
   }
   if (tool.type === 'viewshed-pick') {
     handleViewshedPick(lon, lat);
+    return;
+  }
+  if (tool.type === 'weather-pick') {
+    state.tool = null;
+    renderMapHint('');
+    setWeatherPoint({ lon, lat });
     return;
   }
   if (tool.type === 'avenue-pick') handleAvenuePick(lon, lat);
@@ -1704,6 +1771,7 @@ function renderStep1Tools() {
     createElement('p', 'tool-hint', 'Redrawing replaces the current AOI.'),
   );
   container.append(aoiGroup);
+  if (state.study) container.append(renderWeatherPointGroup());
 
   const jumpGroup = createElement('div', 'field-group');
   jumpGroup.append(createElement('h3', null, 'Jump to coordinate'));
@@ -1827,7 +1895,8 @@ function renderLightData(study) {
   const block = createElement('section', 'worksheet-block light-data');
   block.append(createElement('h4', null, 'Light data'));
 
-  const { lon, lat, place } = worksheetLocation(study);
+  const location = aoiLocation(study);
+  const { lon, lat } = location;
   const [year, month, day] = state.lightForm.start.split('-').map(Number);
   const firstDay = new Date(year, month - 1, day);
 
@@ -1852,7 +1921,13 @@ function renderLightData(study) {
   controls.append(startInput, daysSelect);
   block.append(controls);
 
-  block.append(createElement('p', 'panel-note', `${place} · times in ${timeZoneLabel(firstDay)}`));
+  block.append(
+    createElement(
+      'p',
+      'panel-note',
+      `${describeLocation(location)} · times in ${timeZoneLabel(firstDay)}`,
+    ),
+  );
 
   const time = new Intl.DateTimeFormat(undefined, {
     hour: '2-digit',
@@ -1910,13 +1985,108 @@ function renderLightData(study) {
 }
 
 /** The AOI centre, or the map centre until an AOI is drawn. */
-function worksheetLocation(study) {
-  const bounds = study.bounds;
-  const [lon, lat] = bounds
-    ? [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
-    : mapController.getCenter();
-  const place = `${bounds ? 'AOI centre' : 'Map centre (draw an AOI to fix the location)'} ${formatMgrs(lon, lat, 4)}`;
-  return { lon, lat, place, onAoi: Boolean(bounds) };
+function aoiLocation(study) {
+  if (study.aoi) {
+    const [lon, lat] = aoiCentre(study.aoi);
+    return { lon, lat, source: 'aoi' };
+  }
+  const [lon, lat] = mapController.getCenter();
+  return { lon, lat, source: 'map' };
+}
+
+/** Where the study takes its weather: the point set for it, else derived from the AOI. */
+function weatherPoint(study) {
+  if (study.weather_point) return { ...study.weather_point, source: 'set' };
+  return aoiLocation(study);
+}
+
+const LOCATION_SOURCES = {
+  set: 'Weather point',
+  aoi: 'AOI centre',
+  map: 'Map centre (draw an AOI or set a weather point to fix it)',
+};
+
+/** "AOI centre 33UXR80270827". */
+function describeLocation({ lon, lat, source }) {
+  return `${LOCATION_SOURCES[source]} ${formatMgrs(lon, lat, 4)}`;
+}
+
+/**
+ * Save the study's weather point (`{ lon, lat }`, or null to derive it from
+ * the AOI again). A forecast already fetched in this session follows it.
+ */
+async function setWeatherPoint(point) {
+  const studyId = state.studyId;
+  try {
+    const updated = await requestJson(`${API}/studies/${studyId}`, {
+      method: 'PATCH',
+      body: { weather_point: point },
+    });
+    if (!state.study || state.studyId !== studyId) return;
+    state.study.study = { ...state.study.study, ...updated };
+    const hadWeather = Boolean(state.weather.forecast.data);
+    syncMapFeatures();
+    renderStep1Worksheet();
+    if (state.step === 1) renderToolPanel();
+    if (hadWeather) loadWeatherReport();
+  } catch (error) {
+    if (error.name !== 'AbortError') showError(elements.toolPanel, error.message);
+  }
+}
+
+function armWeatherPick() {
+  cancelActiveTool();
+  state.tool = { type: 'weather-pick' };
+  renderMapHint('Click the map to set the weather point. Press Escape to cancel.');
+}
+
+function renderWeatherPointGroup() {
+  const group = createElement('div', 'field-group');
+  group.append(createElement('h3', null, 'Weather point'));
+  const study = state.study.study;
+  const point = weatherPoint(study);
+  group.append(
+    createElement(
+      'p',
+      'tool-hint',
+      study.weather_point
+        ? `Set to ${formatMgrs(point.lon, point.lat, 4)}.`
+        : `Automatic: ${point.source === 'aoi' ? 'the AOI centre' : 'the map centre until an AOI is drawn'}, ${formatMgrs(point.lon, point.lat, 4)}. Set a point for a specific place, e.g. a ridge, a valley or a landing zone.`,
+    ),
+  );
+  const row = createElement('div', 'inline-form');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'MGRS, UTM, or DD…';
+  const set = createElement('button', 'chip-button', 'Set');
+  set.type = 'button';
+  const error = createElement('p', 'inline-error');
+  error.hidden = true;
+  const apply = () => {
+    const parsed = parseCoordinate(input.value.trim());
+    error.hidden = Boolean(parsed);
+    if (!parsed) {
+      error.textContent = 'Could not parse that coordinate.';
+      return;
+    }
+    setWeatherPoint({ lon: parsed.lon, lat: parsed.lat });
+  };
+  set.addEventListener('click', apply);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') apply();
+  });
+  row.append(input, set);
+  const actions = createElement('div', 'inline-form');
+  const pick = createElement('button', 'chip-button', 'Pick on map');
+  pick.type = 'button';
+  pick.addEventListener('click', armWeatherPick);
+  const reset = createElement('button', 'chip-button', 'Use AOI centre');
+  reset.type = 'button';
+  reset.disabled = !study.weather_point;
+  reset.addEventListener('click', () => setWeatherPoint(null));
+  actions.append(pick, reset);
+  group.append(row, error, actions);
+  return group;
 }
 
 // --- Step 1: weather forecast (online) -----------------------------------------
@@ -1944,55 +2114,191 @@ function formatVisibility(metres) {
   return Number.isFinite(metres) ? (metres / 1000).toFixed(metres < 10_000 ? 1 : 0) : '—';
 }
 
-/** Where the forecast is for, rounded so small map moves reuse it. */
-function forecastKey(lon, lat) {
-  return `${lat.toFixed(2)},${lon.toFixed(2)}`;
+/**
+ * Which study, weather point and AOI the site, forecast and station belong
+ * to; rounded to ~100 m so a map-centre point survives small pans.
+ */
+function siteKey(study) {
+  const point = weatherPoint(study);
+  return JSON.stringify([study.id, point.lon.toFixed(3), point.lat.toFixed(3), study.aoi]);
 }
 
 /**
- * 48-hour model forecast for the worksheet location, fetched only on request:
- * the request tells open-meteo.com where the AOI is.
+ * Resolve the study's weather site offline from terrain.db: the weather
+ * point's ground height and the AOI's highest and lowest ground. Memoised on
+ * siteKey; the map markers and the forecast block update when it lands.
+ * Without elevation data the site still resolves, without heights.
+ */
+function resolveSite(study) {
+  const site = state.weather.site;
+  const key = siteKey(study);
+  if (site.key === key && site.promise) return site.promise;
+  const point = weatherPoint(study);
+  Object.assign(site, { key, value: null, loading: true, error: null });
+  site.promise = (async () => {
+    let value;
+    try {
+      const params = new URLSearchParams({ at: `${point.lon},${point.lat}` });
+      const [ground, extremes] = await Promise.all([
+        requestJson(`${TERRAIN_API}/elevation?${params}`),
+        study.aoi
+          ? requestJson(`${TERRAIN_API}/extremes`, { method: 'POST', body: { area: study.aoi } })
+          : null,
+      ]);
+      value = {
+        point: { ...point, elevation: Number.isFinite(ground.elevation) ? ground.elevation : null },
+        high: extremes?.highest ?? null,
+        low: extremes?.lowest ?? null,
+      };
+    } catch (error) {
+      if (error.name === 'AbortError') return null;
+      value = { point: { ...point, elevation: null }, high: null, low: null };
+      if (site.key === key) site.error = error.message;
+    }
+    if (site.key !== key) return null;
+    Object.assign(site, { value, loading: false });
+    if (!state.session.signal.aborted) {
+      syncMapFeatures();
+      replaceForecastBlock();
+    }
+    return value;
+  })();
+  return site.promise;
+}
+
+/** The points the forecast is read at: the weather point, then the AOI's extremes. */
+function sitePoints(site) {
+  return [
+    { role: 'point', label: 'Weather point', ...site.point },
+    site.high && { role: 'high', label: 'Highest ground', ...site.high },
+    site.low && { role: 'low', label: 'Lowest ground', ...site.low },
+  ].filter(Boolean);
+}
+
+function replaceForecastBlock() {
+  const block = elements.worksheet1?.querySelector('.weather-forecast');
+  if (block && state.study) block.replaceWith(renderForecast(state.study.study));
+}
+
+/**
+ * Forecast for every site point (one Open-Meteo request) and the nearest
+ * station's latest report (through this server), side by side; each part
+ * fails on its own.
+ */
+async function loadWeatherReport() {
+  const study = state.study.study;
+  const key = siteKey(study);
+  const { forecast, station } = state.weather;
+  Object.assign(forecast, { key, loading: true, error: null });
+  Object.assign(station, { key, loading: true, error: null });
+  replaceForecastBlock();
+  const site = await resolveSite(study);
+  if (!site || forecast.key !== key) return;
+  const points = sitePoints(site);
+  const current = (entry) => entry.key === key;
+  await Promise.all([
+    requestJson(forecastUrl(points))
+      .then((json) => {
+        if (!current(forecast)) return;
+        const results = parseForecasts(json);
+        Object.assign(forecast, {
+          data: points.map((point, index) => ({ ...point, ...results[index] })),
+          dataKey: key,
+          fetchedAt: Date.now(),
+        });
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError' && current(forecast)) forecast.error = WEATHER_UNAVAILABLE;
+      })
+      .finally(() => {
+        if (current(forecast)) forecast.loading = false;
+      }),
+    requestJson(`${API}/weather/station?at=${site.point.lon},${site.point.lat}`)
+      .then((data) => {
+        if (current(station)) Object.assign(station, { data, dataKey: key });
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError' && current(station)) station.error = error.message;
+      })
+      .finally(() => {
+        if (current(station)) station.loading = false;
+      }),
+  ]);
+  if (!state.session.signal.aborted) replaceForecastBlock();
+}
+
+function heightText(elevation) {
+  return Number.isFinite(elevation) ? `${Math.round(elevation)} m` : 'height unknown';
+}
+
+/**
+ * 48-hour model forecast at the study's weather point, how it compares
+ * across the AOI, and the nearest station's measurement. Fetched only on
+ * request: the requests tell open-meteo.com and aviationweather.gov where
+ * the AOI is.
  */
 function renderForecast(study) {
-  const { lon, lat, place, onAoi } = worksheetLocation(study);
-  const forecast = state.weather.forecast;
-  const key = forecastKey(lon, lat);
-  const requested = forecast.key === key;
-  const loading = requested && forecast.loading;
-  const data = forecast.dataKey === key ? forecast.data : null;
+  const key = siteKey(study);
+  const { site, forecast } = state.weather;
+  if (site.key !== key) resolveSite(study);
+  const resolved = site.key === key ? site.value : null;
+  const point = resolved?.point ?? weatherPoint(study);
+  const loading = forecast.key === key && forecast.loading;
+  const points = forecast.dataKey === key ? forecast.data : null;
 
   const block = createElement('section', 'worksheet-block weather-forecast');
-  const heading = createElement('h4', null, 'Weather forecast ');
+  const heading = createElement('h4', null, 'Weather ');
   heading.append(createElement('span', 'basemap-note', 'online'));
   block.append(heading);
+
+  const facts = createElement('dl', 'fact-list weather-site');
+  const fact = (term, text) =>
+    facts.append(createElement('dt', null, term), createElement('dd', null, text));
+  fact(
+    'Weather point',
+    `${describeLocation(point)}${resolved ? ` · ground ${heightText(point.elevation)}` : ''}`,
+  );
+  if (resolved?.high) {
+    fact(
+      'Highest ground',
+      `${formatMgrs(resolved.high.lon, resolved.high.lat, 4)} · ${heightText(resolved.high.elevation)}`,
+    );
+    fact(
+      'Lowest ground',
+      `${formatMgrs(resolved.low.lon, resolved.low.lat, 4)} · ${heightText(resolved.low.elevation)}`,
+    );
+  }
+  block.append(facts);
 
   const controls = createElement('div', 'light-controls');
   const button = createElement(
     'button',
     'text-button',
-    loading ? 'Loading…' : data ? 'Refresh forecast' : 'Get forecast',
+    loading ? 'Loading…' : points ? 'Refresh weather' : 'Get weather',
   );
   button.type = 'button';
   button.disabled = loading;
-  button.addEventListener('click', () => loadForecast(lon, lat));
+  button.addEventListener('click', loadWeatherReport);
   controls.append(button);
   block.append(controls);
-  if (requested && forecast.error) {
+  if (forecast.key === key && forecast.error) {
     block.append(createElement('p', 'inline-error', forecast.error));
   }
 
-  if (!data) {
+  if (!points) {
     block.append(
       createElement(
         'p',
         'panel-note',
-        `48-hour model forecast for the ${onAoi ? 'AOI' : 'map'} centre from open-meteo.com. Getting it sends that location to the service.`,
+        'A 48-hour model forecast (open-meteo.com) at the weather point and the AOI’s highest and lowest ground, and the latest measurement of the nearest reporting station (aviationweather.gov). Getting it sends those locations to both services. Set the weather point in the tool panel or by right-clicking the map.',
       ),
     );
+    block.append(renderStation(key));
     return block;
   }
 
-  const now = data.current;
+  const [main] = points;
+  const now = main.current;
   if (now) {
     block.append(
       createElement(
@@ -2002,7 +2308,36 @@ function renderForecast(study) {
       ),
     );
   }
+  block.append(forecastTable(main.hours));
+  const cellKm = Number.isFinite(main.cell.lat) ? metresApart(main, main.cell) / 1000 : Number.NaN;
+  block.append(
+    createElement(
+      'p',
+      'panel-note',
+      [
+        `At the weather point; times in ${timeZoneLabel(new Date())}`,
+        "weather, precipitation (total, chance) and gusts: the worst of the 3 h from the row's time; the rest at that time; wind from the named direction",
+        Number.isFinite(cellKm)
+          ? `model grid point ${cellKm.toFixed(1)} km away${Number.isFinite(main.elevation) ? `, temperature corrected to the ground height ${Math.round(main.elevation)} m` : ''}`
+          : null,
+        `model forecast by Open-Meteo.com (CC BY 4.0), fetched ${CLOCK.format(forecast.fetchedAt)}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ),
+  );
+  if (points.length > 1) block.append(renderSpread(points));
+  block.append(renderStation(key));
+  return block;
+}
 
+function metresApart(a, b) {
+  const kmPerDegLat = 111.32;
+  const kmPerDegLon = 111.32 * Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180);
+  return Math.hypot((a.lon - b.lon) * kmPerDegLon, (a.lat - b.lat) * kmPerDegLat) * 1000;
+}
+
+function forecastTable(hours) {
   const table = document.createElement('table');
   table.className = 'data-table light-table weather-table';
   const headRow = document.createElement('tr');
@@ -2018,7 +2353,7 @@ function renderForecast(study) {
   const head = document.createElement('thead');
   head.append(headRow);
   const body = document.createElement('tbody');
-  for (const hour of data.hours) {
+  for (const hour of hours) {
     const row = document.createElement('tr');
     const probability = Number.isFinite(hour.probability) ? ` (${hour.probability} %)` : '';
     [
@@ -2033,37 +2368,127 @@ function renderForecast(study) {
     body.append(row);
   }
   table.append(head, body);
-  block.append(table);
-  block.append(
+  return table;
+}
+
+/**
+ * The elements that differ across the AOI, per row "point / high / low":
+ * temperature (height), wind (exposure), low cloud (hill fog on the tops)
+ * and visibility (valley fog).
+ */
+function renderSpread(points) {
+  const wrap = createElement('div', 'weather-spread');
+  wrap.append(createElement('h5', null, 'Across the AOI'));
+  wrap.append(
     createElement(
       'p',
       'panel-note',
-      `${place} · times in ${timeZoneLabel(new Date())} · weather, precipitation (total, chance) and gusts: the worst of the 3 h from the row's time; the rest at that time; wind from the named direction · model forecast by Open-Meteo.com (CC BY 4.0), fetched ${CLOCK.format(forecast.fetchedAt)}`,
+      `Each cell: ${points.map((point) => `${point.label.toLowerCase()} (${heightText(point.elevation)})`).join(' / ')}`,
     ),
   );
-  return block;
+  const table = document.createElement('table');
+  table.className = 'data-table light-table weather-table';
+  const headRow = document.createElement('tr');
+  ['Time', '°C', 'Wind m/s (gusts)', 'Low cloud %', 'Visibility km'].forEach((label) =>
+    headRow.append(createElement('th', null, label)),
+  );
+  const head = document.createElement('thead');
+  head.append(headRow);
+  const body = document.createElement('tbody');
+  const rows = [
+    { label: 'Now', pick: (point) => point.current },
+    ...points[0].hours.map((hour, index) => ({
+      label: FORECAST_TIME.format(hour.time),
+      pick: (point) => point.hours[index],
+    })),
+  ];
+  for (const { label, pick } of rows) {
+    const row = document.createElement('tr');
+    const cells = (format) =>
+      points.map((point) => (pick(point) ? format(pick(point)) : '—')).join(' / ');
+    [
+      label,
+      cells((entry) => formatNumber(entry.temperature)),
+      cells(formatWind),
+      cells((entry) => formatNumber(entry.cloudLow)),
+      cells((entry) => formatVisibility(entry.visibility)),
+    ].forEach((text) => row.append(createElement('td', null, text)));
+    body.append(row);
+  }
+  table.append(head, body);
+  wrap.append(table);
+  return wrap;
 }
 
-async function loadForecast(lon, lat) {
-  const forecast = state.weather.forecast;
-  const key = forecastKey(lon, lat);
-  const replaceBlock = () => {
-    const block = elements.worksheet1.querySelector('.weather-forecast');
-    if (block && state.study) block.replaceWith(renderForecast(state.study.study));
-  };
-  Object.assign(forecast, { key, loading: true, error: null });
-  replaceBlock();
-  try {
-    const data = parseForecast(await requestJson(forecastUrl(lon, lat)));
-    if (forecast.key !== key) return;
-    Object.assign(forecast, { data, dataKey: key, fetchedAt: Date.now() });
-  } catch (error) {
-    if (error.name === 'AbortError') return;
-    if (forecast.key === key) forecast.error = WEATHER_UNAVAILABLE;
-  } finally {
-    if (forecast.key === key) forecast.loading = false;
+/** The nearest station's latest METAR, decoded, with the raw report. */
+function renderStation(key) {
+  const station = state.weather.station;
+  const wrap = createElement('div', 'weather-station');
+  if (station.key !== key && station.dataKey !== key) return wrap;
+  wrap.append(createElement('h5', null, 'Nearest observation (measured)'));
+  if (station.key === key && station.loading) {
+    wrap.append(createElement('p', 'panel-note', 'Asking for the nearest station…'));
+    return wrap;
   }
-  if (!state.session.signal.aborted) replaceBlock();
+  if (station.key === key && station.error) {
+    wrap.append(createElement('p', 'inline-error', station.error));
+    return wrap;
+  }
+  const report = station.dataKey === key ? station.data : null;
+  if (!report) return wrap;
+  const { wind, visibility } = report;
+  const from = wind.variable
+    ? 'variable '
+    : Number.isFinite(wind.direction)
+      ? `${compassPoint(wind.direction)} `
+      : '';
+  const windText = Number.isFinite(wind.speed)
+    ? `${from}${wind.speed.toFixed(0)} m/s (${wind.knots} kt)${Number.isFinite(wind.gusts) ? `, gusts ${wind.gusts.toFixed(0)} m/s` : ''}`
+    : '—';
+  const visibilityText = visibility
+    ? `${visibility.atLeast ? '≥ ' : ''}${formatVisibility(visibility.metres)} km`
+    : '—';
+  const cloudText = report.cavok
+    ? 'CAVOK (no cloud below 1,500 m, no significant weather)'
+    : report.clouds.length
+      ? report.clouds
+          .map((layer) =>
+            `${layer.cover} ${Number.isFinite(layer.baseFeet) ? `${Math.round(layer.baseFeet * 0.3048)} m` : ''}`.trim(),
+          )
+          .join(', ')
+      : 'no cloud reported';
+  const ceilingText = Number.isFinite(report.ceilingMetres)
+    ? `ceiling ${report.ceilingMetres} m (${report.ceilingFeet.toLocaleString()} ft)`
+    : 'no ceiling';
+  wrap.append(
+    createElement(
+      'p',
+      'weather-now',
+      `${report.station.id} ${report.station.name}, ${report.distanceKm.toFixed(0)} km ${compassPoint(report.bearing)} of the weather point, station ${heightText(report.station.elevation)} · observed ${CLOCK.format(report.observed)} (${minutesAgo(report.observed)})`,
+    ),
+    createElement(
+      'p',
+      'weather-now',
+      [
+        `${formatNumber(report.temperature)} °C, dew point ${formatNumber(report.dewPoint)} °C`,
+        `wind ${windText}`,
+        `visibility ${visibilityText}`,
+        report.weather ? `weather ${report.weather}` : null,
+        `cloud ${cloudText}`,
+        ceilingText,
+        Number.isFinite(report.qnh) ? `QNH ${report.qnh} hPa` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+    ),
+    createElement('code', 'weather-metar', report.raw),
+    createElement(
+      'p',
+      'panel-note',
+      `Measured at the airfield, not in the AOI${report.distanceKm > 25 ? `; ${report.distanceKm.toFixed(0)} km away it shows the wider region, not local effects` : ''}. Cloud heights above the station. METAR via aviationweather.gov (NOAA).`,
+    ),
+  );
+  return wrap;
 }
 
 // --- Step 2: describe the effects ----------------------------------------

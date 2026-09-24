@@ -932,6 +932,23 @@
       font: 11px/1.5 var(--data);
     }
 
+    .weather-spread h5,
+    .weather-station h5 {
+      margin: 14px 0 4px;
+      color: var(--blue-dark);
+      font: 600 11px/1.4 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .weather-metar {
+      display: block;
+      margin: 0 0 6px;
+      font: 11px/1.5 var(--data);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
     .light-table td,
     .light-table th {
       white-space: nowrap;

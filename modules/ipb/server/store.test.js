@@ -42,6 +42,18 @@ describe('openStore: studies', () => {
     expect(study).toMatchObject({ name: 'Libavá rehearsal', revision: 1, notes: {}, aoi: null });
   });
 
+  test('the weather point is saved, reset to the AOI with null, and must be a lon/lat', () => {
+    const { id } = store.createStudy({ name: 'Weather' });
+    expect(store.readStudy(id).study.weather_point).toBeNull();
+    store.updateStudy(id, { weather_point: { lon: 17.52, lat: 49.68 } });
+    expect(store.readStudy(id).study.weather_point).toEqual({ lon: 17.52, lat: 49.68 });
+    expectStatus(() => store.updateStudy(id, { weather_point: { lon: 17.5 } }), 400);
+    expectStatus(() => store.updateStudy(id, { weather_point: { lon: 17.5, lat: 95 } }), 400);
+    expectStatus(() => store.updateStudy(id, { weather_point: [17.5, 49.7] }), 400);
+    store.updateStudy(id, { weather_point: null });
+    expect(store.readStudy(id).study.weather_point).toBeNull();
+  });
+
   test('rejects a blank or missing name', () => {
     expectStatus(() => store.createStudy({ name: '' }), 400);
     expectStatus(() => store.createStudy({}), 400);

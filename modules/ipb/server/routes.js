@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { HttpError, readJson, sendJson } from '../../../server/http.js';
 import { stateDirectory } from '../../../server/state.js';
+import { nearestStation } from './station.js';
 import { openStore } from './store.js';
 
 const ID = 'ipb';
@@ -24,7 +25,27 @@ function parseId(text) {
 
 let store;
 
-async function handle({ route, request, response }) {
+/** Latest METAR of the airfield nearest `?at=lon,lat`; goes online, only when asked. */
+async function handleStation(url, response) {
+  const [lon, lat] = (url.searchParams.get('at') || '').split(',').map(Number);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lat) > 90) {
+    throw new HttpError(400, 'The at must be "lon,lat".');
+  }
+  let station;
+  try {
+    station = await nearestStation({ lon, lat });
+  } catch (error) {
+    throw new HttpError(502, `The station service did not answer (${error.message}).`);
+  }
+  if (!station) throw new HttpError(404, 'No reporting station within about 500 km.');
+  sendJson(response, station);
+}
+
+async function handle({ route, url, request, response }) {
+  if (route === 'weather/station') {
+    if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+    return handleStation(url, response);
+  }
   store ??= openStore(DATABASE);
   const { method } = request;
 

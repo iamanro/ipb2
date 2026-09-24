@@ -372,6 +372,8 @@ const LAYER_STYLE = {
   coa: { color: '#27ae60', dash: null, width: 2, fillAlpha: 0.15 },
   threat: { color: '#eb3b5a', dash: null, width: 2, fillAlpha: 0.2 },
   note: { color: '#7f8c8d', dash: [2, 3], width: 1.5, fillAlpha: 0.1 },
+  // Where the study's weather is read (step 1); highest/lowest ground hollow.
+  weather: { color: '#0e7490', dash: null, width: 2, fillAlpha: 0 },
 };
 const DEFAULT_LAYER_STYLE = { color: '#546e7a', dash: null, width: 2, fillAlpha: 0.15 };
 

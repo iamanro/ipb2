@@ -19,7 +19,7 @@ const COA_KINDS = ['most-likely', 'most-dangerous'];
 const OBSERVED_STATUSES = ['expected', 'observed', 'not-observed'];
 const ANALYSIS_KINDS = ['mobility', 'viewshed', 'line-of-sight'];
 const NOTE_STEPS = ['step1', 'step2', 'step3', 'step4'];
-const STUDY_PATCH_FIELDS = ['name', 'bounds', 'aoi', 'notes'];
+const STUDY_PATCH_FIELDS = ['name', 'bounds', 'aoi', 'notes', 'weather_point'];
 
 /**
  * One entry per child resource. This table is the whole point of the module:
@@ -136,6 +136,23 @@ function validateBounds(value) {
     throw new HttpError(400, 'bounds must satisfy west < east and south < north.');
   }
   return value;
+}
+
+/** `{ lon, lat }` in range, or null for "derive from the AOI". */
+function validateWeatherPoint(value) {
+  if (value === null) return null;
+  const valid =
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 2 &&
+    Number.isFinite(value.lon) &&
+    Number.isFinite(value.lat) &&
+    Math.abs(value.lon) <= 180 &&
+    Math.abs(value.lat) <= 90;
+  if (!valid) {
+    throw new HttpError(400, 'weather_point must be {lon, lat} in degrees, or null.');
+  }
+  return { lon: value.lon, lat: value.lat };
 }
 
 function validateNotes(value) {
@@ -285,6 +302,7 @@ function readStudyRow(id) {
     bounds: row.bounds ? JSON.parse(row.bounds) : null,
     aoi: row.aoi ? JSON.parse(row.aoi) : null,
     notes: JSON.parse(row.notes),
+    weather_point: row.weather_point ? JSON.parse(row.weather_point) : null,
     revision: row.revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -361,6 +379,8 @@ function validateStudyPatch(patch) {
       fields.aoi = value;
     } else if (key === 'notes') {
       fields.notes = validateNotes(value);
+    } else if (key === 'weather_point') {
+      fields.weather_point = validateWeatherPoint(value);
     }
   }
   return fields;
@@ -384,6 +404,10 @@ function applyStudyPatch(id, fields) {
   if ('notes' in fields) {
     assignments.push('notes = ?');
     params.push(JSON.stringify(fields.notes));
+  }
+  if ('weather_point' in fields) {
+    assignments.push('weather_point = ?');
+    params.push(fields.weather_point ? JSON.stringify(fields.weather_point) : null);
   }
   if (!assignments.length) return;
   database.prepare(`UPDATE studies SET ${assignments.join(', ')} WHERE id = ?`).run(...params, id);

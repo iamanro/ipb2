@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   HttpError,
   numberParameter,
+  readJson,
   sendBytes,
   sendJson,
   serveFile,
@@ -13,6 +14,7 @@ import { encodePng } from '../../../server/png.js';
 import { contourTile } from './contours.js';
 import { suggestAvenues } from './corridors.js';
 import { metresBetween, openTerrain } from './dem.js';
+import { elevationExtremes } from './extremes.js';
 import { SLOPE_LEGEND, renderHillshade, renderSlopeClasses } from './rasterTiles.js';
 import { openImagery } from './imagery.js';
 import { keyTerrainCandidates } from './keyTerrain.js';
@@ -224,6 +226,18 @@ export default {
         elevation: model.elevation(at.lon, at.lat),
         slope: model.slopeDegrees(at.lon, at.lat),
       });
+      return;
+    }
+    if (route === 'extremes') {
+      // POST, because an AOI polygon can outgrow a query string.
+      if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+      const model = elevationModel();
+      const body = await readJson(request);
+      try {
+        sendJson(response, elevationExtremes(model.elevation, body?.area));
+      } catch (error) {
+        throw new HttpError(422, error.message);
+      }
       return;
     }
     if (route === 'line-of-sight') {

@@ -96,4 +96,6 @@ export const MIGRATIONS = [
   );
   CREATE INDEX activity_study ON activity(study_id);
   `,
+  // Where the study takes its weather: JSON {lon, lat}; NULL means the AOI centre.
+  `ALTER TABLE studies ADD COLUMN weather_point TEXT;`,
 ];
