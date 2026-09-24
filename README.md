@@ -171,6 +171,14 @@ the Roads style fills it flat, both hiding the ground inside. Topo draws its
 contours and names itself, so those two overlays show as included while it is
 selected.
 
+The chosen basemap, overlays and MGRS grid toggle are remembered in the
+browser. **Print worksheet** (or Ctrl+P) puts the current map view on page 1
+with a scale bar, a caption (study, step, centre MGRS, basemap, overlays) and
+the attributions, followed by the worksheet. Step 1's **Light data** table
+lists BMNT/BMCT, sunrise/sunset, EECT/EENT, moonrise/moonset and moon
+illumination for the AOI centre, computed offline (`src/astro.js`, within a
+minute of the US Naval Observatory's tables).
+
 A basemap whose data has not been built is greyed out, with the command to
 build it in its tooltip. OpenTopoMap and Satellite HD are the only parts of
 the app that talk to an outside service, and only while selected. Both require

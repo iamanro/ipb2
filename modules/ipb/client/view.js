@@ -1,6 +1,7 @@
 import './styles.css';
 import template from './view.html?raw';
 
+import { lightData } from '../../../src/astro.js';
 import { createMap } from '../../../src/map.js';
 import { formatArea, formatMetres, formatMgrs, parseCoordinate } from '../../../src/geo.js';
 
@@ -137,6 +138,39 @@ let mapController;
 
 // --- State & elements ------------------------------------------------------
 
+/** Basemap, overlays and grid survive reloads; everything else is per session. */
+const MAP_VIEW_KEY = 'ipb.mapView';
+
+function loadMapView() {
+  const view = {
+    basemap: 'roads',
+    overlays: { contours: false, slope: false, roads: false, places: false },
+    grid: true,
+  };
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(MAP_VIEW_KEY) ?? 'null');
+    if (BASEMAPS.some((basemap) => basemap.id === saved?.basemap)) view.basemap = saved.basemap;
+    for (const id of Object.keys(view.overlays)) {
+      if (typeof saved?.overlays?.[id] === 'boolean') view.overlays[id] = saved.overlays[id];
+    }
+    if (typeof saved?.grid === 'boolean') view.grid = saved.grid;
+  } catch {
+    // Unreadable or blocked storage: fall back to the defaults above.
+  }
+  return view;
+}
+
+function saveMapView() {
+  try {
+    window.localStorage.setItem(
+      MAP_VIEW_KEY,
+      JSON.stringify({ basemap: state.basemap, overlays: state.overlays, grid: state.grid }),
+    );
+  } catch {
+    // Storage full or blocked: the choice just won't survive a reload.
+  }
+}
+
 function createState() {
   return {
     session: new AbortController(),
@@ -150,13 +184,13 @@ function createState() {
     losForm: { observer: 1.8, target: 1.8 },
     losResult: null,
     viewshedForm: { radius: 3000, observer: 1.8, target: 1.8 },
+    lightForm: { start: localDateInputValue(new Date()), days: 7 },
     viewshedResult: null,
     mobility: { cell: 100, opacity: 0.55, grid: null, running: false },
     selectedFeatureId: null,
     selectedCoaId: null,
     terrainMeta: null,
-    basemap: 'roads',
-    overlays: { contours: false, slope: false, roads: false, places: false },
+    ...loadMapView(),
     equipmentQuery: '',
     equipmentResults: [],
     equipmentLoading: false,
@@ -171,6 +205,7 @@ function queryElements(root) {
   const pick = (selector) => root.querySelector(selector);
   return {
     printButton: pick('#print-worksheet'),
+    printMap: pick('#print-map'),
     studyToggle: pick('#study-toggle'),
     studyName: pick('#study-name'),
     studyMenu: pick('#study-menu'),
@@ -832,11 +867,16 @@ function renderBasemapSwitch() {
 
 function applyBasemap(id) {
   const spec = basemapSpec(id);
-  if (!spec) return;
+  if (!spec) {
+    // A remembered basemap whose data has since gone (e.g. imagery deleted).
+    if (id !== 'roads') applyBasemap('roads');
+    return;
+  }
   state.basemap = id;
   mapController.setBasemap(spec);
   renderBasemapSwitch();
   applyOverlays(); // basemaps like Topo include overlays of their own
+  saveMapView();
 }
 
 // --- Toast -------------------------------------------------------------------
@@ -1300,6 +1340,7 @@ function renderStep1Worksheet() {
     createElement('dd', null, study.aoi ? formatArea(polygonAreaSquareKm(study.aoi)) : '—'),
   );
   container.append(facts);
+  container.append(renderLightData(study));
 
   const noteLabel = createElement('label', 'field-label', 'Environment notes');
   noteLabel.setAttribute('for', 'step1-note');
@@ -1331,6 +1372,131 @@ function renderStep1Worksheet() {
     );
   });
   container.append(noteLabel, textarea, printCopy);
+}
+
+// --- Step 1: light data --------------------------------------------------------
+
+const LIGHT_COLUMNS = [
+  ['bmnt', 'BMNT'],
+  ['bmct', 'BMCT'],
+  ['sunrise', 'Sunrise'],
+  ['sunset', 'Sunset'],
+  ['eect', 'EECT'],
+  ['eent', 'EENT'],
+  ['moonrise', 'Moonrise'],
+  ['moonset', 'Moonset'],
+];
+const LIGHT_DAY_OPTIONS = [1, 3, 7, 14];
+
+function localDateInputValue(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** "Europe/Prague (UTC+2)" for the browser's zone on a given date. */
+function timeZoneLabel(date) {
+  const offset = -date.getTimezoneOffset() / 60;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return `${zone} (UTC${offset >= 0 ? '+' : '−'}${Math.abs(offset)})`;
+}
+
+/**
+ * Sun and moon light table for the AOI centre (or the map centre until an AOI
+ * is drawn), in local time, one row per local calendar day.
+ */
+function renderLightData(study) {
+  const block = createElement('section', 'worksheet-block light-data');
+  block.append(createElement('h4', null, 'Light data'));
+
+  const bounds = study.bounds;
+  const [lon, lat] = bounds
+    ? [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
+    : mapController.getCenter();
+  const [year, month, day] = state.lightForm.start.split('-').map(Number);
+  const firstDay = new Date(year, month - 1, day);
+
+  const controls = createElement('div', 'light-controls');
+  const startInput = document.createElement('input');
+  startInput.type = 'date';
+  startInput.value = state.lightForm.start;
+  startInput.addEventListener('change', () => {
+    if (!startInput.value) return;
+    state.lightForm.start = startInput.value;
+    renderStep1Worksheet();
+  });
+  const daysSelect = document.createElement('select');
+  LIGHT_DAY_OPTIONS.forEach((count) => {
+    daysSelect.append(new Option(`${count} day${count > 1 ? 's' : ''}`, String(count)));
+  });
+  daysSelect.value = String(state.lightForm.days);
+  daysSelect.addEventListener('change', () => {
+    state.lightForm.days = Number(daysSelect.value);
+    renderStep1Worksheet();
+  });
+  controls.append(startInput, daysSelect);
+  block.append(controls);
+
+  block.append(
+    createElement(
+      'p',
+      'panel-note',
+      `${bounds ? 'AOI centre' : 'Map centre (draw an AOI to fix the location)'} ${formatMgrs(lon, lat, 4)} · times in ${timeZoneLabel(firstDay)}`,
+    ),
+  );
+
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  const date = new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+  const table = document.createElement('table');
+  table.className = 'data-table light-table';
+  const headRow = document.createElement('tr');
+  ['Date', ...LIGHT_COLUMNS.map(([, label]) => label), 'Moon (noon)'].forEach((label) => {
+    headRow.append(createElement('th', null, label));
+  });
+  const head = document.createElement('thead');
+  head.append(headRow);
+  const body = document.createElement('tbody');
+  for (let offset = 0; offset < state.lightForm.days; offset += 1) {
+    // Local midnight each day, so rows follow the local calendar across DST.
+    const dayStart = new Date(
+      firstDay.getFullYear(),
+      firstDay.getMonth(),
+      firstDay.getDate() + offset,
+    );
+    const light = lightData(lat, lon, dayStart.getTime());
+    const row = document.createElement('tr');
+    row.append(createElement('td', null, date.format(dayStart)));
+    LIGHT_COLUMNS.forEach(([key]) => {
+      // Light tables round to the nearest minute; Intl would truncate seconds.
+      const text = light[key] === null ? '—' : time.format(Math.round(light[key] / 60000) * 60000);
+      row.append(createElement('td', null, text));
+    });
+    row.append(
+      createElement(
+        'td',
+        null,
+        `${Math.round(light.illumination * 100)}% ${light.waxing ? 'waxing' : 'waning'}`,
+      ),
+    );
+    body.append(row);
+  }
+  table.append(head, body);
+  block.append(table);
+  block.append(
+    createElement(
+      'p',
+      'panel-note',
+      'BMNT/EENT: begin morning / end evening nautical twilight (sun 12° below the horizon); BMCT/EECT: civil twilight (6°). — : no such event that day.',
+    ),
+  );
+  return block;
 }
 
 // --- Step 2: describe the effects ----------------------------------------
@@ -2721,6 +2887,48 @@ function printWorksheet() {
   window.print();
 }
 
+/**
+ * Snapshot the live map into the print-only figure. Runs on `beforeprint`, so
+ * Ctrl+P gets the map too, not only the Print button. The figure holds the
+ * composited canvas itself (drawn immediately, nothing to decode) and a
+ * caption that says what the map shows.
+ */
+function preparePrintMap() {
+  elements.printMap.replaceChildren();
+  const frame = state.study && mapController?.exportCanvas();
+  if (!frame) return;
+  const { canvas, attributions } = frame;
+  const [lon, lat] = mapController.getCenter();
+  const basemap = BASEMAPS.find((entry) => entry.id === state.basemap)?.label ?? state.basemap;
+  const spec = overlaySpec();
+  const overlays = OVERLAYS.filter((overlay) => spec[overlay.id]).map((overlay) => overlay.label);
+  const caption = createElement('figcaption');
+  caption.append(
+    createElement('strong', null, `${state.study.study.name} — ${STEP_NAMES[state.step]}`),
+    createElement(
+      'span',
+      null,
+      [
+        `Centre ${formatMgrs(lon, lat)}`,
+        `Basemap: ${basemap}`,
+        overlays.length ? `Overlays: ${overlays.join(', ')}` : null,
+        state.grid ? 'MGRS grid' : null,
+        `Printed ${new Date().toLocaleString()}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ),
+  );
+  if (attributions.length) {
+    caption.append(createElement('small', null, attributions.join(' · ')));
+  }
+  elements.printMap.append(canvas, caption);
+}
+
+function clearPrintMap() {
+  elements.printMap?.replaceChildren();
+}
+
 // --- Keyboard shortcuts ------------------------------------------------------
 
 function isTypingTarget(target) {
@@ -2770,6 +2978,8 @@ export function mount({ root, status }) {
   createDialogNode(root);
 
   elements.printButton.addEventListener('click', printWorksheet);
+  window.addEventListener('beforeprint', preparePrintMap);
+  window.addEventListener('afterprint', clearPrintMap);
   elements.studyToggle.addEventListener('click', () => toggleStudyMenu());
   elements.mapEmptyCreate.addEventListener('click', createStudy);
   elements.createStudy.addEventListener('click', createStudy);
@@ -2802,7 +3012,8 @@ export function mount({ root, status }) {
     onDraw: onMapDraw,
     onPointerMove: onMapPointerMove,
   });
-  mapController.setMgrsGrid(true);
+  mapController.setMgrsGrid(state.grid);
+  elements.gridToggle.setAttribute('aria-pressed', String(state.grid));
   renderBasemapSwitch();
   renderOverlayList();
   elements.basemapSwitch.addEventListener('click', (event) => {
@@ -2814,11 +3025,13 @@ export function mount({ root, status }) {
     if (!id) return;
     state.overlays[id] = event.target.checked;
     applyOverlays();
+    saveMapView();
   });
   elements.gridToggle.addEventListener('click', () => {
-    const visible = elements.gridToggle.getAttribute('aria-pressed') !== 'true';
-    elements.gridToggle.setAttribute('aria-pressed', String(visible));
-    mapController.setMgrsGrid(visible);
+    state.grid = !state.grid;
+    elements.gridToggle.setAttribute('aria-pressed', String(state.grid));
+    mapController.setMgrsGrid(state.grid);
+    saveMapView();
   });
 
   readLocation();
@@ -2860,6 +3073,8 @@ export function mount({ root, status }) {
     window.clearTimeout(toastTimer);
     document.removeEventListener('keydown', onGlobalKeydown);
     document.removeEventListener('click', handleOutsideClick);
+    window.removeEventListener('beforeprint', preparePrintMap);
+    window.removeEventListener('afterprint', clearPrintMap);
     closeContextMenu();
     elements.moduleRoot?.querySelector(':scope > .ipb-toast')?.remove();
     session.abort();

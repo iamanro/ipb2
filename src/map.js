@@ -70,6 +70,14 @@ const BUILDING_STYLE = new Style({
   fill: new Fill({ color: '#dcd5c6' }),
   stroke: new Stroke({ color: '#cfc6b3', width: 0.5 }),
 });
+/**
+ * Military land, in every vector style, is an outline only. OSM wraps a whole
+ * training area in one `landuse=military` polygon; filling or hatching it
+ * (as OpenTopoMap does) hides the terrain inside, which is what IPB reads.
+ */
+const MILITARY_OUTLINE = new Style({
+  stroke: new Stroke({ color: 'rgba(142, 63, 160, 0.9)', width: 2, lineDash: [12, 5] }),
+});
 const BOUNDARY_STYLE_CACHE = new Map();
 const ROAD_STYLE_CACHE = new Map();
 
@@ -114,7 +122,7 @@ function basemapStyle(feature) {
         ? WOOD_STYLE
         : undefined;
     case 'landuse':
-      return LANDUSE_STYLE;
+      return feature.get('class') === 'military' ? MILITARY_OUTLINE : LANDUSE_STYLE;
     case 'building':
       return BUILDING_STYLE;
     case 'transportation':
@@ -154,14 +162,6 @@ const TOPO_LANDUSE = {
   quarry: fillStyle('#e2ddd3'),
   cemetery: fillStyle('#dde6d6'),
 };
-/**
- * Military land is an outline only. OSM wraps a whole training area in one
- * `landuse=military` polygon; filling or hatching it (as OpenTopoMap does)
- * hides the terrain inside, which is exactly what IPB needs to see.
- */
-const TOPO_MILITARY = new Style({
-  stroke: new Stroke({ color: 'rgba(142, 63, 160, 0.9)', width: 2, lineDash: [12, 5] }),
-});
 const TOPO_WATER = fillStyle('#b5d0ea');
 const TOPO_WATER_INK = '#6d9fd3';
 const TOPO_WATERWAY = {
@@ -232,7 +232,7 @@ function topoStyle(feature) {
       if (kind === 'grass' && feature.get('subclass') === 'scrub') return TOPO_SCRUB;
       return TOPO_LANDCOVER[kind];
     case 'landuse':
-      return kind === 'military' ? TOPO_MILITARY : TOPO_LANDUSE[kind];
+      return kind === 'military' ? MILITARY_OUTLINE : TOPO_LANDUSE[kind];
     case 'water':
       return TOPO_WATER;
     case 'waterway':
@@ -583,6 +583,56 @@ function mgrsLabelStyle(kind, text, tone) {
         : { stroke: new Stroke({ color: light ? 'rgba(0, 0, 0, 0.8)' : '#ffffff', width: 3 }) }),
     }),
   });
+}
+
+// -- Print furniture ---------------------------------------------------------------
+
+/** Longest 1/2/5 × 10^n metres that fits in `maxMetres`. */
+function niceScaleLength(maxMetres) {
+  const power = 10 ** Math.floor(Math.log10(maxMetres));
+  return [5, 2, 1].map((step) => step * power).find((length) => length <= maxMetres);
+}
+
+/** Four-segment black/white scale bar in the bottom-left corner (CSS px). */
+function drawScaleBar(context, height, metresPerPixel) {
+  const metres = niceScaleLength(160 * metresPerPixel);
+  const barWidth = metres / metresPerPixel;
+  const x = 16;
+  const y = height - 30;
+  const label = metres >= 1000 ? `${metres / 1000} km` : `${metres} m`;
+  context.font = '600 11px "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace';
+  context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  context.fillRect(x - 8, y - 20, barWidth + 16 + context.measureText(label).width + 8, 38);
+  for (let segment = 0; segment < 4; segment += 1) {
+    context.fillStyle = segment % 2 ? '#ffffff' : '#1b1b1b';
+    context.fillRect(x + (segment * barWidth) / 4, y, barWidth / 4, 6);
+  }
+  context.strokeStyle = '#1b1b1b';
+  context.lineWidth = 1;
+  context.strokeRect(x, y, barWidth, 6);
+  context.fillStyle = '#1b1b1b';
+  context.textBaseline = 'bottom';
+  context.fillText('0', x - 3, y - 3);
+  context.fillText(label, x + barWidth + 6, y + 8);
+}
+
+/** North arrow in the top-right corner, only drawn when the view is rotated. */
+function drawNorthArrow(context, width, rotation) {
+  context.save();
+  context.translate(width - 30, 36);
+  context.rotate(rotation);
+  context.fillStyle = '#1b1b1b';
+  context.beginPath();
+  context.moveTo(0, -16);
+  context.lineTo(7, 10);
+  context.lineTo(0, 5);
+  context.lineTo(-7, 10);
+  context.closePath();
+  context.fill();
+  context.font = '700 11px system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.fillText('N', 0, -20);
+  context.restore();
 }
 
 // -- Grid overlay rasterisation ---------------------------------------------
@@ -1054,6 +1104,86 @@ export function createMap(options) {
     placesLayer.setVisible(places);
   }
 
+  /**
+   * The last fully rendered view as one canvas, for print, or null before the
+   * first frame: every layer canvas composited at device resolution, plus a
+   * scale bar (and a north arrow if rotated). Returns
+   * `{ canvas, attributions, metresPerPixel }`.
+   *
+   * Taken after each `rendercomplete` rather than at print time: once the
+   * print stylesheet hides the map, OpenLayers resizes it to nothing and
+   * drops its canvases, so there is nothing left to copy by `beforeprint`.
+   * The canvas is displayed, never read back, so other-origin tiles are fine.
+   */
+  function exportCanvas() {
+    return lastFrame;
+  }
+
+  let lastFrame = null;
+  let frameTimer = null;
+  listenerKeys.push(
+    map.on('rendercomplete', () => {
+      window.clearTimeout(frameTimer);
+      // Settle first: rendercomplete can fire on every frame of an animation.
+      frameTimer = window.setTimeout(() => {
+        const size = map.getSize();
+        if (size?.[0] && size?.[1]) lastFrame = composeFrame(size);
+      }, 250);
+    }),
+  );
+  domCleanups.push(() => window.clearTimeout(frameTimer));
+
+  function composeFrame([width, height]) {
+    const ratio = window.devicePixelRatio || 1;
+    const out = document.createElement('canvas');
+    out.width = Math.round(width * ratio);
+    out.height = Math.round(height * ratio);
+    const context = out.getContext('2d');
+    const viewport = map.getViewport();
+    for (const canvas of viewport.querySelectorAll('.ol-layer canvas, canvas.ol-layer')) {
+      if (!canvas.width) continue;
+      const opacity = canvas.parentNode.style.opacity || canvas.style.opacity;
+      context.globalAlpha = opacity === '' ? 1 : Number(opacity);
+      // Each layer canvas carries its own CSS transform (canvas px -> CSS px).
+      const matrix = canvas.style.transform
+        ? canvas.style.transform
+            .match(/^matrix\(([^(]*)\)$/)[1]
+            .split(',')
+            .map(Number)
+        : [
+            Number.parseFloat(canvas.style.width) / canvas.width,
+            0,
+            0,
+            Number.parseFloat(canvas.style.height) / canvas.height,
+            0,
+            0,
+          ];
+      context.setTransform(...matrix.map((value) => value * ratio));
+      const background = canvas.parentNode.style.backgroundColor;
+      if (background) {
+        context.fillStyle = background;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      context.drawImage(canvas, 0, 0);
+    }
+    context.globalAlpha = 1;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+    const view = map.getView();
+    const metresPerPixel = getPointResolution(
+      MAP_PROJECTION,
+      view.getResolution(),
+      view.getCenter(),
+      'm',
+    );
+    drawScaleBar(context, height, metresPerPixel);
+    if (view.getRotation()) drawNorthArrow(context, width, view.getRotation());
+    const attributions = [...viewport.querySelectorAll('.ol-attribution li')]
+      .map((item) => item.textContent.trim())
+      .filter(Boolean);
+    return { canvas: out, attributions, metresPerPixel };
+  }
+
   function renderMgrsGrid() {
     const size = map.getSize();
     const view = map.getView();
@@ -1132,6 +1262,7 @@ export function createMap(options) {
     setBasemap,
     setOverlays,
     setMgrsGrid,
+    exportCanvas,
     destroy,
   };
 }
