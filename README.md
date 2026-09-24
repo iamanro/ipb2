@@ -113,6 +113,12 @@ too.
 | `ipb`       | `/ipb/`                    | —                                            | studies: AOI, OAKOC features, threats, COAs, event matrix |
 | `exercise`  | `/exercise/`               | —                                            | roster, PIR/SIR/indicators, reports, RFIs, scenario clock |
 
+`exercise` can import an `ipb` study's event matrix (Requirements → Import
+from IPB): each threat COA becomes a PIR, each NAI it uses a SIR, each
+event-matrix row an indicator. Re-importing refreshes the wording and adds new
+rows, but never deletes; rows no longer in the study are listed for you to
+remove, and observations and evidence are kept.
+
 Reference data (`modules/*/data/`) and working state (`modules/*/state/`) are
 different files with different lifetimes: deleting a `state/*.db` resets that
 module's work; deleting `data/*.db`/`.pmtiles` just means rerunning the

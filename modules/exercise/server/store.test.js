@@ -316,6 +316,169 @@ describe('scenario clock and events', () => {
   });
 });
 
+describe('IPB event-matrix import', () => {
+  function study(id = 1, overrides = {}) {
+    return {
+      study: { id, name: 'Libavá' },
+      coas: [
+        { id: 10, name: 'Attack north', kind: 'most-likely' },
+        { id: 11, name: 'Envelop west', kind: 'most-dangerous' },
+      ],
+      nais: [
+        { id: 100, label: 'River crossing' },
+        { id: 101, label: 'Ridge' },
+      ],
+      events: [
+        {
+          id: 1,
+          coa_id: 10,
+          nai_feature_id: 100,
+          indicator: 'Bridging assets',
+          expected_time: 'H+4',
+          observed_status: 'expected',
+        },
+        {
+          id: 2,
+          coa_id: 10,
+          nai_feature_id: 100,
+          indicator: 'Recon patrols',
+          expected_time: null,
+          observed_status: 'observed',
+        },
+        {
+          id: 3,
+          coa_id: 10,
+          nai_feature_id: null,
+          indicator: 'Radio silence',
+          expected_time: null,
+          observed_status: 'expected',
+        },
+        {
+          id: 4,
+          coa_id: 11,
+          nai_feature_id: 101,
+          indicator: 'Artillery displaces',
+          expected_time: 'H+1',
+          observed_status: 'expected',
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  const byText = (requirements) =>
+    Object.fromEntries(
+      requirements.map((r) => [
+        r.text,
+        Object.fromEntries(
+          r.sirs.map((s) => [s.text, s.indicators.map((i) => [i.description, i.observed])]),
+        ),
+      ]),
+    );
+
+  test('maps each COA to a PIR, each COA×NAI to a SIR, each event to an indicator', () => {
+    const summary = store.importIpbStudy(study());
+    expect(summary.requirements.created).toBe(2);
+    expect(summary.sirs.created).toBe(3);
+    expect(summary.indicators.created).toBe(4);
+    expect(byText(store.listRequirements())).toEqual({
+      'Libavá: is the enemy executing Attack north (most likely COA)?': {
+        'NAI River crossing: indicators of Attack north': [
+          ['Bridging assets (expected H+4)', false],
+          ['Recon patrols', true],
+        ],
+        'No NAI assigned: indicators of Attack north': [['Radio silence', false]],
+      },
+      'Libavá: is the enemy executing Envelop west (most dangerous COA)?': {
+        'NAI Ridge: indicators of Envelop west': [['Artillery displaces (expected H+1)', false]],
+      },
+    });
+  });
+
+  test('re-importing the same study changes nothing and duplicates nothing', () => {
+    store.importIpbStudy(study());
+    const before = store.listRequirements();
+    const summary = store.importIpbStudy(study());
+    expect(summary).toEqual({
+      requirements: { created: 0, updated: 0, unchanged: 2, stale: [] },
+      sirs: { created: 0, updated: 0, unchanged: 3, stale: [] },
+      indicators: { created: 0, updated: 0, unchanged: 4, stale: [] },
+    });
+    expect(store.listRequirements()).toEqual(before);
+  });
+
+  test('re-import follows IPB edits but keeps exercise-owned state and never deletes', () => {
+    store.importIpbStudy(study());
+    const attackNorth = store.listRequirements().find((r) => r.text.includes('Attack north'));
+    const riverSir = attackNorth.sirs.find((s) => s.text.startsWith('NAI River'));
+    const bridging = riverSir.indicators.find((i) => i.description.startsWith('Bridging'));
+    store.updateIndicator(bridging.id, { observed: true });
+    const report = store.createReport({
+      text: 'Bridge layer seen',
+      reliability: 'A',
+      credibility: 1,
+    });
+    store.createEvidenceLink(report.id, {
+      target_kind: 'sir',
+      target_id: riverSir.id,
+      relation: 'confirms',
+    });
+
+    const edited = study();
+    edited.coas[0].name = 'Attack north-east';
+    edited.events[0].nai_feature_id = 101; // bridging moves to the ridge NAI
+    edited.events = edited.events.filter((e) => e.id !== 3); // radio silence removed in IPB
+    const summary = store.importIpbStudy(edited);
+
+    expect(summary.requirements).toMatchObject({ updated: 1, unchanged: 1 });
+    expect(summary.indicators).toMatchObject({ updated: 1, stale: ['Radio silence'] });
+    // Ridge SIR is new for this COA; the no-NAI SIR lost its only event.
+    expect(summary.sirs).toMatchObject({
+      created: 1,
+      stale: ['No NAI assigned: indicators of Attack north'],
+    });
+
+    const after = store.listRequirements();
+    const renamed = after.find((r) => r.id === attackNorth.id);
+    expect(renamed.text).toContain('Attack north-east');
+    const river = renamed.sirs.find((s) => s.id === riverSir.id);
+    expect(river.fulfillment.percent).toBe(100);
+    const ridge = renamed.sirs.find((s) => s.text.startsWith('NAI Ridge'));
+    expect(ridge.indicators).toEqual([
+      expect.objectContaining({ id: bridging.id, observed: true }),
+    ]);
+    const orphan = renamed.sirs.find((s) => s.text.startsWith('No NAI'));
+    expect(orphan.indicators.map((i) => i.description)).toEqual(['Radio silence']);
+  });
+
+  test('two studies never touch or stale each other, even with prefix-like ids', () => {
+    const noneStale = {
+      requirements: expect.objectContaining({ stale: [] }),
+      sirs: expect.objectContaining({ stale: [] }),
+      indicators: expect.objectContaining({ stale: [] }),
+    };
+    store.importIpbStudy(study(1));
+    expect(store.importIpbStudy(study(10))).toEqual(noneStale);
+    expect(store.listRequirements()).toHaveLength(4);
+    expect(store.importIpbStudy(study(1))).toEqual(noneStale);
+  });
+
+  test('an event pointing at an unknown COA is a 400 and writes nothing', () => {
+    const bad = study();
+    bad.events.push({
+      id: 9,
+      coa_id: 99,
+      nai_feature_id: null,
+      indicator: 'x',
+      observed_status: 'expected',
+    });
+    const activity = store.listActivity().length;
+    expectStatus(() => store.importIpbStudy(bad), 400);
+    expect(store.listRequirements()).toEqual([]);
+    expect(store.listActivity()).toHaveLength(activity);
+  });
+});
+
 describe('activity log', () => {
   test('grows by exactly one row per successful mutation', () => {
     const before = store.listActivity().length;

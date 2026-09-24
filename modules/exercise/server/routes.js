@@ -49,6 +49,7 @@ const ROUTES = [
       },
     },
   ],
+  [/^import\/ipb$/, { POST: async (m, request) => store.importIpbStudy(await readJson(request)) }],
   [
     /^requirements\/(\d+)\/sirs$/,
     { POST: async (m, request) => store.createSir(parseId(m[1]), await readJson(request)) },

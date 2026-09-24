@@ -270,6 +270,20 @@
       background: var(--blue);
     }
 
+    .stale-list {
+      margin: 4px 0 0;
+      padding-left: 18px;
+    }
+
+    .source-badge {
+      padding: 2px 7px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font: 700 9px/1 var(--data);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
     .fulfillment-bar {
       position: relative;
       overflow: hidden;

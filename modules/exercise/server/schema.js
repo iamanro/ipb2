@@ -115,4 +115,15 @@ export const MIGRATIONS = [
     detail TEXT
   );
   `,
+  // Provenance key for rows derived from another module (see ipbImport.js),
+  // e.g. 'ipb:3:coa:5'. NULL for hand-entered rows; SQLite UNIQUE allows
+  // any number of NULLs, so the index only constrains derived rows.
+  `
+  ALTER TABLE requirements ADD COLUMN source TEXT;
+  ALTER TABLE sirs ADD COLUMN source TEXT;
+  ALTER TABLE indicators ADD COLUMN source TEXT;
+  CREATE UNIQUE INDEX requirements_source ON requirements(source);
+  CREATE UNIQUE INDEX sirs_source ON sirs(source);
+  CREATE UNIQUE INDEX indicators_source ON indicators(source);
+  `,
 ];

@@ -2,6 +2,7 @@ import './styles.css';
 import template from './view.html?raw';
 
 const API = '/api/exercise';
+const IPB_API = '/api/ipb';
 const TABS = ['requirements', 'reports', 'rfi', 'scenario', 'roster', 'activity'];
 
 /** UI affordance only: the server (rfiMachine.js) is the actual guard. */
@@ -33,6 +34,7 @@ function createState() {
     clock: null,
     scenarioEvents: [],
     activity: [],
+    importSummary: null,
     tickTimer: null,
   };
 }
@@ -285,6 +287,12 @@ function renderRequirementCard(requirement) {
     createElement('span', `kind-badge kind-${requirement.kind}`, requirement.kind),
     createElement('span', 'requirement-priority', `Priority ${requirement.priority}`),
   );
+  if (requirement.source?.startsWith('ipb:')) {
+    const badge = createElement('span', 'source-badge', 'From IPB');
+    badge.title =
+      'Derived from an IPB event matrix; re-importing that study refreshes its wording.';
+    header.append(badge);
+  }
   const deleteButton = createElement('button', 'icon-button danger', 'Delete');
   deleteButton.type = 'button';
   deleteButton.addEventListener('click', () => deleteRequirement(requirement.id));
@@ -342,9 +350,99 @@ async function createRequirement(form, container) {
   }
 }
 
+/**
+ * Sends only the event-matrix subset of the IPB study aggregate; the
+ * exercise server (ipbImport.js) owns the mapping to PIR/SIR/indicator.
+ */
+async function importIpbStudy(studyId, container) {
+  try {
+    const { study, coas, events, features } = await requestJson(`${IPB_API}/studies/${studyId}`);
+    const counts = await requestJson(`${API}/import/ipb`, {
+      method: 'POST',
+      body: {
+        study: { id: study.id, name: study.name },
+        coas: coas.map((coa) => ({ id: coa.id, name: coa.name, kind: coa.kind })),
+        nais: features
+          .filter((feature) => feature.layer === 'nai')
+          .map((feature) => ({ id: feature.id, label: feature.label })),
+        events: events.map((event) => ({
+          id: event.id,
+          coa_id: event.coa_id,
+          nai_feature_id: event.nai_feature_id,
+          indicator: event.indicator,
+          expected_time: event.expected_time,
+          observed_status: event.observed_status,
+        })),
+      },
+    });
+    state.importSummary = { study: study.name, counts };
+    await loadAll();
+    renderPanel();
+  } catch (error) {
+    showError(container, error.message);
+  }
+}
+
+function describeImport({ study, counts }) {
+  const part = (label, { created, updated, stale }) =>
+    `${label} ${created} new, ${updated} updated${stale.length ? `, ${stale.length} no longer in IPB (kept)` : ''}`;
+  return `Imported “${study}”: ${part('PIRs', counts.requirements)} · ${part('SIRs', counts.sirs)} · ${part('indicators', counts.indicators)}.`;
+}
+
+function renderIpbImport(container) {
+  const section = createElement('section', 'field-group');
+  section.append(
+    createElement('h3', null, 'Import from IPB'),
+    createElement(
+      'p',
+      'panel-note',
+      'Each threat COA becomes a PIR, each NAI it uses a SIR, each event-matrix row an indicator. Re-importing refreshes wording and adds new rows; it never deletes, and keeps observations and evidence.',
+    ),
+  );
+  const form = createElement('div', 'requirement-form');
+  const select = document.createElement('select');
+  select.name = 'study';
+  select.disabled = true;
+  select.append(new Option('Loading IPB studies…', ''));
+  const button = createElement('button', 'primary-button', 'Import event matrix');
+  button.type = 'button';
+  button.disabled = true;
+  button.addEventListener('click', () => importIpbStudy(select.value, section));
+  form.append(select, button);
+  section.append(form);
+  if (state.importSummary) {
+    section.append(createElement('p', 'panel-note', describeImport(state.importSummary)));
+    const { counts } = state.importSummary;
+    const stale = [...counts.requirements.stale, ...counts.sirs.stale, ...counts.indicators.stale];
+    if (stale.length) {
+      const list = createElement('ul', 'panel-note stale-list');
+      stale.forEach((text) => list.append(createElement('li', null, text)));
+      section.append(
+        createElement('p', 'panel-note', 'No longer in IPB — delete below if not needed:'),
+        list,
+      );
+    }
+  }
+  container.append(section);
+
+  requestJson(`${IPB_API}/studies`)
+    .then(({ items }) => {
+      select.replaceChildren(
+        ...(items.length
+          ? items.map((study) => new Option(`${study.name} (${study.coa_count} COAs)`, study.id))
+          : [new Option('No IPB studies yet', '')]),
+      );
+      select.disabled = button.disabled = !items.length;
+    })
+    .catch((error) => {
+      if (error.name !== 'AbortError') showError(section, error.message);
+    });
+}
+
 function renderRequirementsPanel() {
   const container = elements.panel;
   container.append(createElement('h2', null, 'Requirements — CCIR / PIR / FFIR / SIR'));
+  renderIpbImport(container);
 
   const formSection = createElement('section', 'field-group');
   formSection.append(createElement('h3', null, 'New requirement'));

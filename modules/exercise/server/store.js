@@ -1,6 +1,7 @@
 import { HttpError } from '../../../server/http.js';
 import { openState, transact } from '../../../server/state.js';
 import { computePirFulfillment } from './fulfillment.js';
+import { planIpbImport } from './ipbImport.js';
 import { canTransition } from './rfiMachine.js';
 import { MIGRATIONS } from './schema.js';
 import { dueEvents, reanchor, scenarioNowMs } from './scenarioClock.js';
@@ -32,6 +33,7 @@ export function openStore(file) {
     createIndicator,
     updateIndicator,
     deleteIndicator,
+    importIpbStudy,
     listReports,
     createReport,
     updateReport,
@@ -148,6 +150,7 @@ function shapeIndicator(row) {
     sir_id: row.sir_id,
     description: row.description,
     observed: Boolean(row.observed),
+    source: row.source,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -178,6 +181,7 @@ function shapeSir(row) {
     time_window_end: row.time_window_end,
     indicators,
     fulfillment: sirFulfillment(row.id),
+    source: row.source,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -222,6 +226,7 @@ function shapeRequirement(row) {
       row.id,
       sirs.map((sir) => sir.id),
     ),
+    source: row.source,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -408,6 +413,108 @@ function deleteIndicator(id) {
   assertExists('indicators', id, 'Indicator');
   mutate('indicator:delete', String(id), () => {
     database.prepare('DELETE FROM indicators WHERE id = ?').run(id);
+  });
+}
+
+// -- IPB import -----------------------------------------------------------------
+
+/**
+ * Upsert one derived row by `source`. `derived` holds the columns IPB owns
+ * (rewritten on every import); `initial` holds columns set only on insert,
+ * because the exercise owns them afterwards (e.g. an indicator's `observed`).
+ * Returns the row id and whether it was created, changed, or left alone.
+ */
+function upsertBySource(table, source, derived, initial = {}) {
+  const row = database.prepare(`SELECT * FROM ${table} WHERE source = ?`).get(source);
+  const timestamp = now();
+  if (!row) {
+    const columns = {
+      ...derived,
+      ...initial,
+      source,
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    const names = Object.keys(columns);
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO ${table} (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
+      )
+      .run(...Object.values(columns));
+    return { id: Number(lastInsertRowid), outcome: 'created' };
+  }
+  const changed = Object.keys(derived).filter((name) => row[name] !== derived[name]);
+  if (!changed.length) return { id: row.id, outcome: 'unchanged' };
+  database
+    .prepare(
+      `UPDATE ${table} SET ${changed.map((name) => `${name} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
+    )
+    .run(...changed.map((name) => derived[name]), timestamp, row.id);
+  return { id: row.id, outcome: 'updated' };
+}
+
+/**
+ * Import (or refresh) an IPB study's event matrix as PIR/SIR/indicator rows.
+ * Never deletes: rows that came from this study but are no longer in it are
+ * returned by text under `stale` and left for the collection manager to
+ * remove, since they may already carry evidence links and observations.
+ */
+function importIpbStudy(input) {
+  const plan = planIpbImport(input);
+  const summary = Object.fromEntries(
+    ['requirements', 'sirs', 'indicators'].map((table) => [
+      table,
+      { created: 0, updated: 0, unchanged: 0, stale: [] },
+    ]),
+  );
+  const tally = (table, outcome) => {
+    summary[table][outcome] += 1;
+  };
+  return mutate('ipb:import', plan.studyName, () => {
+    const requirementIds = new Map();
+    for (const requirement of plan.requirements) {
+      const { id, outcome } = upsertBySource(
+        'requirements',
+        requirement.source,
+        { text: requirement.text },
+        { kind: 'PIR', priority: 0 },
+      );
+      requirementIds.set(requirement.source, id);
+      tally('requirements', outcome);
+    }
+    const sirIds = new Map();
+    for (const sir of plan.sirs) {
+      const { id, outcome } = upsertBySource('sirs', sir.source, {
+        requirement_id: requirementIds.get(sir.requirementSource),
+        text: sir.text,
+      });
+      sirIds.set(sir.source, id);
+      tally('sirs', outcome);
+    }
+    for (const indicator of plan.indicators) {
+      const { outcome } = upsertBySource(
+        'indicators',
+        indicator.source,
+        { sir_id: sirIds.get(indicator.sirSource), description: indicator.description },
+        { observed: indicator.observed ? 1 : 0 },
+      );
+      tally('indicators', outcome);
+    }
+    for (const [table, textColumn, current] of [
+      ['requirements', 'text', plan.requirements],
+      ['sirs', 'text', plan.sirs],
+      ['indicators', 'description', plan.indicators],
+    ]) {
+      const live = new Set(current.map((row) => row.source));
+      summary[table].stale = database
+        .prepare(
+          `SELECT source, ${textColumn} AS text FROM ${table} WHERE substr(source, 1, ?) = ? ORDER BY id`,
+        )
+        .all(plan.prefix.length, plan.prefix)
+        .filter((row) => !live.has(row.source))
+        .map((row) => row.text);
+    }
+    return summary;
   });
 }
 
