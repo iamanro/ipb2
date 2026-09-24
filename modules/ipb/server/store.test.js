@@ -280,3 +280,55 @@ describe('openStore: child validation contract', () => {
     expect(analysis.summary).toEqual([{ distance: 100 }, { distance: 200 }]);
   });
 });
+
+describe('openStore: custom layers and points', () => {
+  let file;
+  let store;
+  let studyId;
+
+  beforeEach(() => {
+    file = tempFile();
+    store = openStore(file);
+    studyId = store.createStudy({ name: 'Layers' }).id;
+  });
+
+  afterEach(() => {
+    store.close();
+    removeDatabaseFiles(file);
+  });
+
+  test('a point keeps its layer, name, note and position; deleting the layer deletes its points', () => {
+    const layer = store.createChild('layers', studyId, { name: 'OPs' });
+    expect(layer).toMatchObject({ name: 'OPs', color: '#d35400', visible: true });
+    const point = store.createChild('points', studyId, {
+      layer_id: layer.id,
+      name: 'OP 1',
+      note: 'Hill 697, overlooks the ford',
+      lon: 17.506,
+      lat: 49.621,
+    });
+    store.updateChild('points', point.id, { lon: 17.51, lat: 49.62 });
+    expect(store.readStudy(studyId).points).toMatchObject([
+      { layer_id: layer.id, name: 'OP 1', note: 'Hill 697, overlooks the ford', lon: 17.51 },
+    ]);
+    store.deleteChild('layers', layer.id);
+    expect(store.readStudy(studyId).points).toEqual([]);
+  });
+
+  test('rejects a blank name, an off-globe position, a bad colour and a foreign layer', () => {
+    const layer = store.createChild('layers', studyId, { name: 'Obstacles' });
+    const point = { layer_id: layer.id, name: 'Ford', lon: 17.5, lat: 49.7 };
+    expectStatus(() => store.createChild('layers', studyId, { name: '  ' }), 400);
+    expectStatus(() => store.createChild('layers', studyId, { name: 'x', color: 'red' }), 400);
+    expectStatus(() => store.createChild('points', studyId, { ...point, name: '' }), 400);
+    expectStatus(() => store.createChild('points', studyId, { ...point, lat: 91 }), 400);
+    expectStatus(() => store.createChild('points', studyId, { ...point, lon: '17.5' }), 400);
+    const otherLayer = store.createChild('layers', store.createStudy({ name: 'Other' }).id, {
+      name: 'Theirs',
+    });
+    expectStatus(
+      () => store.createChild('points', studyId, { ...point, layer_id: otherLayer.id }),
+      400,
+    );
+  });
+});

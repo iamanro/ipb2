@@ -15,9 +15,10 @@ const DATABASE = path.join(STATE_ROOT, 'ipb.db');
 
 const STUDIES = /^studies$/;
 const STUDY = /^studies\/(\d+)$/;
-const STUDY_CHILDREN = /^studies\/(\d+)\/(features|threats|coas|events|analyses)$/;
-const CHILD = /^(features|threats|coas|events|analyses)\/(\d+)$/;
-const CHILD_REORDER = /^(features|threats|coas|events|analyses)\/(\d+)\/reorder$/;
+const KINDS = 'features|threats|coas|events|analyses|layers|points';
+const STUDY_CHILDREN = new RegExp(`^studies\\/(\\d+)\\/(${KINDS})$`);
+const CHILD = new RegExp(`^(${KINDS})\\/(\\d+)$`);
+const CHILD_REORDER = new RegExp(`^(${KINDS})\\/(\\d+)\\/reorder$`);
 
 function parseId(text) {
   return Number.parseInt(text, 10);

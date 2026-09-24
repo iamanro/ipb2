@@ -121,3 +121,35 @@ test('the MGRS grid toggle survives a reload', async ({ page, request }) => {
   await page.reload();
   await expect(page.locator('#grid-toggle')).toHaveAttribute('aria-pressed', 'false');
 });
+
+test('a point added by clicking the map keeps its name and multi-line note', async ({
+  page,
+  request,
+}) => {
+  const study = await openStudy(page, request);
+  const layer = await (
+    await request.post(`/api/ipb/studies/${study.id}/layers`, { data: { name: 'Contacts' } })
+  ).json();
+  await page.reload();
+  await page.locator('.custom-layer-name', { hasText: 'Contacts' }).click();
+  await page.getByRole('button', { name: 'Add on map' }).click();
+  const box = await page.locator('.ol-viewport').boundingBox();
+  await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.4);
+  // Fields: name, position (prefilled from the click), note.
+  const name = page.locator('dialog[open] .dialog-field input').first();
+  const note = page.locator('dialog[open] .dialog-field textarea');
+  await name.fill('Contact A');
+  // Enter in the note is a new line; Enter in the name saves.
+  await note.click();
+  await note.pressSequentially('Two BMPs');
+  await note.press('Enter');
+  await note.pressSequentially('moving north');
+  await expect(page.locator('dialog[open]')).toBeVisible();
+  await name.press('Enter');
+  await expect
+    .poll(async () => (await (await request.get(`/api/ipb/studies/${study.id}`)).json()).points)
+    .toMatchObject([{ layer_id: layer.id, name: 'Contact A', note: 'Two BMPs\nmoving north' }]);
+  await page.reload();
+  await page.locator('.custom-layer-name', { hasText: 'Contacts' }).click();
+  await expect(page.locator('.custom-point')).toContainText('Contact A');
+});

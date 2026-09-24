@@ -34,6 +34,8 @@
     </nav>
 
     <div id="tool-panel" class="tool-panel"></div>
+    <!-- The analyst's own layers, the same in every step. -->
+    <section id="custom-layers" class="custom-layers" aria-label="Custom layers" hidden></section>
   </aside>
 
   <section class="map-panel" aria-label="Map">
@@ -75,5 +77,7 @@
     <section class="step-section" data-step="2" id="worksheet-2"></section>
     <section class="step-section" data-step="3" id="worksheet-3"></section>
     <section class="step-section" data-step="4" id="worksheet-4"></section>
+    <!-- Custom layers as tables, for print only: on screen they live in the control panel. -->
+    <section class="custom-layers-print" id="worksheet-layers"></section>
   </article>
 </div>

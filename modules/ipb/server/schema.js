@@ -98,4 +98,33 @@ export const MIGRATIONS = [
   `,
   // Where the study takes its weather: JSON {lon, lat}; NULL means the AOI centre.
   `ALTER TABLE studies ADD COLUMN weather_point TEXT;`,
+  // The analyst's own named layers of named, annotated points.
+  `
+  CREATE TABLE layers (
+    id INTEGER PRIMARY KEY,
+    study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT '#d35400',
+    visible INTEGER NOT NULL DEFAULT 1 CHECK (visible IN (0, 1)),
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX layers_study ON layers(study_id);
+
+  CREATE TABLE points (
+    id INTEGER PRIMARY KEY,
+    study_id INTEGER NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+    layer_id INTEGER NOT NULL REFERENCES layers(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    note TEXT,
+    lon REAL NOT NULL,
+    lat REAL NOT NULL,
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX points_study ON points(study_id);
+  CREATE INDEX points_layer ON points(layer_id);
+  `,
 ];

@@ -260,6 +260,25 @@ only where that is acceptable. Terms: RainViewer's free API is for personal
 and educational use; Open-Meteo's free API is non-commercial (data CC BY
 4.0); EUMETSAT imagery is credited on the map; NOAA data is public domain.
 
+### Custom layers
+
+Below the step tools, in every step, **Custom layers** holds your own named
+layers of points (observation posts, contacts, landmarks…), saved with the
+study. Each layer has a colour and a show/hide box; each point a name, a
+position and a note. Add points:
+
+- by position: select the layer, type a name, an MGRS/UTM/decimal-degree
+  position and an optional note, **Add**;
+- by clicking: **Add on map**, then every click on the map asks for a name
+  and note (the position is filled in; Enter in the note is a new line,
+  Enter in the name saves) until Escape;
+- by right-clicking the map → **Add point here** → a layer, or **New layer…**.
+
+Right-click a point to **Edit…** (name, position, note), **Move (drag)**,
+copy its coordinates or delete it; the layer's list has the same plus **Go
+to**. Deleting a layer deletes its points. Printed worksheets end with a
+table per layer (name, MGRS, note).
+
 ## Modules
 
 | Module      | Route                      | Data                                      | State                                                     |

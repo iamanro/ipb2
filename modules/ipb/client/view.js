@@ -265,6 +265,8 @@ function createState() {
     mobility: { cell: 100, opacity: 0.55, grid: null, running: false },
     selectedFeatureId: null,
     selectedCoaId: null,
+    /** The custom layer expanded in the panel (its points listed, add form shown). */
+    activeLayerId: null,
     terrainMeta: null,
     ...loadMapView(),
     equipmentQuery: '',
@@ -329,6 +331,8 @@ function queryElements(root) {
     worksheet2: pick('#worksheet-2'),
     worksheet3: pick('#worksheet-3'),
     worksheet4: pick('#worksheet-4'),
+    customLayers: pick('#custom-layers'),
+    layersPrint: pick('#worksheet-layers'),
   };
 }
 
@@ -372,6 +376,8 @@ function createDialogNode(root) {
   const input = createElement('input', 'dialog-input');
   input.type = 'text';
   input.autocomplete = 'off';
+  // Labelled fields for multi-value prompts (askFields); empty otherwise.
+  const fields = createElement('div', 'dialog-fields');
   const actions = createElement('div', 'dialog-actions');
   // Enter in the text input submits the form with its *first* submit button,
   // so Cancel must not be one, or Enter would discard what was typed. As the
@@ -384,31 +390,67 @@ function createDialogNode(root) {
   accept.type = 'submit';
   accept.value = 'accept';
   actions.append(cancel, accept);
-  form.append(message, input, actions);
+  form.append(message, input, fields, actions);
   dialogNode.append(form);
   root.append(dialogNode);
 }
 
-function openDialog({ message, initial, accept, withInput }) {
+function openDialog({ message, initial, accept, withInput, fields }) {
   dialogNode.querySelector('.dialog-message').textContent = message;
-  const input = dialogNode.querySelector('.dialog-input');
+  const input = dialogNode.querySelector(':scope form > .dialog-input');
   input.hidden = !withInput;
   input.value = initial ?? '';
+  const fieldBox = dialogNode.querySelector('.dialog-fields');
+  const controls = (fields ?? []).map((field) => {
+    const label = createElement('label', 'dialog-field');
+    label.append(createElement('span', null, field.label));
+    // A textarea keeps Enter for new lines; in a text input Enter saves.
+    const control = document.createElement(field.multiline ? 'textarea' : 'input');
+    control.className = 'dialog-input';
+    if (field.multiline) control.rows = 3;
+    else {
+      control.type = 'text';
+      control.autocomplete = 'off';
+    }
+    control.value = field.value ?? '';
+    control.placeholder = field.placeholder ?? '';
+    label.append(control);
+    return [field.id, control, label];
+  });
+  fieldBox.replaceChildren(...controls.map(([, , label]) => label));
+  fieldBox.hidden = !controls.length;
   dialogNode.querySelector('.dialog-accept').textContent = accept;
   return new Promise((resolve) => {
     const settle = () => {
       dialogNode.removeEventListener('close', settle);
       const accepted = dialogNode.returnValue === 'accept';
+      if (fields) {
+        return resolve(
+          accepted
+            ? Object.fromEntries(controls.map(([id, control]) => [id, control.value.trim()]))
+            : null,
+        );
+      }
       if (!withInput) return resolve(accepted);
       return resolve(accepted ? input.value.trim() : null);
     };
     dialogNode.addEventListener('close', settle);
     dialogNode.showModal();
-    if (withInput) {
-      input.focus();
-      input.select();
+    const first = withInput ? input : controls[0]?.[1];
+    if (first) {
+      first.focus();
+      first.select();
     }
   });
+}
+
+/**
+ * Several labelled values at once: `fields` is `[{ id, label, value?,
+ * placeholder?, multiline? }]`. Resolves to `{ id: trimmed text }`, or null
+ * when the analyst cancels.
+ */
+function askFields(message, fields, accept = 'Save') {
+  return openDialog({ message, accept, fields });
 }
 
 /** Resolves to the trimmed text, or null when the analyst cancels. */
@@ -698,6 +740,7 @@ async function selectStudy(id, { preserveFeature = false } = {}) {
   state.study = null;
   if (!preserveFeature) state.selectedFeatureId = null;
   state.selectedCoaId = null;
+  state.activeLayerId = null;
   state.losPicks = [];
   state.losResult = null;
   state.viewshedResult = null;
@@ -734,6 +777,8 @@ function renderEmptyState() {
       createElement('p', 'panel-note', 'Select or create a study to see this step.'),
     );
   });
+  renderCustomLayers();
+  renderLayersPrint();
   if (mapController) {
     mapController.setFeatures([]);
     mapController.clearGrid('mobility');
@@ -753,6 +798,8 @@ function renderStudyLoaded() {
   renderStep2Worksheet();
   renderStep3Worksheet();
   renderStep4Worksheet();
+  renderCustomLayers();
+  renderLayersPrint();
   syncMapFeatures();
   if (state.selectedFeatureId) mapController.selectFeature(state.selectedFeatureId);
   if (study.bounds) mapController.fitExtent(study.bounds);
@@ -814,6 +861,7 @@ function visibleFeatures() {
   }
   const byLayer = (layer) => state.study.features.filter((feature) => feature.layer === layer);
   OAKOC_LAYERS.forEach((layer) => features.push(...byLayer(layer)));
+  features.push(...customLayerFeatures());
   if (state.step === 4) {
     // NAI and TAI stay visible: the event template ties them to the COAs.
     features.push(...byLayer('nai'), ...byLayer('tai'));
@@ -899,12 +947,15 @@ function reRenderContainingWorksheet(layer) {
 function cancelActiveTool() {
   if (!state.tool) return;
   if (state.tool.type === 'draw-feature') mapController.cancelDraw();
-  if (state.tool.type === 'modify-feature') mapController.stopModify();
+  if (state.tool.type === 'modify-feature' || state.tool.type === 'point-move') {
+    mapController.stopModify();
+  }
   state.tool = null;
   state.losPicks = [];
   renderMapHint('');
   syncMapFeatures();
   renderToolPanel();
+  renderCustomLayers();
 }
 
 async function showElevationReadout(lon, lat) {
@@ -1526,6 +1577,25 @@ function buildMapContextMenu(lon, lat) {
     { label: 'Draw here', submenu: drawHereItems(lon, lat) },
     { label: 'Show elevation here', action: () => showElevationReadout(lon, lat) },
     { label: 'Set weather point here', action: () => setWeatherPoint({ lon, lat }) },
+    {
+      label: 'Add point here',
+      submenu: [
+        ...(state.study?.layers ?? []).map((layer) => ({
+          label: layer.name,
+          action: () => addPointAt(layer.id, lon, lat),
+        })),
+        { label: 'New layer…', action: () => addPointToNewLayer(lon, lat) },
+      ],
+    },
+  ];
+}
+
+function buildPointContextMenu(point) {
+  return [
+    { label: 'Edit…', action: () => editPoint(point) },
+    { label: 'Move (drag)', action: () => armPointMove(point) },
+    { label: 'Copy coordinates', action: () => copyCoordinates(point.lon, point.lat) },
+    { label: 'Delete', action: () => deletePoint(point) },
   ];
 }
 
@@ -1546,8 +1616,10 @@ function buildFeatureContextMenu(featureId, lon, lat) {
 }
 
 function onMapContextMenu({ lon, lat, featureId, clientX, clientY }) {
-  const items =
-    featureId !== null
+  const point = findPoint(featureId);
+  const items = point
+    ? buildPointContextMenu(point)
+    : featureId !== null
       ? buildFeatureContextMenu(featureId, lon, lat)
       : buildMapContextMenu(lon, lat);
   openContextMenu(clientX, clientY, items);
@@ -1572,6 +1644,11 @@ function onMapClick({ lon, lat }) {
   }
   if (tool.type === 'viewshed-pick') {
     handleViewshedPick(lon, lat);
+    return;
+  }
+  if (tool.type === 'point-add') {
+    // Stays armed: each click adds another point until Escape.
+    addPointAt(tool.layerId, lon, lat);
     return;
   }
   if (tool.type === 'weather-pick') {
@@ -1658,6 +1735,13 @@ async function handleFeatureModified(id, geometry) {
 }
 
 function onMapFeatureChange({ id, geometry }) {
+  const point = findPoint(id);
+  if (point) {
+    const [lon, lat] = geometry.coordinates;
+    cancelActiveTool();
+    updatePoint(point, { lon, lat });
+    return;
+  }
   if (id === 'aoi') {
     handleAoiDrawn(geometry);
     return;
@@ -4216,6 +4300,406 @@ function renderToolPanel() {
     4: renderStep4Tools,
   };
   elements.toolPanel.append(renderers[state.step]());
+}
+
+// --- Custom layers -------------------------------------------------------------
+
+/** Distinct, print-safe colours offered to new layers in turn. */
+const LAYER_COLORS = ['#d35400', '#8e44ad', '#16a085', '#c0392b', '#2c3e50', '#b7950b'];
+const POINT_ID_PREFIX = 'point-';
+
+function pointMapId(point) {
+  return `${POINT_ID_PREFIX}${point.id}`;
+}
+
+function findPoint(mapId) {
+  if (!String(mapId).startsWith(POINT_ID_PREFIX)) return null;
+  const id = Number(String(mapId).slice(POINT_ID_PREFIX.length));
+  return state.study?.points.find((point) => point.id === id) ?? null;
+}
+
+function findLayer(id) {
+  return state.study?.layers.find((layer) => layer.id === id) ?? null;
+}
+
+/** Points of the visible custom layers, as map features coloured by layer. */
+function customLayerFeatures() {
+  if (!state.study) return [];
+  const visible = new Map(
+    state.study.layers.filter((layer) => layer.visible).map((layer) => [layer.id, layer]),
+  );
+  return state.study.points
+    .filter((point) => visible.has(point.layer_id))
+    .map((point) => ({
+      id: pointMapId(point),
+      layer: 'custom',
+      kind: 'point',
+      label: point.name,
+      geometry: { type: 'Point', coordinates: [point.lon, point.lat] },
+      properties: { color: visible.get(point.layer_id).color },
+    }));
+}
+
+/** Re-render everything that shows custom layers. */
+function refreshCustomLayers() {
+  syncMapFeatures();
+  renderCustomLayers();
+  renderLayersPrint();
+}
+
+async function createLayer() {
+  const name = await askText('Name of the new layer', '', 'Create');
+  if (!name) return null;
+  const color = LAYER_COLORS[state.study.layers.length % LAYER_COLORS.length];
+  try {
+    const layer = await requestJson(`${API}/studies/${state.studyId}/layers`, {
+      method: 'POST',
+      body: { name, color },
+    });
+    state.study.layers.push(layer);
+    state.activeLayerId = layer.id;
+    refreshCustomLayers();
+    return layer;
+  } catch (error) {
+    showError(elements.customLayers, error.message);
+    return null;
+  }
+}
+
+async function updateLayer(layer, patch) {
+  try {
+    Object.assign(
+      layer,
+      await requestJson(`${API}/layers/${layer.id}`, { method: 'PATCH', body: patch }),
+    );
+    refreshCustomLayers();
+  } catch (error) {
+    showError(elements.customLayers, error.message);
+  }
+}
+
+async function renameLayer(layer) {
+  const name = await askText('Rename layer', layer.name);
+  if (name && name !== layer.name) updateLayer(layer, { name });
+}
+
+async function deleteLayer(layer) {
+  const count = state.study.points.filter((point) => point.layer_id === layer.id).length;
+  const message = count
+    ? `Delete layer "${layer.name}" and its ${count} point${count === 1 ? '' : 's'}?`
+    : `Delete layer "${layer.name}"?`;
+  if (!(await askConfirm(message))) return;
+  try {
+    await requestJson(`${API}/layers/${layer.id}`, { method: 'DELETE' });
+    state.study.layers = state.study.layers.filter((entry) => entry.id !== layer.id);
+    state.study.points = state.study.points.filter((point) => point.layer_id !== layer.id);
+    if (state.activeLayerId === layer.id) state.activeLayerId = null;
+    if (state.tool?.type === 'point-add' && state.tool.layerId === layer.id) cancelActiveTool();
+    refreshCustomLayers();
+  } catch (error) {
+    showError(elements.customLayers, error.message);
+  }
+}
+
+/**
+ * Ask for a point's name, position and note. `initial` fills the fields;
+ * an unreadable position asks again, keeping what was typed. Resolves to
+ * `{ name, note, lon, lat }`, or null when cancelled.
+ */
+async function askPoint(title, initial) {
+  let values = {
+    name: initial.name ?? '',
+    position: formatMgrs(initial.lon, initial.lat),
+    note: initial.note ?? '',
+  };
+  let message = title;
+  for (;;) {
+    const answer = await askFields(message, [
+      { id: 'name', label: 'Name', value: values.name, placeholder: 'e.g. OP 1' },
+      { id: 'position', label: 'Position (MGRS, UTM or DD)', value: values.position },
+      { id: 'note', label: 'Note', value: values.note, multiline: true },
+    ]);
+    if (!answer) return null;
+    values = answer;
+    const parsed = parseCoordinate(answer.position);
+    if (!answer.name) message = `${title} — a name is required.`;
+    else if (!parsed) message = `${title} — could not read the position "${answer.position}".`;
+    else return { name: answer.name, note: answer.note || null, lon: parsed.lon, lat: parsed.lat };
+  }
+}
+
+async function createPoint(layerId, values) {
+  try {
+    const point = await requestJson(`${API}/studies/${state.studyId}/points`, {
+      method: 'POST',
+      body: { layer_id: layerId, ...values },
+    });
+    state.study.points.push(point);
+    const layer = findLayer(layerId);
+    // A point added to a hidden layer should not silently vanish.
+    if (layer && !layer.visible) await updateLayer(layer, { visible: true });
+    state.activeLayerId = layerId;
+    refreshCustomLayers();
+    return point;
+  } catch (error) {
+    showError(elements.customLayers, error.message);
+    return null;
+  }
+}
+
+/** Ask for name and note of a point at a clicked position, then save it. */
+async function addPointAt(layerId, lon, lat) {
+  const layer = findLayer(layerId);
+  if (!layer) return;
+  const values = await askPoint(`New point in "${layer.name}"`, { lon, lat });
+  if (values) await createPoint(layerId, values);
+}
+
+/** Add to a layer chosen from the context menu; "New layer…" creates one first. */
+async function addPointToNewLayer(lon, lat) {
+  const layer = await createLayer();
+  if (layer) await addPointAt(layer.id, lon, lat);
+}
+
+async function updatePoint(point, patch) {
+  try {
+    Object.assign(
+      point,
+      await requestJson(`${API}/points/${point.id}`, { method: 'PATCH', body: patch }),
+    );
+    refreshCustomLayers();
+  } catch (error) {
+    showError(elements.customLayers, error.message);
+  }
+}
+
+async function editPoint(point) {
+  const values = await askPoint('Edit point', point);
+  if (values) await updatePoint(point, values);
+}
+
+async function deletePoint(point) {
+  if (!(await askConfirm(`Delete point "${point.name}"?`))) return;
+  try {
+    await requestJson(`${API}/points/${point.id}`, { method: 'DELETE' });
+    state.study.points = state.study.points.filter((entry) => entry.id !== point.id);
+    refreshCustomLayers();
+  } catch (error) {
+    showError(elements.customLayers, error.message);
+  }
+}
+
+/** Drag one point to a new position; saved on release, then the mode ends. */
+function armPointMove(point) {
+  cancelActiveTool();
+  state.tool = { type: 'point-move', pointId: point.id };
+  mapController.startModify(pointMapId(point));
+  renderMapHint(`Drag "${point.name}" to its new position. Press Escape to cancel.`);
+}
+
+/** Keep adding points to `layerId` with each map click until Escape. */
+function armPointAdd(layerId) {
+  const armed = state.tool?.type === 'point-add' && state.tool.layerId === layerId;
+  cancelActiveTool();
+  if (armed) return;
+  state.tool = { type: 'point-add', layerId };
+  renderMapHint(
+    `Click the map to add points to "${findLayer(layerId).name}". Press Escape when done.`,
+  );
+  renderCustomLayers();
+}
+
+function centreOnPoint(point) {
+  jumpToCoordinate(point.lon, point.lat);
+  mapController.selectFeature(pointMapId(point));
+}
+
+function renderCustomLayers() {
+  const container = elements.customLayers;
+  container.hidden = !state.study;
+  container.replaceChildren();
+  if (!state.study) return;
+
+  const header = createElement('div', 'custom-layers-header');
+  header.append(createElement('h3', null, 'Custom layers'));
+  const create = createElement('button', 'text-button', '+ New layer');
+  create.type = 'button';
+  create.addEventListener('click', createLayer);
+  header.append(create);
+  container.append(header);
+
+  const { layers, points } = state.study;
+  if (!layers.length) {
+    container.append(
+      createElement(
+        'p',
+        'tool-hint',
+        'Your own named layers of points (observation posts, contacts, landmarks…), each point with a name and a note. Create a layer, then add points by MGRS or by clicking the map; or right-click the map: Add point here.',
+      ),
+    );
+    return;
+  }
+
+  const list = createElement('ul', 'custom-layer-list');
+  for (const layer of layers) {
+    const layerPoints = points.filter((point) => point.layer_id === layer.id);
+    const active = state.activeLayerId === layer.id;
+    const item = createElement('li', 'custom-layer');
+    item.classList.toggle('active', active);
+
+    const row = createElement('div', 'custom-layer-row');
+    const visible = document.createElement('input');
+    visible.type = 'checkbox';
+    visible.checked = layer.visible;
+    visible.title = 'Show on the map';
+    visible.setAttribute('aria-label', `Show ${layer.name} on the map`);
+    visible.addEventListener('change', () => updateLayer(layer, { visible: visible.checked }));
+    const color = document.createElement('input');
+    color.type = 'color';
+    color.value = layer.color;
+    color.title = 'Layer colour';
+    color.setAttribute('aria-label', `Colour of ${layer.name}`);
+    color.addEventListener('change', () => updateLayer(layer, { color: color.value }));
+    const name = createElement('button', 'custom-layer-name', layer.name);
+    name.type = 'button';
+    name.setAttribute('aria-expanded', String(active));
+    name.append(createElement('small', null, ` ${layerPoints.length}`));
+    name.addEventListener('click', () => {
+      state.activeLayerId = active ? null : layer.id;
+      renderCustomLayers();
+    });
+    const actions = createElement('span', 'row-actions');
+    const rename = createElement('button', 'icon-button', 'Rename');
+    rename.type = 'button';
+    rename.addEventListener('click', () => renameLayer(layer));
+    const remove = createElement('button', 'icon-button danger', 'Delete');
+    remove.type = 'button';
+    remove.addEventListener('click', () => deleteLayer(layer));
+    actions.append(rename, remove);
+    row.append(visible, color, name, actions);
+    item.append(row);
+    if (active) item.append(renderLayerEditor(layer, layerPoints));
+    list.append(item);
+  }
+  container.append(list);
+}
+
+function renderLayerEditor(layer, layerPoints) {
+  const editor = createElement('div', 'custom-layer-editor');
+
+  const form = createElement('div', 'custom-point-form');
+  const input = (placeholder, label) => {
+    const control = document.createElement('input');
+    control.type = 'text';
+    control.placeholder = placeholder;
+    control.setAttribute('aria-label', label);
+    return control;
+  };
+  const nameInput = input('Name', 'Point name');
+  const positionInput = input('MGRS, UTM or DD', 'Point position');
+  const noteInput = input('Note (optional)', 'Point note');
+  const add = createElement('button', 'chip-button', 'Add');
+  add.type = 'button';
+  const error = createElement('p', 'inline-error');
+  error.hidden = true;
+  const submit = async () => {
+    const parsed = parseCoordinate(positionInput.value.trim());
+    const problem = !nameInput.value.trim()
+      ? 'A name is required.'
+      : !parsed
+        ? 'Could not read that position.'
+        : null;
+    error.hidden = !problem;
+    if (problem) {
+      error.textContent = problem;
+      return;
+    }
+    const point = await createPoint(layer.id, {
+      name: nameInput.value.trim(),
+      note: noteInput.value.trim() || null,
+      lon: parsed.lon,
+      lat: parsed.lat,
+    });
+    if (point) centreOnPoint(point);
+  };
+  add.addEventListener('click', submit);
+  for (const control of [nameInput, positionInput, noteInput]) {
+    control.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') submit();
+    });
+  }
+  const armed = state.tool?.type === 'point-add' && state.tool.layerId === layer.id;
+  const byClick = createElement('button', 'chip-button', armed ? 'Stop adding' : 'Add on map');
+  byClick.title = 'Each click on the map adds a point to this layer';
+  byClick.type = 'button';
+  byClick.setAttribute('aria-pressed', String(armed));
+  byClick.addEventListener('click', () => armPointAdd(layer.id));
+  form.append(nameInput, positionInput, noteInput, add);
+  editor.append(form, error, byClick);
+
+  const list = createElement('ul', 'custom-point-list');
+  for (const point of layerPoints) {
+    const item = createElement('li', 'custom-point');
+    const text = createElement('div', 'custom-point-text');
+    text.append(
+      createElement('strong', null, point.name),
+      createElement('span', 'custom-point-position', formatMgrs(point.lon, point.lat)),
+    );
+    if (point.note) text.append(createElement('span', 'custom-point-note', point.note));
+    const actions = createElement('span', 'row-actions');
+    for (const [label, action, danger] of [
+      ['Go to', () => centreOnPoint(point)],
+      ['Edit', () => editPoint(point)],
+      ['Move', () => armPointMove(point)],
+      ['Delete', () => deletePoint(point), true],
+    ]) {
+      const button = createElement('button', `icon-button${danger ? ' danger' : ''}`, label);
+      button.type = 'button';
+      button.addEventListener('click', action);
+      actions.append(button);
+    }
+    item.append(text, actions);
+    list.append(item);
+  }
+  if (!layerPoints.length) {
+    editor.append(createElement('p', 'tool-hint', 'No points yet.'));
+  }
+  editor.append(list);
+  return editor;
+}
+
+/** Every custom layer with points, as a table, for print. */
+function renderLayersPrint() {
+  const container = elements.layersPrint;
+  container.replaceChildren();
+  const layers = (state.study?.layers ?? []).filter((layer) =>
+    state.study.points.some((point) => point.layer_id === layer.id),
+  );
+  if (!layers.length) return;
+  container.append(createElement('h3', null, 'Custom layers'));
+  for (const layer of layers) {
+    const heading = createElement('h4', null, layer.name);
+    heading.style.setProperty('--chip', layer.color);
+    container.append(heading);
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const headRow = document.createElement('tr');
+    for (const label of ['Name', 'MGRS', 'Note']) headRow.append(createElement('th', null, label));
+    const head = document.createElement('thead');
+    head.append(headRow);
+    const body = document.createElement('tbody');
+    for (const point of state.study.points.filter((entry) => entry.layer_id === layer.id)) {
+      const row = document.createElement('tr');
+      row.append(
+        createElement('td', null, point.name),
+        createElement('td', null, formatMgrs(point.lon, point.lat)),
+        createElement('td', 'custom-point-note', point.note ?? ''),
+      );
+      body.append(row);
+    }
+    table.append(head, body);
+    container.append(table);
+  }
 }
 
 // --- Print -----------------------------------------------------------------

@@ -255,6 +255,134 @@
       gap: 20px;
     }
 
+    /* -- custom layers (control panel, every step) -- */
+
+    .custom-layers {
+      margin-top: 26px;
+      border-top: 1px solid var(--line-dark);
+      padding-top: 16px;
+    }
+
+    .custom-layers-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .custom-layers-header h3 {
+      color: var(--blue-dark);
+      font: 700 12px/1 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .custom-layer-list,
+    .custom-point-list {
+      display: grid;
+      gap: 4px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    /* Grid items default to min-width: auto and would push the panel wide. */
+    .custom-layer,
+    .custom-point {
+      min-width: 0;
+    }
+
+    .custom-layer.active {
+      border-left: 2px solid var(--signal);
+      padding-left: 6px;
+    }
+
+    .custom-layer-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .custom-layer-row input[type='color'] {
+      width: 22px;
+      height: 22px;
+      border: 1px solid var(--line-dark);
+      padding: 0;
+      background: none;
+      cursor: pointer;
+    }
+
+    .custom-layer-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      border: 0;
+      padding: 4px 0;
+      color: var(--ink);
+      background: transparent;
+      font: 600 12px/1.3 var(--data);
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .custom-layer-name small {
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .custom-layer-editor {
+      display: grid;
+      gap: 8px;
+      margin: 6px 0 10px;
+    }
+
+    .custom-point-form {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    .custom-point-form input {
+      min-width: 0;
+      border: 1px solid var(--line-dark);
+      padding: 7px 8px;
+      background: var(--white);
+      font: 12px/1.3 var(--data);
+    }
+
+    .custom-point-form input:focus {
+      border-color: var(--blue-dark);
+      outline: none;
+    }
+
+    .custom-point {
+      display: grid;
+      gap: 4px;
+      border-bottom: 1px solid var(--line);
+      padding: 6px 0;
+    }
+
+    .custom-point-text {
+      display: grid;
+      gap: 1px;
+      font: 12px/1.35 var(--data);
+    }
+
+    .custom-point-position {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .custom-point-note {
+      white-space: pre-wrap;
+    }
+
+    .custom-layers-print {
+      display: none;
+    }
+
     .field-group {
       display: flex;
       flex-direction: column;
@@ -426,6 +554,31 @@
     .workspace-dialog .dialog-input:focus-visible {
       border-bottom-color: var(--signal);
       outline: none;
+    }
+
+    .workspace-dialog .dialog-fields {
+      display: grid;
+      gap: 12px;
+    }
+
+    .workspace-dialog .dialog-field {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font: 10px/1.3 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .workspace-dialog .dialog-field .dialog-input {
+      color: var(--ink);
+      font: 13px/1.4 var(--data);
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .workspace-dialog textarea.dialog-input {
+      resize: vertical;
     }
 
     .workspace-dialog .dialog-actions {
@@ -1429,6 +1582,17 @@
       .detail-panel {
         overflow: visible;
         padding: 0;
+      }
+
+      .custom-layers-print {
+        display: block;
+        page-break-before: always;
+      }
+
+      .custom-layers-print h4 {
+        margin: 14px 0 6px;
+        border-left: 10px solid var(--chip);
+        padding-left: 6px;
       }
 
       /* overflow:auto containers (wide tables scroll on screen) corrupt

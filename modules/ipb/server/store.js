@@ -85,6 +85,27 @@ const CHILDREN = {
       summary: { type: 'json-value', required: true, storage: 'json' },
     },
   },
+  /** The analyst's own layers; deleting one deletes its points (FK cascade). */
+  layers: {
+    table: 'layers',
+    ordinal: true,
+    columns: {
+      name: { type: 'string', required: true, nonEmpty: true },
+      color: { type: 'string', required: false, default: '#d35400', pattern: /^#[0-9a-f]{6}$/i },
+      visible: { type: 'boolean', required: false, default: true, storage: 'bool' },
+    },
+  },
+  points: {
+    table: 'points',
+    ordinal: true,
+    columns: {
+      layer_id: { type: 'reference', table: 'layers', required: true },
+      name: { type: 'string', required: true, nonEmpty: true },
+      note: { type: 'string', required: false, nullable: true },
+      lon: { type: 'number', required: true, min: -180, max: 180 },
+      lat: { type: 'number', required: true, min: -90, max: 90 },
+    },
+  },
 };
 
 let database;
@@ -180,6 +201,15 @@ function validateFieldValue(name, value, spec) {
   switch (spec.type) {
     case 'string':
       if (typeof value !== 'string') throw new HttpError(400, `${name} must be a string.`);
+      if (spec.nonEmpty && !value.trim()) throw new HttpError(400, `${name} must not be empty.`);
+      if (spec.pattern && !spec.pattern.test(value)) {
+        throw new HttpError(400, `${name} is not in the expected format.`);
+      }
+      return value;
+    case 'number':
+      if (!Number.isFinite(value) || value < spec.min || value > spec.max) {
+        throw new HttpError(400, `${name} must be a number from ${spec.min} to ${spec.max}.`);
+      }
       return value;
     case 'enum':
       if (typeof value !== 'string' || !spec.values.includes(value)) {
@@ -473,6 +503,8 @@ function readStudy(id) {
     coas: listChildren('coas', id),
     events: listChildren('events', id),
     analyses: listChildren('analyses', id),
+    layers: listChildren('layers', id),
+    points: listChildren('points', id),
   };
 }
 
