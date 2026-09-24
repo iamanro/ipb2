@@ -232,11 +232,12 @@ matching tool above.
 
 ## Scripts
 
-| Command          | Does                                                                    |
-| ---------------- | ----------------------------------------------------------------------- |
-| `npm run dev`    | Vite dev server, `:5180`                                                |
-| `npm run build`  | Production bundle to `dist/`                                            |
-| `npm start`      | Preview the production build, `:8000`                                   |
-| `npm test`       | Runs `src/geo.test.js` and any other `*.test.js` (Vitest via `vp test`) |
-| `npm run check`  | Format check + lint + typecheck; run before committing                  |
-| `npm run format` | Auto-format with Prettier conventions (`vp fmt --write`)                |
+| Command            | Does                                                                                                                                                                         |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev`      | Vite dev server, `:5180`                                                                                                                                                     |
+| `npm run build`    | Production bundle to `dist/`                                                                                                                                                 |
+| `npm start`        | Preview the production build, `:8000`                                                                                                                                        |
+| `npm test`         | Runs `src/geo.test.js` and any other `*.test.js` (Vitest via `vp test`)                                                                                                      |
+| `npm run test:e2e` | Real-browser tests in `e2e/*.e2e.js` (Playwright) against a production build on :5190, with throwaway state (`IPB_STATE_ROOT`); first run: `npx playwright install chromium` |
+| `npm run check`    | Format check + lint + typecheck; run before committing                                                                                                                       |
+| `npm run format`   | Auto-format with Prettier conventions (`vp fmt --write`)                                                                                                                     |

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { HttpError, integerParameter, readJson, sendJson } from '../../../server/http.js';
+import { stateDirectory } from '../../../server/state.js';
 import { openBookmarks } from './bookmarks.js';
 import {
   KINDS,
@@ -18,7 +19,10 @@ import {
 
 const ID = 'equipment';
 const DATA_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
-const STATE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state');
+const STATE_ROOT = stateDirectory(
+  ID,
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state'),
+);
 const DATABASE = path.join(DATA_ROOT, 'unitgenerator.db');
 const BOOKMARKS_DATABASE = path.join(STATE_ROOT, 'bookmarks.db');
 const ODIN_ASSET_ROOT = 'https://odin.t2com.army.mil/dotcms/';

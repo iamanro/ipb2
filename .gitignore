@@ -5,3 +5,5 @@ modules/*/state/
 *.pmtiles
 *.tif
 __pycache__/
+test-results/
+playwright-report/

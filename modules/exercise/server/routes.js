@@ -2,10 +2,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { HttpError, readJson, sendJson } from '../../../server/http.js';
+import { stateDirectory } from '../../../server/state.js';
 import { openStore } from './store.js';
 
 const ID = 'exercise';
-const STATE_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state');
+const STATE_ROOT = stateDirectory(
+  ID,
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state'),
+);
 const DATABASE = path.join(STATE_ROOT, 'exercise.db');
 
 function parseId(text) {

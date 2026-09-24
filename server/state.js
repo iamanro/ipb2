@@ -3,6 +3,16 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 /**
+ * A module's state directory: `modules/<id>/state` normally, or
+ * `$IPB_STATE_ROOT/<id>` when set, so end-to-end tests run against a
+ * throwaway copy and never touch the analyst's own studies.
+ */
+export function stateDirectory(moduleId, defaultDirectory) {
+  const root = process.env.IPB_STATE_ROOT;
+  return root ? path.join(root, moduleId) : defaultDirectory;
+}
+
+/**
  * Writable module state. Reference data lives in `modules/<id>/data/*.db` and is
  * rebuilt by the module tools; state lives in `modules/<id>/state/*.db` and is
  * the user's work, so the two never share a file or a lifetime.

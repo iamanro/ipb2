@@ -8,6 +8,7 @@
     "build": "vp build",
     "start": "vp preview --host :: --port 8000 --strictPort",
     "test": "vp test run",
+    "test:e2e": "playwright test",
     "check": "vp check",
     "format": "vp fmt --write",
     "lint": "vp lint"
@@ -22,6 +23,7 @@
     "pmtiles": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "geotiff": "^3.1.0-beta.0",
     "vite-plus": "0.3.0"
   },
