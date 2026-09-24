@@ -59,8 +59,54 @@ function hemisphereFromLetter(letter) {
   return upper < 'N' ? 'S' : 'N';
 }
 
+/**
+ * Standard Snyder transverse Mercator forward, WGS84 ellipsoid, projected into
+ * the given zone (which may differ from the point's own zone, as the MGRS grid
+ * needs when sampling a zone's edge). Southern-hemisphere northings carry the
+ * 10,000 km false northing.
+ */
+export function lonLatToUtm(lon, lat, zoneNumber) {
+  const a = WGS84_A;
+  const eccSquared = WGS84_ECC_SQUARED;
+  const eccPrimeSquared = eccSquared / (1 - eccSquared);
+  const latRad = (lat * Math.PI) / 180;
+  const originLon = (zoneNumber - 1) * 6 - 180 + 3;
+  const sinLat = Math.sin(latRad);
+  const cosLat = Math.cos(latRad);
+  const tanLat = Math.tan(latRad);
+
+  const n = a / Math.sqrt(1 - eccSquared * sinLat * sinLat);
+  const t = tanLat * tanLat;
+  const c = eccPrimeSquared * cosLat * cosLat;
+  const aa = cosLat * (((lon - originLon) * Math.PI) / 180);
+  const m =
+    a *
+    ((1 - eccSquared / 4 - (3 * eccSquared ** 2) / 64 - (5 * eccSquared ** 3) / 256) * latRad -
+      ((3 * eccSquared) / 8 + (3 * eccSquared ** 2) / 32 + (45 * eccSquared ** 3) / 1024) *
+        Math.sin(2 * latRad) +
+      ((15 * eccSquared ** 2) / 256 + (45 * eccSquared ** 3) / 1024) * Math.sin(4 * latRad) -
+      ((35 * eccSquared ** 3) / 3072) * Math.sin(6 * latRad));
+
+  const easting =
+    UTM_SCALE_FACTOR *
+      n *
+      (aa +
+        ((1 - t + c) * aa ** 3) / 6 +
+        ((5 - 18 * t + t * t + 72 * c - 58 * eccPrimeSquared) * aa ** 5) / 120) +
+    UTM_FALSE_EASTING;
+  const northing =
+    UTM_SCALE_FACTOR *
+    (m +
+      n *
+        tanLat *
+        ((aa * aa) / 2 +
+          ((5 - t + 9 * c + 4 * c * c) * aa ** 4) / 24 +
+          ((61 - 58 * t + t * t + 600 * c - 330 * eccPrimeSquared) * aa ** 6) / 720));
+  return { easting, northing: lat < 0 ? northing + UTM_FALSE_NORTHING : northing };
+}
+
 /** Standard Snyder transverse Mercator inverse, WGS84 ellipsoid. */
-function utmToLonLat(zoneNumber, hemisphere, easting, northing) {
+export function utmToLonLat(zoneNumber, hemisphere, easting, northing) {
   const a = WGS84_A;
   const eccSquared = WGS84_ECC_SQUARED;
   const e1 = (1 - Math.sqrt(1 - eccSquared)) / (1 + Math.sqrt(1 - eccSquared));

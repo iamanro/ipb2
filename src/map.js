@@ -2,18 +2,18 @@
 // lon/lat (EPSG:4326); the view itself runs in EPSG:3857 internally.
 import { Map as OlMap, View } from 'ol';
 import { unByKey } from 'ol/Observable.js';
-import { fromLonLat, toLonLat, transformExtent } from 'ol/proj.js';
-import { getCenter as extentCenter } from 'ol/extent.js';
+import { fromLonLat, getPointResolution, toLonLat, transformExtent } from 'ol/proj.js';
+import { buffer as bufferExtent, getCenter as extentCenter, getWidth } from 'ol/extent.js';
 import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import ImageLayer from 'ol/layer/Image.js';
-import GraticuleLayer from 'ol/layer/Graticule.js';
 import VectorSource from 'ol/source/Vector.js';
 import ImageCanvasSource from 'ol/source/ImageCanvas.js';
 import { PMTilesVectorSource } from 'ol-pmtiles';
 import Draw from 'ol/interaction/Draw.js';
 import Modify from 'ol/interaction/Modify.js';
 import Feature from 'ol/Feature.js';
+import LineString from 'ol/geom/LineString.js';
 import Point from 'ol/geom/Point.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import Style from 'ol/style/Style.js';
@@ -24,6 +24,8 @@ import RegularShape from 'ol/style/RegularShape.js';
 import TextStyle from 'ol/style/Text.js';
 import IconStyle from 'ol/style/Icon.js';
 import ms from 'milsymbol';
+
+import { buildMgrsGrid, mgrsGridSpacing } from './mgrsGrid.js';
 
 const MAP_PROJECTION = 'EPSG:3857';
 const DATA_PROJECTION = 'EPSG:4326';
@@ -289,6 +291,41 @@ function buildFeatureStyle(feature, iconCache) {
   return styles;
 }
 
+// -- MGRS grid style ------------------------------------------------------------
+
+const MGRS_INK = '#12324a';
+const MGRS_FONT = '"Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace';
+const MGRS_LINE_STYLE = {
+  zone: new Style({ stroke: new Stroke({ color: MGRS_INK, width: 2.2 }) }),
+  square: new Style({ stroke: new Stroke({ color: MGRS_INK, width: 1.4 }) }),
+  line: new Style({ stroke: new Stroke({ color: 'rgba(18, 50, 74, 0.5)', width: 0.8 }) }),
+};
+const MGRS_LABEL_TEXT = {
+  // Easting digits sit just above the bottom edge, northing digits just
+  // right of the left edge, as on a paper map sheet's margin.
+  easting: { font: `600 11px ${MGRS_FONT}`, textBaseline: 'bottom', offsetY: -4 },
+  northing: { font: `600 11px ${MGRS_FONT}`, textAlign: 'left', offsetX: 5 },
+  square: { font: `700 12px ${MGRS_FONT}`, boxed: true },
+  zone: { font: `700 13px ${MGRS_FONT}`, boxed: true },
+};
+
+function mgrsLabelStyle(kind, text) {
+  const { boxed, ...options } = MGRS_LABEL_TEXT[kind];
+  return new Style({
+    text: new TextStyle({
+      ...options,
+      text,
+      fill: new Fill({ color: MGRS_INK }),
+      ...(boxed
+        ? {
+            backgroundFill: new Fill({ color: 'rgba(255, 255, 255, 0.85)' }),
+            padding: [2, 5, 2, 5],
+          }
+        : { stroke: new Stroke({ color: '#ffffff', width: 3 }) }),
+    }),
+  });
+}
+
 // -- Grid overlay rasterisation ---------------------------------------------
 
 function decodeGridValues(base64) {
@@ -389,7 +426,6 @@ export function createMap(options) {
   let selectedId = null;
   let drawInteraction = null;
   let modifyInteraction = null;
-  let graticuleLayer = null;
 
   const basemapSource = new PMTilesVectorSource({ url: basemapUrl });
   const basemapLayer = new VectorTileLayer({
@@ -415,9 +451,18 @@ export function createMap(options) {
   // Headless source used only to stage the in-progress draw; never added to the map.
   const sketchSource = new VectorSource();
 
+  // Above the basemap and analysis rasters (setGrid inserts below it), below
+  // the analyst's features. Rebuilt for the current view on every moveend.
+  const mgrsSource = new VectorSource();
+  const mgrsLayer = new VectorLayer({
+    source: mgrsSource,
+    visible: false,
+    declutter: true,
+  });
+
   const map = new OlMap({
     target,
-    layers: [basemapLayer, featureLayer],
+    layers: [basemapLayer, mgrsLayer, featureLayer],
     view: new View({
       projection: MAP_PROJECTION,
       center: fromLonLat(center, MAP_PROJECTION),
@@ -608,8 +653,8 @@ export function createMap(options) {
     } else {
       const layer = new ImageLayer({ source, opacity });
       gridLayers.set(name, { layer });
-      const featureIndex = map.getLayers().getArray().indexOf(featureLayer);
-      map.getLayers().insertAt(featureIndex, layer);
+      const gridIndex = map.getLayers().getArray().indexOf(mgrsLayer);
+      map.getLayers().insertAt(gridIndex, layer);
     }
   }
 
@@ -625,15 +670,49 @@ export function createMap(options) {
     basemapLayer.setVisible(visible);
   }
 
-  function setGraticule(visible) {
-    if (!graticuleLayer) {
-      graticuleLayer = new GraticuleLayer({
-        showLabels: true,
-        strokeStyle: new Stroke({ color: 'rgba(20, 20, 20, 0.35)', width: 1, lineDash: [2, 4] }),
-      });
-      map.addLayer(graticuleLayer);
+  function renderMgrsGrid() {
+    const size = map.getSize();
+    const view = map.getView();
+    if (!size || !view.getResolution()) return;
+    const extent = view.calculateExtent(size);
+    const toLonLatExtent = (value) => transformExtent(value, MAP_PROJECTION, DATA_PROJECTION);
+    const metresPerPixel = getPointResolution(
+      MAP_PROJECTION,
+      view.getResolution(),
+      view.getCenter(),
+      'm',
+    );
+    const { lines, labels } = buildMgrsGrid({
+      extent: toLonLatExtent(extent),
+      drawExtent: toLonLatExtent(bufferExtent(extent, getWidth(extent) / 2)),
+      spacing: mgrsGridSpacing(metresPerPixel),
+    });
+    const features = lines.map(({ rank, coordinates }) => {
+      const feature = new Feature(
+        new LineString(coordinates.map((point) => fromLonLat(point, MAP_PROJECTION))),
+      );
+      feature.setStyle(MGRS_LINE_STYLE[rank]);
+      return feature;
+    });
+    for (const { kind, text, coordinate } of labels) {
+      const feature = new Feature(new Point(fromLonLat(coordinate, MAP_PROJECTION)));
+      feature.setStyle(mgrsLabelStyle(kind, text));
+      features.push(feature);
     }
-    graticuleLayer.setVisible(visible);
+    mgrsSource.clear(true);
+    mgrsSource.addFeatures(features);
+  }
+
+  listenerKeys.push(
+    map.on('moveend', () => {
+      if (mgrsLayer.getVisible()) renderMgrsGrid();
+    }),
+  );
+
+  function setMgrsGrid(visible) {
+    mgrsLayer.setVisible(visible);
+    if (visible) renderMgrsGrid();
+    else mgrsSource.clear(true);
   }
 
   function destroy() {
@@ -648,6 +727,7 @@ export function createMap(options) {
     iconCache.clear();
     featureSource.clear();
     sketchSource.clear();
+    mgrsSource.clear(true);
     map.setTarget(null);
   }
 
@@ -665,7 +745,7 @@ export function createMap(options) {
     setGrid,
     clearGrid,
     setBasemapVisible,
-    setGraticule,
+    setMgrsGrid,
     destroy,
   };
 }

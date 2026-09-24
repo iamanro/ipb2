@@ -107,6 +107,7 @@ function queryElements(root) {
     toolPanel: pick('#tool-panel'),
     mapTarget: pick('#map-target'),
     pointerMgrs: pick('#pointer-mgrs'),
+    gridToggle: pick('#grid-toggle'),
     mapHint: pick('#map-hint'),
     mapClickInfo: pick('#map-click-info'),
     mapEmpty: pick('#map-empty'),
@@ -2589,6 +2590,12 @@ export function mount({ root, status }) {
     onFeatureChange: onMapFeatureChange,
     onDraw: onMapDraw,
     onPointerMove: onMapPointerMove,
+  });
+  mapController.setMgrsGrid(true);
+  elements.gridToggle.addEventListener('click', () => {
+    const visible = elements.gridToggle.getAttribute('aria-pressed') !== 'true';
+    elements.gridToggle.setAttribute('aria-pressed', String(visible));
+    mapController.setMgrsGrid(visible);
   });
 
   readLocation();

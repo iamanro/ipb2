@@ -552,6 +552,24 @@
       font-weight: 700;
     }
 
+    .readout-toggle {
+      margin-left: 4px;
+      border: 1px solid var(--line-dark);
+      padding: 2px 7px;
+      color: var(--muted);
+      background: transparent;
+      font: inherit;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .readout-toggle[aria-pressed='true'] {
+      color: var(--white);
+      background: var(--blue-dark);
+      border-color: var(--blue-dark);
+    }
+
     .map-hint {
       border-color: var(--signal);
       color: var(--signal);
