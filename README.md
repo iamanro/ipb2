@@ -71,30 +71,38 @@ debugging the importer or the API without going through the browser.
 ### Terrain (elevation + offline basemap)
 
 ```bash
-node modules/terrain/tools/build_terrain.mjs --source <dir of GLO-30 GeoTIFFs> --bounds <west,south,east,north>
+node modules/terrain/tools/build_terrain.mjs --bounds <west,south,east,north>
 ```
 
 Builds `modules/terrain/data/terrain.db`: a one-arc-second elevation grid
-resampled from Copernicus GLO-30 GeoTIFFs, used for slope, line-of-sight,
-viewshed, and the MCOO mobility overlay. `--bounds` defaults to
-`17.2,49.5,17.8,49.9` (the Libavá training area, Czech Republic) if omitted.
-The terrain API only has data inside whatever bounds you build.
+resampled from Copernicus GLO-30, used for slope, line-of-sight, viewshed, and
+the MCOO mobility overlay. `--bounds` defaults to `17.2,49.5,17.8,49.9` (the
+Libavá training area, Czech Republic) if omitted. The terrain API only has
+data inside whatever bounds you build.
+
+The 1°×1° GLO-30 tiles covering `--bounds` are downloaded from the public
+[AWS Open Data bucket](https://registry.opendata.aws/copernicus-dem/) (no
+account needed, ~40 MB per land tile) into `modules/terrain/data/glo30/` and
+reused on later runs. Cells with no land have no tile and are skipped. To
+build offline from GeoTIFFs you already have, pass `--source <dir>`; every
+`.tif` in that directory is used and nothing is downloaded.
 
 The mobility overlay also reads an offline vector basemap:
 `modules/terrain/data/vector.pmtiles`, an OpenMapTiles-schema PMTiles archive
 (needs the `water`, `waterway`, `building`, `landcover`, `landuse` layers).
+Nothing in this repo downloads it. Build one with
+[Planetiler](https://github.com/onthegomap/planetiler), whose default profile
+is OpenMapTiles (needs Java 21+):
 
-**Known gap:** neither the GLO-30 GeoTIFFs nor the `vector.pmtiles` archive
-are fetched automatically by anything in this repo — there is no downloader
-tool here yet. Sources, both public:
+```bash
+java -Xmx2g -jar planetiler.jar --download --area=czech-republic \
+  --output=modules/terrain/data/vector.pmtiles
+```
 
-- Copernicus DEM GLO-30: AWS Open Data Registry
-  (`s3://copernicus-dem-30m`, `https://registry.opendata.aws/copernicus-dem/`)
-  or via [OpenTopography](https://opentopography.org/).
-- An OpenMapTiles-schema vector archive: build one with
-  [Planetiler](https://github.com/onthegomap/planetiler)'s
-  `openmaptiles` profile against an OSM extract for your area of interest, or
-  use any existing `.pmtiles` archive with the same schema.
+`--area` takes a [Geofabrik](https://download.geofabrik.de/) region name. The
+first run also downloads ~1 GB of OpenMapTiles base sources (water polygons,
+Natural Earth). Any existing `.pmtiles` archive with the same schema works
+too.
 
 ## Modules
 

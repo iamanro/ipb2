@@ -2,16 +2,30 @@
 /**
  * Build `modules/terrain/data/terrain.db` from Copernicus GLO-30 GeoTIFFs.
  *
- *   node modules/terrain/tools/build_terrain.mjs \
- *     --source ../IPB/infra/terrain-data/offline/dem/glo30 \
- *     --bounds 17.2,49.5,17.8,49.9
+ *   node modules/terrain/tools/build_terrain.mjs --bounds 17.2,49.5,17.8,49.9
+ *
+ * Without `--source`, the 1°×1° GLO-30 tiles covering `--bounds` are
+ * downloaded from the public AWS Open Data bucket (no account) into
+ * `data/glo30/`; tiles already there are reused. Tiles the dataset does not
+ * have (open ocean) are skipped. With `--source <dir>`, every GeoTIFF in that
+ * directory is used and nothing is downloaded.
  *
  * Source rasters are read straight from GeoTIFF (no GDAL) and resampled onto the
  * one-arc-second grid documented in schema.sql. Rebuilding is idempotent: the
  * output file is replaced.
  */
-import { mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
@@ -37,9 +51,52 @@ function parseArguments(argv) {
       options.bounds = parts;
     } else throw new Error(`Unknown argument ${argv[index]}`);
   }
-  if (!options.source) throw new Error('--source <directory of GLO-30 GeoTIFFs> is required');
   options.out ??= path.join(MODULE_ROOT, 'data', 'terrain.db');
   return options;
+}
+
+const GLO30_BUCKET = 'https://copernicus-dem-30m.s3.amazonaws.com';
+const GLO30_CACHE = path.join(MODULE_ROOT, 'data', 'glo30');
+
+/** GLO-30 tile name for the 1° cell whose south-west corner is (lon, lat). */
+function glo30Name(lon, lat) {
+  const ns = `${lat < 0 ? 'S' : 'N'}${String(Math.abs(lat)).padStart(2, '0')}`;
+  const ew = `${lon < 0 ? 'W' : 'E'}${String(Math.abs(lon)).padStart(3, '0')}`;
+  return `Copernicus_DSM_COG_10_${ns}_00_${ew}_00_DEM`;
+}
+
+/**
+ * Download (or reuse from the cache) every GLO-30 tile intersecting the
+ * bounds. Writes to `<name>.tif.part` and renames on completion, so an
+ * interrupted run never leaves a truncated tile that a rerun would trust.
+ */
+async function fetchGlo30([west, south, east, north]) {
+  mkdirSync(GLO30_CACHE, { recursive: true });
+  const files = [];
+  for (let lat = Math.floor(south); lat < north; lat += 1) {
+    for (let lon = Math.floor(west); lon < east; lon += 1) {
+      const name = glo30Name(lon, lat);
+      const file = path.join(GLO30_CACHE, `${name}.tif`);
+      if (existsSync(file)) {
+        process.stdout.write(`  cached  ${name}\n`);
+        files.push(file);
+        continue;
+      }
+      const response = await fetch(`${GLO30_BUCKET}/${name}/${name}.tif`);
+      if (response.status === 404 || response.status === 403) {
+        // The bucket answers missing keys with 403 or 404; GLO-30 has no tile there (open ocean).
+        process.stdout.write(`  no tile ${name} (no land in this cell)\n`);
+        continue;
+      }
+      if (!response.ok) throw new Error(`GET ${name}: HTTP ${response.status}`);
+      process.stdout.write(`  fetch   ${name}\n`);
+      const partial = `${file}.part`;
+      await pipeline(Readable.fromWeb(response.body), createWriteStream(partial));
+      renameSync(partial, file);
+      files.push(file);
+    }
+  }
+  return files;
 }
 
 /** Cell-centre coordinate of a global cell index. */
@@ -93,10 +150,16 @@ async function main() {
   const [west, south, east, north] = options.bounds;
   if (!(west < east && south < north)) throw new Error('--bounds must be west<east, south<north');
 
-  const sources = readdirSync(options.source)
-    .filter((name) => name.toLowerCase().endsWith('.tif'))
-    .map((name) => path.join(options.source, name));
-  if (!sources.length) throw new Error(`No GeoTIFFs in ${options.source}`);
+  const sources = options.source
+    ? readdirSync(options.source)
+        .filter((name) => name.toLowerCase().endsWith('.tif'))
+        .map((name) => path.join(options.source, name))
+    : await fetchGlo30(options.bounds);
+  if (!sources.length) {
+    throw new Error(
+      options.source ? `No GeoTIFFs in ${options.source}` : 'No GLO-30 tiles cover --bounds',
+    );
+  }
 
   const txMin = Math.floor(Math.floor(west * CELLS_PER_DEGREE) / TILE);
   const txMax = Math.floor(Math.ceil(east * CELLS_PER_DEGREE - 1) / TILE);
