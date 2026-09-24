@@ -74,11 +74,20 @@ export async function serveFile(request, response, absolutePath, contentType) {
     throw new HttpError(404, 'File not found.');
   }
   if (!info.isFile()) throw new HttpError(404, 'File not found.');
+  // Revalidate on every use: these files are rebuilt in place, and a cached
+  // byte range of the old file mixed with ranges of the new one is corrupt.
+  const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
   const headers = {
     'Content-Type': contentType,
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'public, max-age=86400',
+    'Cache-Control': 'no-cache',
+    ETag: etag,
   };
+  if (request.headers['if-none-match'] === etag) {
+    response.writeHead(304, headers);
+    response.end();
+    return;
+  }
   if (request.method === 'HEAD') {
     response.writeHead(200, { ...headers, 'Content-Length': info.size });
     response.end();

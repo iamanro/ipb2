@@ -110,6 +110,23 @@ first run also downloads ~1 GB of OpenMapTiles base sources (water polygons,
 Natural Earth). Any existing `.pmtiles` archive with the same schema works
 too.
 
+No Java installed? A portable runtime works without root; keeping it under
+the gitignored `data/` directory keeps everything rebuildable in one place:
+
+```bash
+mkdir -p modules/terrain/data/planetiler/jre && cd modules/terrain/data/planetiler
+curl -L -o planetiler.jar https://github.com/onthegomap/planetiler/releases/latest/download/planetiler.jar
+curl -L https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jre/hotspot/normal/eclipse \
+  | tar -xz -C jre --strip-components=1
+./jre/bin/java -Xmx8g -jar planetiler.jar --download --area=czech-republic \
+  --output=../vector.pmtiles --force
+```
+
+For Czechia this downloads ~2 GB (runtime, Planetiler, the 903 MB OSM extract,
+base sources; ~2.5 GB on disk, reused on rebuilds), takes about 3 minutes, and
+writes a ~620 MB archive. Restart the dev server afterwards; the browser
+revalidates the archive, so it never mixes old and new bytes.
+
 The "Place names" overlay additionally needs the `place`, `mountain_peak` and
 `water_name` layers. The command above (Planetiler's default profile) includes
 them; an archive built with `--only-layers` or trimmed to the five layers above
