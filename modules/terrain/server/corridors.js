@@ -1,7 +1,6 @@
-import { longitudeScale } from './dem.js';
 import { GO, NO_GO, SLOW_GO, UNKNOWN } from './landcover.js';
+import { METRES_PER_DEGREE_LATITUDE, latticeOf, longitudeScale, metresBetween } from './lattice.js';
 
-const METRES_PER_DEGREE_LATITUDE = 111132.95;
 const BLOCK_SENTINEL = 1e9; // finite stand-in for "far from any obstacle" in the EDT pass
 
 /** Per-metre movement cost for one obstacle class; only GO/SLOW-GO cells are ever traversable. */
@@ -185,19 +184,14 @@ function astar(grid, traversable, startNode, goalNode, costMultiplier) {
 
 /** Cell-centre longitude/latitude for a node index. */
 function cellCentre(grid, node) {
-  const { west, north, east, south, width, height } = grid;
-  const row = Math.floor(node / width);
-  const col = node % width;
-  const lon = west + (col + 0.5) * ((east - west) / width);
-  const lat = north - (row + 0.5) * ((north - south) / height);
-  return { lon, lat };
+  return { lon: grid.lon(node % grid.width), lat: grid.lat(Math.floor(node / grid.width)) };
 }
 
 /** Nearest traversable cell to a lon/lat, within `maxMetres`; null if none qualifies. */
 function snapToTraversable(grid, traversable, point, maxMetres) {
-  const { west, north, south, east, width, height, cellMetres } = grid;
-  const col = ((point.lon - west) / (east - west)) * width;
-  const row = ((north - point.lat) / (north - south)) * height;
+  const { width, height, cellMetres } = grid;
+  const col = grid.column(point.lon);
+  const row = grid.row(point.lat);
   const radiusCells = Math.max(1, Math.ceil(maxMetres / cellMetres));
   let best = -1;
   let bestDist = Infinity;
@@ -302,9 +296,8 @@ export function suggestAvenues(grid, { from, to, corridorWidth, count = 3 }) {
   if (!withinExtent(grid, from)) throw new Error('The start point is outside the AOI.');
   if (!withinExtent(grid, to)) throw new Error('The objective is outside the AOI.');
 
-  const { width, height, values, cellMetres, extent } = grid;
-  const [west, south, east, north] = extent;
-  const fullGrid = { west, south, east, north, width, height, cellMetres, values };
+  const { width, height, values, cellMetres } = grid;
+  const fullGrid = { ...latticeOf(grid), values };
 
   const squaredCellDist = distanceTransform(values, width, height);
   const traversable = new Uint8Array(width * height);
@@ -368,11 +361,7 @@ function buildRoute(grid, path) {
   let goLength = 0;
   let slowLength = 0;
   for (let i = 1; i < path.length; i += 1) {
-    const a = points[i - 1];
-    const b = points[i];
-    const dLon = (b.lon - a.lon) * longitudeScale((a.lat + b.lat) / 2);
-    const dLat = (b.lat - a.lat) * METRES_PER_DEGREE_LATITUDE;
-    const stepLen = Math.hypot(dLon, dLat);
+    const stepLen = metresBetween(points[i - 1], points[i]);
     lengthMetres += stepLen;
     const classA = grid.values[path[i - 1]];
     const classB = grid.values[path[i]];

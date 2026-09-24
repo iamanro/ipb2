@@ -125,8 +125,9 @@ export async function namedPeaks(file, bounds) {
  * Obstacle overlay read from the offline vector basemap.
  *
  * `classify(grid)` rasterises water, waterways, buildings, forest and built-up
- * areas onto the caller's grid and returns one obstacle class per cell. Tile
- * addressing, protobuf decoding and polygon filling stay inside.
+ * areas onto the caller's lattice (lattice.js) and returns one obstacle class
+ * per cell, row-major. Tile addressing, protobuf decoding and polygon filling
+ * stay inside.
  */
 export function openLandcover(file) {
   const source = fileSource(file);
@@ -139,10 +140,8 @@ export function openLandcover(file) {
   }
 
   async function classify(grid) {
-    const { west, north, cellMetres, width, height, metresPerLongitude, metresPerLatitude } = grid;
+    const { width, height, column: toColumn, row: toRow } = grid;
     const values = new Uint8Array(width * height).fill(GO);
-    const toColumn = (lon) => ((lon - west) * metresPerLongitude) / cellMetres;
-    const toRow = (lat) => ((north - lat) * metresPerLatitude) / cellMetres;
 
     const mark = (index, cover) => {
       if (values[index] < cover) values[index] = cover;
@@ -191,17 +190,15 @@ export function openLandcover(file) {
         const steps = Math.max(Math.ceil(Math.hypot(x1 - x0, y1 - y0)), 1);
         for (let step = 0; step <= steps; step += 1) {
           const t = step / steps;
-          const column = Math.round(x0 + (x1 - x0) * t);
-          const row = Math.round(y0 + (y1 - y0) * t);
+          const column = Math.floor(x0 + (x1 - x0) * t);
+          const row = Math.floor(y0 + (y1 - y0) * t);
           if (column < 0 || row < 0 || column >= width || row >= height) continue;
           mark(row * width + column, cover);
         }
       }
     };
 
-    const east = west + (width * cellMetres) / metresPerLongitude;
-    const south = north - (height * cellMetres) / metresPerLatitude;
-    const range = tileRange([west, south, east, north], TILE_ZOOM);
+    const range = tileRange(grid.extent, TILE_ZOOM);
     for (let x = range.xMin; x <= range.xMax; x += 1) {
       for (let y = range.yMin; y <= range.yMax; y += 1) {
         const tile = await decodeTile(x, y);

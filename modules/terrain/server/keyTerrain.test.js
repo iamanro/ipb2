@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
 
 import { keyTerrainCandidates } from './keyTerrain.js';
+import { METRES_PER_DEGREE_LATITUDE, longitudeScale } from './lattice.js';
 
-const METRES_PER_DEGREE_LATITUDE = 111132.95;
-const METRES_PER_DEGREE_LONGITUDE = 111319.49; // near the equator, matches dem.js longitudeScale(0)
+const METRES_PER_DEGREE_LONGITUDE = longitudeScale(0); // the fixture sits on the equator
 
 const WEST = 0;
 const SOUTH = 0;

@@ -13,12 +13,13 @@ import {
 import { encodePng } from '../../../server/png.js';
 import { contourTile } from './contours.js';
 import { suggestAvenues } from './corridors.js';
-import { metresBetween, openTerrain } from './dem.js';
+import { openTerrain } from './dem.js';
 import { elevationExtremes } from './extremes.js';
 import { SLOPE_LEGEND, renderHillshade, renderSlopeClasses } from './rasterTiles.js';
 import { openImagery } from './imagery.js';
 import { keyTerrainCandidates } from './keyTerrain.js';
 import { namedPeaks, vectorLayerNames } from './landcover.js';
+import { metresBetween } from './lattice.js';
 import { LEGEND, mobilityOverlay } from './mobility.js';
 
 const ID = 'terrain';

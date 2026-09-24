@@ -1,7 +1,5 @@
-import { longitudeScale } from './dem.js';
 import { GO, NO_GO, SLOW_GO, UNKNOWN, openLandcover } from './landcover.js';
-
-const METRES_PER_DEGREE_LATITUDE = 111132.95;
+import { latticeOver } from './lattice.js';
 
 export const LEGEND = [
   { value: GO, code: 'GO', label: 'Unrestricted', color: '#2f7a3d' },
@@ -35,25 +33,8 @@ export async function mobilityOverlay({
   cellMetres = 50,
   maxCells = 360000,
 }) {
-  const [west, south, east, north] = bounds;
-  const midLatitude = (south + north) / 2;
-  const metresPerLongitude = longitudeScale(midLatitude);
-  const spanX = (east - west) * metresPerLongitude;
-  const spanY = (north - south) * METRES_PER_DEGREE_LATITUDE;
-  const cells = (spanX / cellMetres) * (spanY / cellMetres);
-  const resolution = cells > maxCells ? cellMetres * Math.sqrt(cells / maxCells) : cellMetres;
-  const width = Math.max(Math.round(spanX / resolution), 1);
-  const height = Math.max(Math.round(spanY / resolution), 1);
-
-  const grid = {
-    west,
-    north,
-    cellMetres: resolution,
-    width,
-    height,
-    metresPerLongitude,
-    metresPerLatitude: METRES_PER_DEGREE_LATITUDE,
-  };
+  const grid = latticeOver(bounds, { cellMetres, maxCells });
+  const { width, height, cellMetres: resolution } = grid;
 
   const landcover = openLandcover(basemapFile);
   let cover;
@@ -66,9 +47,9 @@ export async function mobilityOverlay({
   const values = new Uint8Array(width * height);
   const counts = new Map(LEGEND.map((entry) => [entry.value, 0]));
   for (let row = 0; row < height; row += 1) {
-    const latitude = north - ((row + 0.5) * resolution) / METRES_PER_DEGREE_LATITUDE;
+    const latitude = grid.lat(row);
     for (let column = 0; column < width; column += 1) {
-      const longitude = west + ((column + 0.5) * resolution) / metresPerLongitude;
+      const longitude = grid.lon(column);
       const index = row * width + column;
       const fromSlope = slopeClass(terrain.slopeDegrees(longitude, latitude));
       const fromCover = cover[index];
@@ -83,12 +64,7 @@ export async function mobilityOverlay({
 
   const total = width * height;
   return {
-    extent: [
-      west,
-      north - (height * resolution) / METRES_PER_DEGREE_LATITUDE,
-      west + (width * resolution) / metresPerLongitude,
-      north,
-    ],
+    extent: grid.extent,
     cellMetres: resolution,
     width,
     height,

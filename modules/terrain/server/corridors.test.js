@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import { suggestAvenues } from './corridors.js';
 import { GO, NO_GO, SLOW_GO } from './landcover.js';
+import { METRES_PER_DEGREE_LATITUDE, latticeOf, longitudeScale, metresBetween } from './lattice.js';
 
 const CELL = 50; // metres
 const WEST = 0;
@@ -10,24 +11,14 @@ const NORTH = 1;
 /** Builds a grid extent for a `width`x`height` grid anchored at (WEST, NORTH). */
 function buildGrid(width, height, fill = GO) {
   const values = new Uint8Array(width * height).fill(fill);
-  const south = NORTH - (height * CELL) / 111132.95;
-  const east = WEST + (width * CELL) / (111319.49 * Math.cos((NORTH * Math.PI) / 180));
+  const south = NORTH - (height * CELL) / METRES_PER_DEGREE_LATITUDE;
+  const east = WEST + (width * CELL) / longitudeScale(NORTH);
   return { values, width, height, cellMetres: CELL, extent: [WEST, south, east, NORTH] };
 }
 
 function lonLatOfCell(grid, row, col) {
-  const [west, south, east, north] = grid.extent;
-  return {
-    lon: west + (col + 0.5) * ((east - west) / grid.width),
-    lat: north - (row + 0.5) * ((north - south) / grid.height),
-  };
-}
-
-function metresBetween(a, b) {
-  const midLat = (a.lat + b.lat) / 2;
-  const dx = (b.lon - a.lon) * (111319.49 * Math.cos((midLat * Math.PI) / 180));
-  const dy = (b.lat - a.lat) * 111132.95;
-  return Math.hypot(dx, dy);
+  const lattice = latticeOf(grid);
+  return { lon: lattice.lon(col), lat: lattice.lat(row) };
 }
 
 describe('suggestAvenues', () => {

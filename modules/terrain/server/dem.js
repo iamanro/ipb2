@@ -1,9 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
 
+import {
+  METRES_PER_DEGREE_LATITUDE,
+  latticeOver,
+  longitudeScale,
+  metresBetween,
+} from './lattice.js';
+
 const TILE = 256;
 const TILE_CACHE_LIMIT = 96;
-const METRES_PER_DEGREE_LATITUDE = 111132.95;
-const METRES_PER_DEGREE_LONGITUDE = 111319.49;
 const EARTH_RADIUS = 6371008.8;
 const REFRACTION = 0.13;
 
@@ -16,24 +21,12 @@ function curvatureDrop(distance) {
   return ((1 - REFRACTION) * distance * distance) / (2 * EARTH_RADIUS);
 }
 
-/** Metres per degree of longitude at a latitude. */
-export function longitudeScale(latitude) {
-  return METRES_PER_DEGREE_LONGITUDE * Math.cos((latitude * Math.PI) / 180);
-}
-
-export function metresBetween(a, b) {
-  const midLatitude = (a.lat + b.lat) / 2;
-  const dx = (b.lon - a.lon) * longitudeScale(midLatitude);
-  const dy = (b.lat - a.lat) * METRES_PER_DEGREE_LATITUDE;
-  return Math.hypot(dx, dy);
-}
-
 /**
  * Elevation model over the one-arc-second grid described in tools/schema.sql.
  *
  * The interface is `{ meta, bounds, elevation, slopeDegrees, profile, lineOfSight,
- * viewshed, close }`. Tile addressing, the LRU cache, bilinear interpolation and
- * the metre-per-degree conversions stay inside.
+ * viewshed, close }`. Tile addressing, the LRU cache and bilinear interpolation
+ * stay inside; metres and grids come from the metric plane in lattice.js.
  */
 export function openTerrain(file) {
   const database = new DatabaseSync(file, { readOnly: true });
@@ -190,24 +183,22 @@ export function openTerrain(file) {
       }
       return { lon, lat, ground, eye: ground + observerHeight };
     });
-    // One metric grid over every observer's circle, at the observers' mean
-    // latitude; coarsened if it would exceed the old single-observer cap.
+    // One lattice over every observer's circle, measured at the observers'
+    // mean latitude; coarsened if it would exceed the old single-observer cap.
     const midLat = posts.reduce((sum, post) => sum + post.lat, 0) / posts.length;
     const lonScale = longitudeScale(midLat);
     const eastings = posts.map((post) => (post.lon - posts[0].lon) * lonScale);
     const northings = posts.map((post) => (post.lat - posts[0].lat) * METRES_PER_DEGREE_LATITUDE);
-    const minE = Math.min(...eastings) - radiusMetres;
-    const maxE = Math.max(...eastings) + radiusMetres;
-    const minN = Math.min(...northings) - radiusMetres;
-    const maxN = Math.max(...northings) + radiusMetres;
-    const maxCells = 601 * 601;
-    const naturalCells = ((maxE - minE) / cellMetres) * ((maxN - minN) / cellMetres);
-    const cell =
-      naturalCells > maxCells ? cellMetres * Math.sqrt(naturalCells / maxCells) : cellMetres;
-    const width = Math.ceil((maxE - minE) / cell);
-    const height = Math.ceil((maxN - minN) / cell);
-    const west = posts[0].lon + minE / lonScale;
-    const north = posts[0].lat + maxN / METRES_PER_DEGREE_LATITUDE;
+    const grid = latticeOver(
+      [
+        posts[0].lon + (Math.min(...eastings) - radiusMetres) / lonScale,
+        posts[0].lat + (Math.min(...northings) - radiusMetres) / METRES_PER_DEGREE_LATITUDE,
+        posts[0].lon + (Math.max(...eastings) + radiusMetres) / lonScale,
+        posts[0].lat + (Math.max(...northings) + radiusMetres) / METRES_PER_DEGREE_LATITUDE,
+      ],
+      { cellMetres, maxCells: 601 * 601 },
+    );
+    const { width, height, cellMetres: cell } = grid;
     const stepMetres = Math.max(cell / 2, 15);
 
     /** Whether `post` sees the target cell `range` metres away at offset (dx, dy). */
@@ -232,9 +223,9 @@ export function openTerrain(file) {
     let overlapCells = 0;
     let deadCells = 0;
     for (let row = 0; row < height; row += 1) {
-      const cellLat = north - ((row + 0.5) * cell) / METRES_PER_DEGREE_LATITUDE;
+      const cellLat = grid.lat(row);
       for (let column = 0; column < width; column += 1) {
-        const cellLon = west + ((column + 0.5) * cell) / lonScale;
+        const cellLon = grid.lon(column);
         let inRange = false;
         let seenBy = 0;
         let targetGround = null;
@@ -262,12 +253,7 @@ export function openTerrain(file) {
       observers: posts,
       radiusMetres,
       cellMetres: cell,
-      extent: [
-        west,
-        north - (height * cell) / METRES_PER_DEGREE_LATITUDE,
-        west + (width * cell) / lonScale,
-        north,
-      ],
+      extent: grid.extent,
       width,
       height,
       visibleCells,

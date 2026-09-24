@@ -1,6 +1,5 @@
-import { longitudeScale } from './dem.js';
+import { latticeOver } from './lattice.js';
 
-const METRES_PER_DEGREE_LATITUDE = 111132.95;
 const MAX_CELLS = 250000;
 const EDGE_MARGIN_CELLS = 2;
 
@@ -54,23 +53,13 @@ export function keyTerrainCandidates({
   limit = 8,
   visibleArea,
 }) {
-  const [west, south, east, north] = bounds;
-  const midLatitude = (south + north) / 2;
-  const metresPerLongitude = longitudeScale(midLatitude);
-  const spanX = (east - west) * metresPerLongitude;
-  const spanY = (north - south) * METRES_PER_DEGREE_LATITUDE;
-  const cells = (spanX / cellMetres) * (spanY / cellMetres);
-  const resolution = cells > MAX_CELLS ? cellMetres * Math.sqrt(cells / MAX_CELLS) : cellMetres;
-  const width = Math.max(Math.round(spanX / resolution), 1);
-  const height = Math.max(Math.round(spanY / resolution), 1);
+  const grid = latticeOver(bounds, { cellMetres, maxCells: MAX_CELLS });
+  const { width, height } = grid;
   const total = width * height;
 
   const elevations = new Float64Array(total);
-  const lons = new Float64Array(width);
-  const lats = new Float64Array(height);
-  for (let col = 0; col < width; col += 1) lons[col] = west + ((col + 0.5) * (east - west)) / width;
-  for (let row = 0; row < height; row += 1)
-    lats[row] = north - ((row + 0.5) * (north - south)) / height;
+  const lons = Float64Array.from({ length: width }, (_, col) => grid.lon(col));
+  const lats = Float64Array.from({ length: height }, (_, row) => grid.lat(row));
 
   let lowestFinite = Infinity;
   const order = [];

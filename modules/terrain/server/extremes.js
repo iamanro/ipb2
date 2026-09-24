@@ -1,6 +1,4 @@
-import { longitudeScale } from './dem.js';
-
-const METRES_PER_DEGREE_LATITUDE = 111132.95;
+import { latticeOver } from './lattice.js';
 
 /** Even-odd ray casting over every ring, so holes count as outside. */
 export function insidePolygon(lon, lat, rings) {
@@ -43,17 +41,14 @@ export function elevationExtremes(elevation, geometry, { maxSamples = 250_000 } 
   }
   if (!(west < east && south < north)) throw new Error('The area is empty.');
 
-  const middle = (south + north) / 2;
-  const width = (east - west) * longitudeScale(middle);
-  const height = (north - south) * METRES_PER_DEGREE_LATITUDE;
-  const cellMetres = Math.max(30, Math.sqrt((width * height) / maxSamples));
-  const stepLat = cellMetres / METRES_PER_DEGREE_LATITUDE;
-  const stepLon = cellMetres / longitudeScale(middle);
+  const grid = latticeOver([west, south, east, north], { cellMetres: 30, maxCells: maxSamples });
 
   let highest = null;
   let lowest = null;
-  for (let lat = south + stepLat / 2; lat < north; lat += stepLat) {
-    for (let lon = west + stepLon / 2; lon < east; lon += stepLon) {
+  for (let row = 0; row < grid.height; row += 1) {
+    const lat = grid.lat(row);
+    for (let column = 0; column < grid.width; column += 1) {
+      const lon = grid.lon(column);
       if (!polygons.some((rings) => insidePolygon(lon, lat, rings))) continue;
       const value = elevation(lon, lat);
       if (!Number.isFinite(value)) continue;
@@ -61,5 +56,5 @@ export function elevationExtremes(elevation, geometry, { maxSamples = 250_000 } 
       if (!lowest || value < lowest.elevation) lowest = { lon, lat, elevation: value };
     }
   }
-  return { cellMetres, highest, lowest };
+  return { cellMetres: grid.cellMetres, highest, lowest };
 }
