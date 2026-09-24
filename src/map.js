@@ -126,6 +126,130 @@ function basemapStyle(feature) {
   }
 }
 
+// -- Topographic style (the "Topo" basemap) -----------------------------------
+
+const fillStyle = (color) => new Style({ fill: new Fill({ color }) });
+
+/**
+ * Land cover by OpenMapTiles class. Drawn in full, because inside a training
+ * area this is the ground truth an analyst reads: forest, meadow, wetland.
+ */
+const TOPO_LANDCOVER = {
+  wood: fillStyle('#c9ddb3'),
+  grass: fillStyle('#e3ecd3'),
+  wetland: fillStyle('#d6e9e4'),
+  farmland: fillStyle('#f3f0e3'),
+  sand: fillStyle('#eee6d3'),
+  rock: fillStyle('#e3e0da'),
+  ice: fillStyle('#eef4f8'),
+};
+const TOPO_SCRUB = fillStyle('#d6e2c1');
+const TOPO_LANDUSE = {
+  residential: fillStyle('#ebe4dc'),
+  suburb: fillStyle('#ebe4dc'),
+  commercial: fillStyle('#e6e1e1'),
+  industrial: fillStyle('#e3e0e0'),
+  retail: fillStyle('#e6e1e1'),
+  railway: fillStyle('#e3e0e0'),
+  quarry: fillStyle('#e2ddd3'),
+  cemetery: fillStyle('#dde6d6'),
+};
+/**
+ * Military land is an outline only. OSM wraps a whole training area in one
+ * `landuse=military` polygon; filling or hatching it (as OpenTopoMap does)
+ * hides the terrain inside, which is exactly what IPB needs to see.
+ */
+const TOPO_MILITARY = new Style({
+  stroke: new Stroke({ color: 'rgba(142, 63, 160, 0.9)', width: 2, lineDash: [12, 5] }),
+});
+const TOPO_WATER = fillStyle('#b5d0ea');
+const TOPO_WATER_INK = '#6d9fd3';
+const TOPO_WATERWAY = {
+  river: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 1.8 }) }),
+  canal: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 1.2 }) }),
+  stream: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 0.9 }) }),
+  ditch: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 0.6 }) }),
+};
+const TOPO_BUILDING = new Style({
+  fill: new Fill({ color: '#cfc5b8' }),
+  stroke: new Stroke({ color: '#b9ad9d', width: 0.5 }),
+});
+const TOPO_TRACK_INK = '#8b6b3f';
+/** zIndex keeps every casing under every road fill, so junctions stay clean. */
+const TOPO_ROAD_FILL = {
+  motorway: '#e3a56a',
+  trunk: '#ecc07e',
+  primary: '#f4d493',
+  secondary: '#f7e6a8',
+  tertiary: '#ffffff',
+  minor: '#ffffff',
+  service: '#ffffff',
+};
+const TOPO_TRANSPORT_CACHE = new Map();
+
+function topoTransportStyle(roadClass) {
+  if (TOPO_TRANSPORT_CACHE.has(roadClass)) return TOPO_TRANSPORT_CACHE.get(roadClass);
+  let style;
+  if (roadClass === 'track') {
+    style = new Style({
+      stroke: new Stroke({ color: TOPO_TRACK_INK, width: 1.1, lineDash: [5, 3] }),
+      zIndex: 3,
+    });
+  } else if (roadClass === 'path') {
+    style = new Style({
+      stroke: new Stroke({ color: TOPO_TRACK_INK, width: 1, lineDash: [1.5, 2.5] }),
+      zIndex: 3,
+    });
+  } else if (roadClass === 'rail' || roadClass === 'transit') {
+    style = [
+      new Style({ stroke: new Stroke({ color: '#6b6b6b', width: 2 }), zIndex: 3 }),
+      new Style({
+        stroke: new Stroke({ color: '#ffffff', width: 1, lineDash: [6, 6] }),
+        zIndex: 4,
+      }),
+    ];
+  } else {
+    const key = TOPO_ROAD_FILL[roadClass] ? roadClass : 'minor';
+    style = [
+      new Style({
+        stroke: new Stroke({ color: '#8f8676', width: ROAD_WIDTH[key] + 1.4 }),
+        zIndex: 1,
+      }),
+      new Style({
+        stroke: new Stroke({ color: TOPO_ROAD_FILL[key], width: ROAD_WIDTH[key] }),
+        zIndex: 2,
+      }),
+    ];
+  }
+  TOPO_TRANSPORT_CACHE.set(roadClass, style);
+  return style;
+}
+
+function topoStyle(feature) {
+  const kind = feature.get('class');
+  switch (feature.get('layer')) {
+    case 'landcover':
+      if (kind === 'grass' && feature.get('subclass') === 'scrub') return TOPO_SCRUB;
+      return TOPO_LANDCOVER[kind];
+    case 'landuse':
+      return kind === 'military' ? TOPO_MILITARY : TOPO_LANDUSE[kind];
+    case 'water':
+      return TOPO_WATER;
+    case 'waterway':
+      return TOPO_WATERWAY[kind] ?? TOPO_WATERWAY.ditch;
+    case 'building':
+      return TOPO_BUILDING;
+    case 'transportation':
+      return topoTransportStyle(kind);
+    case 'boundary':
+      return boundaryStyle(feature.get('admin_level'));
+    default:
+      return undefined;
+  }
+}
+
+const VECTOR_STYLES = { roads: basemapStyle, topo: topoStyle };
+
 // -- Reference overlays: roads & water, place names, contours ------------------
 
 /** Basemap roads with a dark casing, water as outlines, so imagery stays visible. */
@@ -870,7 +994,8 @@ export function createMap(options) {
 
   /**
    * Choose what sits under the analysis layers, bottom to top:
-   *   vector   { attributions } shows the vector basemap, null hides it
+   *   vector   { attributions, style? } shows the vector basemap ('roads' default,
+   *            or 'topo'), null hides it
    *   imagery  XYZ spec over it; with an `extent`, the vector map shows around it;
    *            `dark: true` (satellite) switches grid and contours to light ink
    *   relief   XYZ spec drawn over both (translucent hillshade)
@@ -879,7 +1004,11 @@ export function createMap(options) {
    */
   function setBasemap({ vector = null, imagery = null, relief = null }) {
     basemapLayer.setVisible(Boolean(vector));
-    if (vector) basemapSource.setAttributions(vector.attributions);
+    if (vector) {
+      basemapSource.setAttributions(vector.attributions);
+      const style = VECTOR_STYLES[vector.style ?? 'roads'];
+      if (basemapLayer.getStyle() !== style) basemapLayer.setStyle(style);
+    }
     applyTileSpec(imageryLayer, imagery);
     applyTileSpec(reliefLayer, relief);
     darkBase = Boolean(imagery?.dark);

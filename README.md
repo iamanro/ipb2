@@ -6,7 +6,7 @@ public equipment catalogue, threat courses of action with an event matrix, and
 a classroom exercise layer (collection requirements, reports, RFIs, scenario
 clock, AAR export).
 Runs as one Node process against local SQLite databases — no Docker, no
-external services, no accounts. (Opt-in exceptions: the "Topo" and
+external services, no accounts. (Opt-in exceptions: the "OpenTopoMap" and
 "Satellite HD" basemaps stream online tiles and need internet; see
 [Basemaps](#basemaps).)
 
@@ -158,14 +158,23 @@ The map's top-right switch picks the basemap:
 | --------------- | ---------------------------------------------------------------------------------------------------------- | ------- |
 | Roads (default) | `vector.pmtiles`                                                                                           | yes     |
 | Terrain         | Roads plus hillshade rendered from `terrain.db`                                                            | yes     |
+| Topo            | Topographic style of `vector.pmtiles` + hillshade, contour lines and place names                           | yes     |
 | Satellite       | `satellite.mbtiles` inside its bounds, Roads around it                                                     | yes     |
-| Topo            | [OpenTopoMap](https://opentopomap.org): names, peaks, paths, contours (CC BY-SA)                           | **no**  |
+| OpenTopoMap     | [OpenTopoMap](https://opentopomap.org): names, peaks, paths, contours (CC BY-SA)                           | **no**  |
 | Satellite HD    | [Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9), sub-metre | **no**  |
 
+**Topo** is built for reading training areas: land cover (forest, meadow,
+scrub, wetland) is drawn everywhere, tracks are dashed and paths dotted, and
+military land (`landuse=military`) is only a dashed purple boundary. OSM wraps
+a whole training area in one military polygon; OpenTopoMap hatches it red and
+the Roads style fills it flat, both hiding the ground inside. Topo draws its
+contours and names itself, so those two overlays show as included while it is
+selected.
+
 A basemap whose data has not been built is greyed out, with the command to
-build it in its tooltip. Topo and Satellite HD are the only parts of the app
-that talk to an outside service, and only while selected. Both require the
-on-map attribution; neither allows bulk-caching its tiles for offline use.
+build it in its tooltip. OpenTopoMap and Satellite HD are the only parts of
+the app that talk to an outside service, and only while selected. Both require
+the on-map attribution; neither allows bulk-caching its tiles for offline use.
 
 Below the switch, **Layers** adds overlays that work over any basemap, all
 offline:

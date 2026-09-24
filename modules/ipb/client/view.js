@@ -36,13 +36,21 @@ const BASEMAPS = [
     missing: 'No elevation data yet: run node modules/terrain/tools/build_terrain.mjs',
   },
   {
+    id: 'topo',
+    label: 'Topo',
+    title: 'Offline topographic map: land cover, tracks, hillshade, contours and names',
+    missing: 'No elevation data yet: run node modules/terrain/tools/build_terrain.mjs',
+    // Drawn as part of this basemap; the Layers panel shows them locked on.
+    includes: ['contours', 'places'],
+  },
+  {
     id: 'satellite',
     label: 'Satellite',
     missing: 'No imagery yet: run node modules/terrain/tools/build_satellite.mjs',
   },
   {
     id: 'topo-online',
-    label: 'Topo',
+    label: 'OpenTopoMap',
     note: 'online',
     title: 'Streams OpenTopoMap; needs an internet connection',
   },
@@ -704,10 +712,10 @@ function basemapSpec(id) {
   const meta = state.terrainMeta;
   const vector = { attributions: meta?.basemap.attribution };
   if (id === 'roads') return { vector };
-  if (id === 'terrain') {
+  if (id === 'terrain' || id === 'topo') {
     return (
       meta && {
-        vector,
+        vector: { ...vector, style: id === 'topo' ? 'topo' : 'roads' },
         relief: {
           url: meta.hillshade.url,
           minZoom: meta.hillshade.minZoom,
@@ -736,10 +744,16 @@ function basemapSpec(id) {
   return { imagery: ONLINE_BASEMAPS[id] };
 }
 
-/** The map.setOverlays spec for the checked overlays that have data. */
+/** Overlays the selected basemap draws as part of itself. */
+function includedOverlays() {
+  return BASEMAPS.find((basemap) => basemap.id === state.basemap)?.includes ?? [];
+}
+
+/** The map.setOverlays spec for the checked (or included) overlays that have data. */
 function overlaySpec() {
   const meta = state.terrainMeta;
-  const on = (id) => state.overlays[id] && overlayAvailable(id);
+  const included = includedOverlays();
+  const on = (id) => (state.overlays[id] || included.includes(id)) && overlayAvailable(id);
   return {
     slope: on('slope') && {
       url: meta.slope.url,
@@ -762,19 +776,23 @@ function overlayAvailable(id) {
 }
 
 function renderOverlayList() {
+  const included = includedOverlays();
+  const basemapLabel = BASEMAPS.find((basemap) => basemap.id === state.basemap)?.label;
   elements.overlayList.replaceChildren(
     ...OVERLAYS.map((overlay) => {
       const available = overlayAvailable(overlay.id);
+      const locked = available && included.includes(overlay.id);
       const row = createElement('label', 'overlay-option');
       row.title = available ? '' : overlay.missing;
       row.classList.toggle('unavailable', !available);
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.dataset.overlay = overlay.id;
-      checkbox.checked = state.overlays[overlay.id];
-      checkbox.disabled = !available;
+      checkbox.checked = locked || state.overlays[overlay.id];
+      checkbox.disabled = !available || locked;
       const text = createElement('span', 'overlay-text', overlay.label);
-      if (overlay.hint) text.append(createElement('small', null, overlay.hint));
+      const hint = locked ? `included in ${basemapLabel}` : overlay.hint;
+      if (hint) text.append(createElement('small', null, hint));
       if (overlay.id === 'slope' && available) {
         const legend = createElement('span', 'overlay-legend');
         state.terrainMeta.slope.legend.forEach((entry) => {
@@ -818,6 +836,7 @@ function applyBasemap(id) {
   state.basemap = id;
   mapController.setBasemap(spec);
   renderBasemapSwitch();
+  applyOverlays(); // basemaps like Topo include overlays of their own
 }
 
 // --- Toast -------------------------------------------------------------------
@@ -2814,7 +2833,6 @@ export function mount({ root, status }) {
       elements.statusDataset.textContent = meta.elevation.dataset;
       // Now that attribution and local tile sources are known.
       applyBasemap(state.basemap);
-      applyOverlays();
     }),
     loadStudies(),
     loadEquipmentBookmarks().then(() => {

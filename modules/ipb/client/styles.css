@@ -570,6 +570,8 @@
       flex-direction: column;
       align-items: flex-end;
       gap: 6px;
+      /* Leave the top-left corner to the MGRS readout; wrap buttons instead. */
+      max-width: calc(100% - 320px);
     }
 
     .overlay-panel {
@@ -632,6 +634,8 @@
 
     .basemap-switch {
       display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
       border: 1px solid var(--line-dark);
       background: color-mix(in srgb, var(--white) 94%, transparent);
       backdrop-filter: blur(4px);
