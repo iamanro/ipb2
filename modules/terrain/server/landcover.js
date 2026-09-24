@@ -12,10 +12,16 @@ export const UNKNOWN = 255;
 const TILE_ZOOM = 14;
 
 /** Obstacle class contributed by one OpenMapTiles feature, or null to ignore. */
-function coverClass(layerName, properties) {
+export function coverClass(layerName, properties) {
   const kind = String(properties.class || properties.subclass || '');
   if (layerName === 'water') return kind === 'swimming_pool' ? null : NO_GO;
-  if (layerName === 'waterway') return ['river', 'canal', 'stream'].includes(kind) ? NO_GO : null;
+  if (layerName === 'waterway') {
+    // Rivers and canals stop vehicles; mapped streams are mostly fordable and
+    // only restrict them. Scoring every stream NO-GO cut dense stream networks
+    // into cells no corridor could cross.
+    if (kind === 'river' || kind === 'canal') return NO_GO;
+    return kind === 'stream' ? SLOW_GO : null;
+  }
   if (layerName === 'building') return NO_GO;
   if (layerName === 'landcover') {
     if (['wood', 'forest', 'scrub'].includes(kind)) return SLOW_GO;
@@ -78,6 +84,41 @@ export async function vectorLayerNames(file) {
   } finally {
     await source.close();
   }
+}
+
+/** Zoom at which OpenMapTiles carries mountain_peak points; few tiles per AOI. */
+const PEAK_ZOOM = 12;
+
+/**
+ * Named peaks (`mountain_peak`) inside bounds from the vector basemap, as
+ * `[{ name, ele, lon, lat }]`; [] when the archive has no peak layer.
+ */
+export async function namedPeaks(file, bounds) {
+  const source = fileSource(file);
+  const archive = new PMTiles(source);
+  const [west, south, east, north] = bounds;
+  const peaks = [];
+  try {
+    const range = tileRange(bounds, PEAK_ZOOM);
+    for (let x = range.xMin; x <= range.xMax; x += 1) {
+      for (let y = range.yMin; y <= range.yMax; y += 1) {
+        const tile = await archive.getZxy(PEAK_ZOOM, x, y);
+        if (!tile?.data) continue;
+        const layer = new VectorTile(new PbfReader(new Uint8Array(tile.data))).layers.mountain_peak;
+        for (let index = 0; index < (layer?.length ?? 0); index += 1) {
+          const feature = layer.feature(index);
+          const { name, ele } = feature.properties;
+          if (!name) continue;
+          const [lon, lat] = feature.toGeoJSON(x, y, PEAK_ZOOM).geometry.coordinates;
+          if (lon < west || lon > east || lat < south || lat > north) continue;
+          peaks.push({ name: String(name), ele: Number(ele) || null, lon, lat });
+        }
+      }
+    }
+  } finally {
+    await source.close();
+  }
+  return peaks;
 }
 
 /**

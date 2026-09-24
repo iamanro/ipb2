@@ -170,79 +170,109 @@ export function openTerrain(file) {
   }
 
   /**
-   * Visibility grid around an observer. Cells are `0` hidden, `1` visible,
-   * `255` outside the elevation model. Row 0 is the northern edge so the client
-   * can paint the grid straight onto a canvas.
+   * Combined visibility grid for one or more observers (observation posts).
+   * Cells are `0` dead ground (inside some observer's radius, seen by none),
+   * `1` seen by exactly one observer, `2` seen by two or more, `255` outside
+   * every radius or the elevation model. Row 0 is the northern edge so the
+   * client can paint the grid straight onto a canvas.
    */
   function viewshed({
-    lon,
-    lat,
+    observers,
     radiusMetres = 5000,
     observerHeight = 1.8,
     targetHeight = 1.8,
     cellMetres = 50,
   }) {
-    const ground = elevation(lon, lat);
-    if (Number.isNaN(ground)) throw new Error('The observer is outside the elevation model.');
-    const eye = ground + observerHeight;
-    const lonScale = longitudeScale(lat);
-    const halfCells = Math.min(Math.ceil(radiusMetres / cellMetres), 300);
-    const size = halfCells * 2 + 1;
-    const values = new Uint8Array(size * size);
-    const stepMetres = Math.max(cellMetres / 2, 15);
-    for (let row = 0; row < size; row += 1) {
-      const northing = (halfCells - row) * cellMetres;
-      const cellLat = lat + northing / METRES_PER_DEGREE_LATITUDE;
-      for (let column = 0; column < size; column += 1) {
-        const easting = (column - halfCells) * cellMetres;
-        const index = row * size + column;
-        const range = Math.hypot(easting, northing);
-        if (range > radiusMetres) {
-          values[index] = 255;
-          continue;
-        }
-        const cellLon = lon + easting / lonScale;
-        const targetGround = elevation(cellLon, cellLat);
-        if (Number.isNaN(targetGround)) {
-          values[index] = 255;
-          continue;
-        }
-        if (range < cellMetres) {
-          values[index] = 1;
-          continue;
-        }
-        const aim = targetGround + targetHeight - curvatureDrop(range);
-        const steps = Math.max(Math.ceil(range / stepMetres), 2);
-        let visible = true;
-        for (let step = 1; step < steps; step += 1) {
-          const t = step / steps;
-          const sampleLon = lon + (easting * t) / lonScale;
-          const sampleLat = lat + (northing * t) / METRES_PER_DEGREE_LATITUDE;
-          const terrain = elevation(sampleLon, sampleLat) - curvatureDrop(range * t);
-          if (Number.isNaN(terrain)) continue;
-          if (terrain > eye + (aim - eye) * t) {
-            visible = false;
-            break;
+    const posts = observers.map(({ lon, lat }) => {
+      const ground = elevation(lon, lat);
+      if (Number.isNaN(ground)) {
+        throw new Error('An observer is outside the elevation model.');
+      }
+      return { lon, lat, ground, eye: ground + observerHeight };
+    });
+    // One metric grid over every observer's circle, at the observers' mean
+    // latitude; coarsened if it would exceed the old single-observer cap.
+    const midLat = posts.reduce((sum, post) => sum + post.lat, 0) / posts.length;
+    const lonScale = longitudeScale(midLat);
+    const eastings = posts.map((post) => (post.lon - posts[0].lon) * lonScale);
+    const northings = posts.map((post) => (post.lat - posts[0].lat) * METRES_PER_DEGREE_LATITUDE);
+    const minE = Math.min(...eastings) - radiusMetres;
+    const maxE = Math.max(...eastings) + radiusMetres;
+    const minN = Math.min(...northings) - radiusMetres;
+    const maxN = Math.max(...northings) + radiusMetres;
+    const maxCells = 601 * 601;
+    const naturalCells = ((maxE - minE) / cellMetres) * ((maxN - minN) / cellMetres);
+    const cell =
+      naturalCells > maxCells ? cellMetres * Math.sqrt(naturalCells / maxCells) : cellMetres;
+    const width = Math.ceil((maxE - minE) / cell);
+    const height = Math.ceil((maxN - minN) / cell);
+    const west = posts[0].lon + minE / lonScale;
+    const north = posts[0].lat + maxN / METRES_PER_DEGREE_LATITUDE;
+    const stepMetres = Math.max(cell / 2, 15);
+
+    /** Whether `post` sees the target cell `range` metres away at offset (dx, dy). */
+    function sees(post, dx, dy, range, targetGround) {
+      if (range < cell) return true;
+      const aim = targetGround + targetHeight - curvatureDrop(range);
+      const steps = Math.max(Math.ceil(range / stepMetres), 2);
+      for (let step = 1; step < steps; step += 1) {
+        const t = step / steps;
+        const terrain =
+          elevation(
+            post.lon + (dx * t) / lonScale,
+            post.lat + (dy * t) / METRES_PER_DEGREE_LATITUDE,
+          ) - curvatureDrop(range * t);
+        if (!Number.isNaN(terrain) && terrain > post.eye + (aim - post.eye) * t) return false;
+      }
+      return true;
+    }
+
+    const values = new Uint8Array(width * height).fill(255);
+    let visibleCells = 0;
+    let overlapCells = 0;
+    let deadCells = 0;
+    for (let row = 0; row < height; row += 1) {
+      const cellLat = north - ((row + 0.5) * cell) / METRES_PER_DEGREE_LATITUDE;
+      for (let column = 0; column < width; column += 1) {
+        const cellLon = west + ((column + 0.5) * cell) / lonScale;
+        let inRange = false;
+        let seenBy = 0;
+        let targetGround = null;
+        for (const post of posts) {
+          const dx = (cellLon - post.lon) * lonScale;
+          const dy = (cellLat - post.lat) * METRES_PER_DEGREE_LATITUDE;
+          const range = Math.hypot(dx, dy);
+          if (range > radiusMetres) continue;
+          targetGround ??= elevation(cellLon, cellLat);
+          if (Number.isNaN(targetGround)) break;
+          inRange = true;
+          if (sees(post, dx, dy, range, targetGround)) {
+            seenBy += 1;
+            if (seenBy === 2) break;
           }
         }
-        values[index] = visible ? 1 : 0;
+        if (!inRange) continue;
+        values[row * width + column] = seenBy;
+        if (seenBy === 0) deadCells += 1;
+        else visibleCells += 1;
+        if (seenBy === 2) overlapCells += 1;
       }
     }
-    const extent = [
-      lon - (halfCells * cellMetres) / lonScale,
-      lat - (halfCells * cellMetres) / METRES_PER_DEGREE_LATITUDE,
-      lon + (halfCells * cellMetres) / lonScale,
-      lat + (halfCells * cellMetres) / METRES_PER_DEGREE_LATITUDE,
-    ];
-    const visibleCells = values.reduce((sum, value) => sum + (value === 1 ? 1 : 0), 0);
     return {
-      observer: { lon, lat, ground, eye },
+      observers: posts,
       radiusMetres,
-      cellMetres,
-      extent,
-      width: size,
-      height: size,
+      cellMetres: cell,
+      extent: [
+        west,
+        north - (height * cell) / METRES_PER_DEGREE_LATITUDE,
+        west + (width * cell) / lonScale,
+        north,
+      ],
+      width,
+      height,
       visibleCells,
+      overlapCells,
+      deadCells,
       values,
     };
   }

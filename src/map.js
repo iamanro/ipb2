@@ -484,14 +484,18 @@ function buildFeatureStyle(feature, iconCache) {
   const color = properties.color || config.color;
   const geometryType = geometry.getType();
   const styles = [];
+  // Suggestions not yet accepted: same colour as the layer, but hollow/dashed.
+  const draft = properties.draft === true;
 
   if (geometryType === 'Point' || geometryType === 'MultiPoint') {
     styles.push(
       new Style({
         image: new CircleStyle({
           radius: 7,
-          fill: new Fill({ color: withAlpha(color, 0.9) }),
-          stroke: new Stroke({ color: '#1b1b1b', width: 1.5 }),
+          fill: new Fill({ color: draft ? 'rgba(255, 255, 255, 0.85)' : withAlpha(color, 0.9) }),
+          stroke: draft
+            ? new Stroke({ color, width: 2.5, lineDash: [3, 2] })
+            : new Stroke({ color: '#1b1b1b', width: 1.5 }),
         }),
         text: label ? buildLabelText(label, 'Point') : undefined,
       }),
@@ -501,7 +505,11 @@ function buildFeatureStyle(feature, iconCache) {
 
   styles.push(
     new Style({
-      stroke: new Stroke({ color, width: config.width, lineDash: config.dash || undefined }),
+      stroke: new Stroke({
+        color: draft ? withAlpha(color, 0.85) : color,
+        width: config.width,
+        lineDash: draft ? [10, 6] : config.dash || undefined,
+      }),
       fill: config.fillAlpha > 0 ? new Fill({ color: withAlpha(color, config.fillAlpha) }) : null,
       text:
         label && layerName !== 'nai' && layerName !== 'tai'

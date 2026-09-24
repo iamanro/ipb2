@@ -11,10 +11,12 @@ import {
 } from '../../../server/http.js';
 import { encodePng } from '../../../server/png.js';
 import { contourTile } from './contours.js';
-import { openTerrain } from './dem.js';
+import { suggestAvenues } from './corridors.js';
+import { metresBetween, openTerrain } from './dem.js';
 import { SLOPE_LEGEND, renderHillshade, renderSlopeClasses } from './rasterTiles.js';
 import { openImagery } from './imagery.js';
-import { vectorLayerNames } from './landcover.js';
+import { keyTerrainCandidates } from './keyTerrain.js';
+import { namedPeaks, vectorLayerNames } from './landcover.js';
 import { LEGEND, mobilityOverlay } from './mobility.js';
 
 const ID = 'terrain';
@@ -36,6 +38,10 @@ const CONTOUR_MAX_ZOOM = 14;
 const RASTER_MAX_ZOOM = 14;
 const RASTER_MIN_ZOOM = 5;
 const TILE_CACHE_LIMIT = 1024;
+/** Observation posts in one combined viewshed; each adds a full visibility pass. */
+const MAX_OBSERVERS = 10;
+/** A key-terrain candidate takes the name of a mapped peak this close to it. */
+const NAMED_PEAK_RADIUS = 400;
 /** Tile URLs carry the data's build time, so a rebuilt dataset gets new URLs. */
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
@@ -46,6 +52,18 @@ function point(query, name) {
     throw new HttpError(400, `The ${name} must be "lon,lat".`);
   }
   return { lon: parts[0], lat: parts[1] };
+}
+
+/** `"lon,lat;lon,lat;…"` → `[{ lon, lat }]`, between 1 and `max` points. */
+function pointList(query, name, max) {
+  const raw = (query.get(name) || '').split(';').filter(Boolean);
+  if (!raw.length || raw.length > max) {
+    throw new HttpError(
+      400,
+      `The ${name} must list 1 to ${max} "lon,lat" points separated by ";".`,
+    );
+  }
+  return raw.map((text) => point(new URLSearchParams({ [name]: text }), name));
 }
 
 function boundsParameter(query) {
@@ -223,10 +241,10 @@ export default {
     }
     if (route === 'viewshed') {
       const model = elevationModel();
-      const at = point(query, 'at');
+      const observers = pointList(query, 'at', MAX_OBSERVERS);
       try {
         const grid = model.viewshed({
-          ...at,
+          observers,
           radiusMetres: numberParameter(query, 'radius', 5000, 200, 25000),
           observerHeight: numberParameter(query, 'observer', 1.8, 0, 500),
           targetHeight: numberParameter(query, 'target', 1.8, 0, 500),
@@ -236,6 +254,60 @@ export default {
       } catch (error) {
         throw new HttpError(422, error.message);
       }
+      return;
+    }
+    if (route === 'avenues') {
+      const model = elevationModel();
+      // The corridor search runs on the same MCOO the analyst sees in step 2.
+      const grid = await mobilityOverlay({
+        terrain: model,
+        basemapFile: BASEMAP,
+        bounds: boundsParameter(query),
+        cellMetres: numberParameter(query, 'cell', 100, 20, 500),
+      });
+      try {
+        sendJson(
+          response,
+          suggestAvenues(grid, {
+            from: point(query, 'from'),
+            to: point(query, 'to'),
+            corridorWidth: numberParameter(query, 'width', 500, 50, 10000),
+            count: numberParameter(query, 'count', 3, 1, 5),
+          }),
+        );
+      } catch (error) {
+        throw new HttpError(422, error.message);
+      }
+      return;
+    }
+    if (route === 'key-terrain') {
+      const model = elevationModel();
+      const bounds = boundsParameter(query);
+      // Ranked by what each summit overlooks: a coarse (100 m) single-post
+      // viewshed is enough to compare candidates and keeps 16 runs quick.
+      const radiusMetres = numberParameter(query, 'radius', 3000, 500, 10000);
+      const visibleArea = (lon, lat) => {
+        const grid = model.viewshed({ observers: [{ lon, lat }], radiusMetres, cellMetres: 100 });
+        return (grid.visibleCells * grid.cellMetres ** 2) / 1e6;
+      };
+      const candidates = keyTerrainCandidates({
+        elevation: model.elevation,
+        bounds,
+        minProminence: numberParameter(query, 'prominence', 30, 5, 500),
+        limit: numberParameter(query, 'limit', 8, 1, 20),
+        visibleArea,
+      });
+      const peaks = await namedPeaks(BASEMAP, bounds);
+      sendJson(response, {
+        radiusMetres,
+        candidates: candidates.map((candidate) => {
+          const named = peaks
+            .map((peak) => ({ peak, distance: metresBetween(peak, candidate) }))
+            .filter(({ distance }) => distance <= NAMED_PEAK_RADIUS)
+            .sort((a, b) => a.distance - b.distance)[0]?.peak;
+          return { ...candidate, name: named?.name ?? null };
+        }),
+      });
       return;
     }
     if (route === 'mobility') {

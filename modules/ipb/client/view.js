@@ -105,9 +105,11 @@ const FEATURE_LAYERS = {
 const OAKOC_LAYERS = ['key-terrain', 'avenue', 'obstacle'];
 
 const MOBILITY_CELL_SIZES = [50, 100, 200];
+/** 0 dead ground, 1 seen by one post, 2 seen by two or more (dem.js viewshed). */
 const VIEWSHED_PALETTE = {
   0: 'rgba(31, 65, 76, 0.35)',
-  1: 'rgba(216, 91, 43, 0.55)',
+  1: 'rgba(216, 91, 43, 0.45)',
+  2: 'rgba(216, 91, 43, 0.75)',
   255: null,
 };
 
@@ -186,6 +188,10 @@ function createState() {
     viewshedForm: { radius: 3000, observer: 1.8, target: 1.8 },
     lightForm: { start: localDateInputValue(new Date()), days: 7 },
     viewshedResult: null,
+    /** Observation posts of the combined viewshed, in the order added. */
+    viewshedPosts: [],
+    keyTerrain: { prominence: 30, running: false, candidates: null },
+    avenues: { width: 500, picks: [], running: false, routes: null },
     mobility: { cell: 100, opacity: 0.55, grid: null, running: false },
     selectedFeatureId: null,
     selectedCoaId: null,
@@ -570,6 +576,10 @@ async function selectStudy(id, { preserveFeature = false } = {}) {
   state.losPicks = [];
   state.losResult = null;
   state.viewshedResult = null;
+  state.viewshedPosts = [];
+  state.keyTerrain.candidates = null;
+  state.avenues.picks = [];
+  state.avenues.routes = null;
   state.mobility.grid = null;
   state.tool = null;
   renderEmptyState();
@@ -691,16 +701,43 @@ function visibleFeatures() {
         : sketches),
     );
   }
-  state.losPicks.forEach((pick, index) => {
-    features.push({
-      id: `los-pick-${index}`,
-      layer: 'note',
-      kind: 'point',
-      label: index === 0 ? 'Observer' : 'Target',
-      geometry: { type: 'Point', coordinates: [pick.lon, pick.lat] },
-      properties: {},
-    });
+  const marker = (id, label, { lon, lat }, layer = 'note', properties = {}) => ({
+    id,
+    layer,
+    kind: 'point',
+    label,
+    geometry: { type: 'Point', coordinates: [lon, lat] },
+    properties,
   });
+  state.losPicks.forEach((pick, index) => {
+    features.push(marker(`los-pick-${index}`, index === 0 ? 'Observer' : 'Target', pick));
+  });
+  state.viewshedPosts.forEach((post, index) => {
+    features.push(marker(`viewshed-post-${index}`, `OP ${index + 1}`, post));
+  });
+  if (state.step === 2) {
+    // Suggestions shown dashed until the analyst accepts them as features.
+    (state.keyTerrain.candidates ?? []).forEach((candidate, index) => {
+      features.push(
+        marker(`key-terrain-draft-${index}`, keyTerrainLabel(candidate), candidate, 'key-terrain', {
+          draft: true,
+        }),
+      );
+    });
+    state.avenues.picks.forEach((pick, index) => {
+      features.push(marker(`avenue-pick-${index}`, index === 0 ? 'Start' : 'Objective', pick));
+    });
+    (state.avenues.routes ?? []).forEach((route) => {
+      features.push({
+        id: `avenue-draft-${route.option}`,
+        layer: 'avenue',
+        kind: 'line',
+        label: `Option ${route.option}`,
+        geometry: { type: 'LineString', coordinates: route.coordinates },
+        properties: { draft: true },
+      });
+    });
+  }
   return features;
 }
 
@@ -971,14 +1008,41 @@ function openContextMenu(x, y, items) {
   }, 0);
 }
 
+/**
+ * Copy via the legacy selection path. `navigator.clipboard` only exists in
+ * secure contexts, so opening the app by IP over plain http needs this; it
+ * works because it runs inside the menu click's user activation.
+ */
+function copyWithSelection(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.append(area);
+  area.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+  }
+}
+
 async function copyCoordinates(lon, lat) {
   const text = formatMgrs(lon, lat);
-  try {
-    await navigator.clipboard.writeText(text);
-    showToast(`Copied ${text}`);
-  } catch {
-    showToast(`${text} (clipboard unavailable)`);
+  let copied = false;
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch {
+      // Permission denied: fall through to the selection path.
+    }
   }
+  copied ||= copyWithSelection(text);
+  showToast(copied ? `Copied ${text}` : `${text} (clipboard unavailable)`);
 }
 
 /** Feeds the existing pick-two-points line-of-sight flow without requiring
@@ -1046,7 +1110,7 @@ function buildMapContextMenu(lon, lat) {
         { label: 'Set as target', action: () => setLosPoint(lon, lat, 'target') },
       ],
     },
-    { label: 'Run viewshed here', action: () => handleViewshedPick(lon, lat) },
+    { label: 'Add observation post here', action: () => handleViewshedPick(lon, lat) },
     { label: 'Draw here', submenu: drawHereItems(lon, lat) },
     { label: 'Show elevation here', action: () => showElevationReadout(lon, lat) },
   ];
@@ -1095,7 +1159,9 @@ function onMapClick({ lon, lat }) {
   }
   if (tool.type === 'viewshed-pick') {
     handleViewshedPick(lon, lat);
+    return;
   }
+  if (tool.type === 'avenue-pick') handleAvenuePick(lon, lat);
 }
 
 async function handleAoiDrawn(geometry) {
@@ -1641,18 +1707,43 @@ async function runLineOfSight() {
   }
 }
 
+/** Matches the server's cap (routes.js MAX_OBSERVERS). */
+const MAX_VIEWSHED_POSTS = 10;
+
 function armViewshedTool() {
   state.tool = { type: 'viewshed-pick' };
-  state.viewshedResult = null;
-  renderMapHint('Click the observer position.');
+  renderMapHint('Click to add an observation post.');
   renderToolPanel();
 }
 
-async function handleViewshedPick(lon, lat) {
+/** Adds an observation post and reruns the combined viewshed. */
+function handleViewshedPick(lon, lat) {
   state.tool = null;
   renderMapHint('');
+  if (state.viewshedPosts.length >= MAX_VIEWSHED_POSTS) {
+    showError(elements.worksheet2, `At most ${MAX_VIEWSHED_POSTS} observation posts.`);
+    return;
+  }
+  state.viewshedPosts.push({ lon, lat });
+  syncMapFeatures();
+  runViewshed();
+}
+
+function clearViewshedPosts() {
+  state.viewshedPosts = [];
+  state.viewshedResult = null;
+  paintViewshed();
+  syncMapFeatures();
+  renderStep2Worksheet();
+  renderToolPanel();
+}
+
+const squareKm = (cells, cellMetres) => (cells * cellMetres ** 2) / 1_000_000;
+
+async function runViewshed() {
+  const posts = [...state.viewshedPosts];
   const params = new URLSearchParams({
-    at: `${lon},${lat}`,
+    at: posts.map(({ lon, lat }) => `${lon},${lat}`).join(';'),
     radius: String(state.viewshedForm.radius),
     observer: String(state.viewshedForm.observer),
     target: String(state.viewshedForm.target),
@@ -1663,25 +1754,170 @@ async function handleViewshedPick(lon, lat) {
     state.viewshedResult = grid;
     paintViewshed();
     renderStep2Worksheet();
-    const visibleAreaKm = (grid.visibleCells * grid.cellMetres * grid.cellMetres) / 1_000_000;
     const analysis = await requestJson(`${API}/studies/${state.studyId}/analyses`, {
       method: 'POST',
       body: {
         kind: 'viewshed',
-        params: { lon, lat, ...state.viewshedForm },
+        params: { observers: posts, ...state.viewshedForm },
         summary: {
-          visibleCells: grid.visibleCells,
+          observers: posts.length,
           cellMetres: grid.cellMetres,
           radiusMetres: grid.radiusMetres,
-          visibleAreaSquareKm: visibleAreaKm,
+          visibleAreaSquareKm: squareKm(grid.visibleCells, grid.cellMetres),
+          overlapAreaSquareKm: squareKm(grid.overlapCells, grid.cellMetres),
+          deadAreaSquareKm: squareKm(grid.deadCells, grid.cellMetres),
         },
       },
     });
     state.study.analyses.push(analysis);
   } catch (error) {
+    // The post just added (e.g. outside the elevation data) is dropped again.
+    const added = posts.at(-1);
+    state.viewshedPosts = state.viewshedPosts.filter((post) => post !== added);
+    syncMapFeatures();
     showError(elements.worksheet2, error.message);
   } finally {
     renderToolPanel();
+  }
+}
+
+// --- Step 2: key terrain candidates ------------------------------------------
+
+function keyTerrainLabel(candidate) {
+  return `${candidate.name ?? 'Hill'} ${Math.round(candidate.elevation)} m`;
+}
+
+async function findKeyTerrain() {
+  const bounds = state.study.study.bounds;
+  if (!bounds) return;
+  state.keyTerrain.running = true;
+  renderToolPanel();
+  try {
+    const params = new URLSearchParams({
+      bounds: bounds.join(','),
+      prominence: String(state.keyTerrain.prominence),
+    });
+    const { candidates } = await requestJson(`${TERRAIN_API}/key-terrain?${params}`);
+    state.keyTerrain.candidates = candidates;
+    syncMapFeatures();
+  } catch (error) {
+    showError(elements.toolPanel, error.message);
+  } finally {
+    state.keyTerrain.running = false;
+    renderToolPanel();
+  }
+}
+
+function dropKeyTerrainCandidate(candidate) {
+  state.keyTerrain.candidates = state.keyTerrain.candidates.filter((entry) => entry !== candidate);
+  syncMapFeatures();
+  renderToolPanel();
+}
+
+async function acceptKeyTerrainCandidate(candidate) {
+  try {
+    const feature = await requestJson(`${API}/studies/${state.studyId}/features`, {
+      method: 'POST',
+      body: {
+        layer: 'key-terrain',
+        kind: 'point',
+        label: keyTerrainLabel(candidate),
+        geometry: { type: 'Point', coordinates: [candidate.lon, candidate.lat] },
+        properties: {
+          prominence: candidate.prominence,
+          visibleAreaSquareKm: candidate.visibleAreaSquareKm,
+        },
+      },
+    });
+    state.study.features.push(feature);
+    dropKeyTerrainCandidate(candidate);
+    renderStep2Worksheet();
+  } catch (error) {
+    showError(elements.toolPanel, error.message);
+  }
+}
+
+// --- Step 2: avenues of approach ---------------------------------------------
+
+/** Corridor widths offered, in metres (a unit's frontage when moving). */
+const AVENUE_WIDTHS = [250, 500, 1000, 2000];
+
+function armAvenueTool() {
+  cancelActiveTool();
+  state.tool = { type: 'avenue-pick' };
+  state.avenues.picks = [];
+  state.avenues.routes = null;
+  renderMapHint('Click where the enemy starts, then the objective.');
+  syncMapFeatures();
+  renderToolPanel();
+}
+
+function handleAvenuePick(lon, lat) {
+  state.avenues.picks.push({ lon, lat });
+  syncMapFeatures();
+  if (state.avenues.picks.length < 2) {
+    renderMapHint('Click the objective.');
+    return;
+  }
+  state.tool = null;
+  renderMapHint('');
+  runAvenues();
+}
+
+async function runAvenues() {
+  const [from, to] = state.avenues.picks;
+  state.avenues.running = true;
+  renderToolPanel();
+  try {
+    const params = new URLSearchParams({
+      bounds: state.study.study.bounds.join(','),
+      from: `${from.lon},${from.lat}`,
+      to: `${to.lon},${to.lat}`,
+      width: String(state.avenues.width),
+      cell: String(state.mobility.cell),
+    });
+    const { routes } = await requestJson(`${TERRAIN_API}/avenues?${params}`);
+    // Stable "Option n" names; "AA n" is reserved for saved avenues.
+    state.avenues.routes = routes.map((route, index) => ({ ...route, option: index + 1 }));
+  } catch (error) {
+    state.avenues.routes = null;
+    showError(elements.toolPanel, error.message);
+  } finally {
+    state.avenues.running = false;
+    syncMapFeatures();
+    renderToolPanel();
+  }
+}
+
+function dropAvenueRoute(route) {
+  state.avenues.routes = state.avenues.routes.filter((entry) => entry !== route);
+  if (!state.avenues.routes.length) state.avenues.picks = [];
+  syncMapFeatures();
+  renderToolPanel();
+}
+
+async function acceptAvenueRoute(route) {
+  const existing = state.study.features.filter((feature) => feature.layer === 'avenue').length;
+  try {
+    const feature = await requestJson(`${API}/studies/${state.studyId}/features`, {
+      method: 'POST',
+      body: {
+        layer: 'avenue',
+        kind: 'line',
+        label: `AA ${existing + 1}`,
+        geometry: { type: 'LineString', coordinates: route.coordinates },
+        properties: {
+          corridorWidthMetres: state.avenues.width,
+          lengthMetres: Math.round(route.lengthMetres),
+          goShare: route.goShare,
+        },
+      },
+    });
+    state.study.features.push(feature);
+    dropAvenueRoute(route);
+    renderStep2Worksheet();
+  } catch (error) {
+    showError(elements.toolPanel, error.message);
   }
 }
 
@@ -1782,15 +2018,35 @@ function renderStep2Tools() {
       state.viewshedForm.target = value;
     }),
   );
+  const viewshedActions = createElement('div', 'button-row');
   const viewshedButton = createElement(
     'button',
     'chip-button',
-    state.tool?.type === 'viewshed-pick' ? 'Picking…' : 'Pick observer',
+    state.tool?.type === 'viewshed-pick' ? 'Picking…' : 'Add observation post',
   );
   viewshedButton.type = 'button';
+  viewshedButton.disabled = state.viewshedPosts.length >= MAX_VIEWSHED_POSTS;
   viewshedButton.addEventListener('click', armViewshedTool);
-  viewshedGroup.append(viewshedButton);
+  viewshedActions.append(viewshedButton);
+  if (state.viewshedPosts.length) {
+    const clearButton = createElement('button', 'text-button', 'Clear posts');
+    clearButton.type = 'button';
+    clearButton.addEventListener('click', clearViewshedPosts);
+    viewshedActions.append(clearButton);
+  }
+  viewshedGroup.append(viewshedActions);
+  if (state.viewshedPosts.length) {
+    viewshedGroup.append(
+      createElement(
+        'p',
+        'tool-hint',
+        `${state.viewshedPosts.length} post${state.viewshedPosts.length > 1 ? 's' : ''}: dark = dead ground, deeper orange = seen by two or more.`,
+      ),
+    );
+  }
   container.append(viewshedGroup);
+
+  container.append(renderKeyTerrainTools(bounds), renderAvenueTools(bounds));
 
   const oakocGroup = createElement('div', 'field-group');
   oakocGroup.append(createElement('h3', null, 'OAKOC overlays'));
@@ -1803,6 +2059,132 @@ function renderStep2Tools() {
   container.append(oakocGroup);
 
   return container;
+}
+
+/** A tool-panel list row: summary text plus Add/Dismiss style actions. */
+function suggestionRow(text, detail, actions) {
+  const row = createElement('li', 'suggestion-row');
+  const body = createElement('div', 'suggestion-text');
+  body.append(createElement('strong', null, text), createElement('small', null, detail));
+  const buttons = createElement('div', 'button-row');
+  actions.forEach(([label, className, handler]) => {
+    const button = createElement('button', className, label);
+    button.type = 'button';
+    button.addEventListener('click', handler);
+    buttons.append(button);
+  });
+  row.append(body, buttons);
+  return row;
+}
+
+function renderKeyTerrainTools(bounds) {
+  const group = createElement('div', 'field-group');
+  group.append(createElement('h3', null, 'Key terrain candidates'));
+  if (!bounds) {
+    group.append(createElement('p', 'tool-hint', 'Draw and save an AOI in Step 1 first.'));
+    return group;
+  }
+  const label = createElement('label', 'inline-field');
+  label.append(createElement('span', null, 'Min. prominence'));
+  const select = document.createElement('select');
+  [20, 30, 50, 80].forEach((metres) => select.append(new Option(`${metres} m`, String(metres))));
+  select.value = String(state.keyTerrain.prominence);
+  select.addEventListener('change', () => {
+    state.keyTerrain.prominence = Number(select.value);
+  });
+  label.append(select);
+  const run = createElement(
+    'button',
+    'chip-button',
+    state.keyTerrain.running ? 'Searching…' : 'Find candidates',
+  );
+  run.type = 'button';
+  run.disabled = state.keyTerrain.running;
+  run.addEventListener('click', findKeyTerrain);
+  group.append(
+    label,
+    run,
+    createElement(
+      'p',
+      'tool-hint',
+      'Summits standing out from their surroundings, ranked by the ground they overlook within 3 km.',
+    ),
+  );
+  const candidates = state.keyTerrain.candidates;
+  if (candidates && !candidates.length) {
+    group.append(createElement('p', 'panel-note', 'No summits reach that prominence in the AOI.'));
+  } else if (candidates) {
+    const list = createElement('ul', 'suggestion-list');
+    candidates.forEach((candidate) => {
+      list.append(
+        suggestionRow(
+          keyTerrainLabel(candidate),
+          `${formatMgrs(candidate.lon, candidate.lat, 4)} · +${Math.round(candidate.prominence)} m · overlooks ${formatArea(candidate.visibleAreaSquareKm)}`,
+          [
+            ['Add', 'chip-button', () => acceptKeyTerrainCandidate(candidate)],
+            ['Dismiss', 'text-button', () => dropKeyTerrainCandidate(candidate)],
+          ],
+        ),
+      );
+    });
+    group.append(list);
+  }
+  return group;
+}
+
+function renderAvenueTools(bounds) {
+  const group = createElement('div', 'field-group');
+  group.append(createElement('h3', null, 'Avenues of approach'));
+  if (!bounds) {
+    group.append(createElement('p', 'tool-hint', 'Draw and save an AOI in Step 1 first.'));
+    return group;
+  }
+  const label = createElement('label', 'inline-field');
+  label.append(createElement('span', null, 'Corridor width'));
+  const select = document.createElement('select');
+  AVENUE_WIDTHS.forEach((metres) =>
+    select.append(new Option(formatMetres(metres), String(metres))),
+  );
+  select.value = String(state.avenues.width);
+  select.addEventListener('change', () => {
+    state.avenues.width = Number(select.value);
+  });
+  label.append(select);
+  const pickLabel = state.avenues.running
+    ? 'Searching…'
+    : state.tool?.type === 'avenue-pick'
+      ? 'Picking…'
+      : 'Pick start and objective';
+  const pick = createElement('button', 'chip-button', pickLabel);
+  pick.type = 'button';
+  pick.disabled = state.avenues.running;
+  pick.addEventListener('click', armAvenueTool);
+  group.append(
+    label,
+    pick,
+    createElement(
+      'p',
+      'tool-hint',
+      `Routes through the MCOO (${state.mobility.cell} m cells) that keep the whole corridor off NO-GO ground, preferring GO over SLOW-GO.`,
+    ),
+  );
+  if (state.avenues.routes?.length) {
+    const list = createElement('ul', 'suggestion-list');
+    state.avenues.routes.forEach((route) => {
+      list.append(
+        suggestionRow(
+          `Option ${route.option} · ${formatMetres(route.lengthMetres)}`,
+          `${Math.round(route.goShare * 100)}% GO · ${Math.round(route.slowGoShare * 100)}% SLOW-GO`,
+          [
+            ['Save', 'chip-button', () => acceptAvenueRoute(route)],
+            ['Dismiss', 'text-button', () => dropAvenueRoute(route)],
+          ],
+        ),
+      );
+    });
+    group.append(list);
+  }
+  return group;
 }
 
 function renderLosChart(result) {
@@ -1986,28 +2368,57 @@ function renderStep2Worksheet() {
   const viewshedSection = createElement('section', 'worksheet-block');
   viewshedSection.append(createElement('h4', null, 'Viewshed'));
   const savedViewshed = latestAnalysis('viewshed');
+  // Older saved runs (single observer) carry only visibleAreaSquareKm.
+  const describeViewshed = ({
+    observers = 1,
+    visibleAreaSquareKm,
+    overlapAreaSquareKm,
+    deadAreaSquareKm,
+    radiusMetres,
+  }) =>
+    [
+      `${observers} observation post${observers > 1 ? 's' : ''}, ${formatMetres(radiusMetres)} radius.`,
+      `Seen: ${formatArea(visibleAreaSquareKm)}`,
+      overlapAreaSquareKm !== undefined && observers > 1
+        ? `seen by two or more: ${formatArea(overlapAreaSquareKm)}`
+        : null,
+      deadAreaSquareKm !== undefined ? `dead ground: ${formatArea(deadAreaSquareKm)}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
   if (!state.viewshedResult && savedViewshed) {
-    const summary = savedViewshed.summary;
     viewshedSection.append(
-      createElement(
-        'p',
-        null,
-        `Visible area ${formatArea(summary.visibleAreaSquareKm)} within ${formatMetres(summary.radiusMetres)} of the observer.`,
-      ),
-      createElement('p', 'panel-note', 'Saved run. Pick an observer to paint it again.'),
+      createElement('p', null, describeViewshed(savedViewshed.summary)),
+      createElement('p', 'panel-note', 'Saved run. Add observation posts to paint it again.'),
     );
   } else if (!state.viewshedResult) {
     viewshedSection.append(createElement('p', 'panel-note', 'No viewshed computed yet.'));
   } else {
-    const visibleAreaKm =
-      (state.viewshedResult.visibleCells * state.viewshedResult.cellMetres ** 2) / 1_000_000;
+    const grid = state.viewshedResult;
     viewshedSection.append(
       createElement(
         'p',
         null,
-        `Visible area ${formatArea(visibleAreaKm)} within ${formatMetres(state.viewshedResult.radiusMetres)} of the observer.`,
+        describeViewshed({
+          observers: grid.observers.length,
+          radiusMetres: grid.radiusMetres,
+          visibleAreaSquareKm: squareKm(grid.visibleCells, grid.cellMetres),
+          overlapAreaSquareKm: squareKm(grid.overlapCells, grid.cellMetres),
+          deadAreaSquareKm: squareKm(grid.deadCells, grid.cellMetres),
+        }),
       ),
     );
+    const posts = createElement('ul', 'feature-list');
+    grid.observers.forEach((post, index) => {
+      posts.append(
+        createElement(
+          'li',
+          null,
+          `OP ${index + 1} · ${formatMgrs(post.lon, post.lat, 4)} · ${Math.round(post.ground)} m`,
+        ),
+      );
+    });
+    viewshedSection.append(posts);
   }
   container.append(viewshedSection);
 

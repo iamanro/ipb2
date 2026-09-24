@@ -275,6 +275,38 @@
       font: 11px/1.4 var(--data);
     }
 
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .suggestion-list {
+      display: grid;
+      gap: 4px;
+      margin: 8px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .suggestion-row {
+      display: grid;
+      gap: 4px;
+      border-left: 3px solid var(--line-dark);
+      padding: 5px 0 5px 8px;
+    }
+
+    .suggestion-text {
+      display: grid;
+      gap: 1px;
+      font: 11px/1.4 var(--data);
+    }
+
+    .suggestion-text small {
+      color: var(--muted);
+    }
+
     .inline-form {
       display: flex;
       gap: 6px;

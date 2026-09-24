@@ -94,27 +94,41 @@ function hexToRgb(hex) {
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 }
 
-/** Same bands and colours as the MCOO legend, so the two read identically. */
-const SLOPE_TINT = new Map(
+/**
+ * Same colours as the MCOO legend, drawn as hatching over a light tint: a
+ * flat amber fill was hard to tell from brown contour lines, while hatching
+ * reads as an area. SLOW-GO is single-hatched, NO-GO cross-hatched.
+ */
+const SLOPE_HATCH = new Map(
   [
-    [SLOW_GO, 110],
-    [NO_GO, 150],
-  ].map(([value, alpha]) => [
+    [SLOW_GO, { tint: 35, stroke: 170, cross: false }],
+    [NO_GO, { tint: 70, stroke: 200, cross: true }],
+  ].map(([value, hatch]) => [
     value,
-    [...hexToRgb(LEGEND.find((entry) => entry.value === value).color), alpha],
+    { ...hatch, rgb: hexToRgb(LEGEND.find((entry) => entry.value === value).color) },
   ]),
 );
+/** Hatch period and stripe width in pixels. */
+const HATCH_PERIOD = 7;
+const HATCH_WIDTH = 2;
 
 /**
  * Slope-class overlay for one tile, as RGBA bytes: SLOW-GO and NO-GO slopes
- * (mobility.js `slopeClass`, true slope, no exaggeration) are tinted with
+ * (mobility.js `slopeClass`, true slope, no exaggeration) are hatched in
  * their MCOO colours; GO ground and pixels without data stay transparent.
+ * The hatch follows global pixel positions, so it continues across tiles.
  */
 export function renderSlopeClasses(elevation, z, x, y, size = 256) {
   const rgba = new Uint8Array(size * size * 4);
   forEachGradient(elevation, z, x, y, size, (index, dzdx, dzdy) => {
-    const tint = SLOPE_TINT.get(slopeClass((Math.atan(Math.hypot(dzdx, dzdy)) * 180) / Math.PI));
-    if (tint) rgba.set(tint, index * 4);
+    const hatch = SLOPE_HATCH.get(slopeClass((Math.atan(Math.hypot(dzdx, dzdy)) * 180) / Math.PI));
+    if (!hatch) return;
+    const gx = x * size + (index % size);
+    const gy = y * size + Math.floor(index / size);
+    const onStripe =
+      (gx + gy) % HATCH_PERIOD < HATCH_WIDTH ||
+      (hatch.cross && (((gx - gy) % HATCH_PERIOD) + HATCH_PERIOD) % HATCH_PERIOD < HATCH_WIDTH);
+    rgba.set([...hatch.rgb, onStripe ? hatch.stroke : hatch.tint], index * 4);
   });
   return rgba;
 }

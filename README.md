@@ -179,6 +179,22 @@ lists BMNT/BMCT, sunrise/sunset, EECT/EENT, moonrise/moonset and moon
 illumination for the AOI centre, computed offline (`src/astro.js`, within a
 minute of the US Naval Observatory's tables).
 
+Step 2 adds three analysis aids on top of the MCOO, line of sight and
+viewshed, all offline:
+
+- **Combined viewshed**: add up to 10 observation posts (tool panel or
+  right-click); the overlay shows dead ground, ground seen by one post and
+  ground seen by two or more.
+- **Key terrain candidates**: summits in the AOI above a chosen prominence,
+  ranked by the ground each overlooks within 3 km and named from the basemap's
+  peaks; accept one to add it as a key-terrain point.
+- **Avenues of approach**: pick a start and an objective and a corridor width;
+  up to three routes through the MCOO that keep the whole corridor off NO-GO
+  ground, preferring GO over SLOW-GO; save one as an avenue.
+
+In the MCOO, rivers, canals, lakes and wetlands are NO-GO; mapped streams are
+SLOW-GO (mostly fordable, but restricting).
+
 A basemap whose data has not been built is greyed out, with the command to
 build it in its tooltip. OpenTopoMap and Satellite HD are the only parts of
 the app that talk to an outside service, and only while selected. Both require

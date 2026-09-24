@@ -149,16 +149,36 @@ describe('openTerrain: elevation, slope, and line of sight', () => {
 
   test('viewshed reports no-data cells past the edge of the built tile', () => {
     const observer = cellLonLat(10, 200, CELLS_PER_DEGREE);
-    const grid = terrain.viewshed({ ...observer, radiusMetres: 2000, cellMetres: 50 });
+    const grid = terrain.viewshed({ observers: [observer], radiusMetres: 2000, cellMetres: 50 });
     expect(grid.values).toContain(255);
     // The observer's own neighbourhood, on flat ground, must still resolve.
     expect(grid.visibleCells).toBeGreaterThan(0);
   });
 
-  test('viewshed throws when the observer itself is outside the elevation model', () => {
-    expect(() => terrain.viewshed({ lon: 10, lat: 10, radiusMetres: 500 })).toThrow(
-      /observer is outside the elevation model/,
-    );
+  test('viewshed throws when an observer is outside the elevation model', () => {
+    expect(() =>
+      terrain.viewshed({ observers: [{ lon: 10, lat: 10 }], radiusMetres: 500 }),
+    ).toThrow(/observer is outside the elevation model/);
+  });
+
+  test('a second post across the ridge covers the dead ground the first leaves', () => {
+    // The wall (columns 150-155) hides the ground east of it from a post in
+    // the west; a post in the east sees that ground.
+    const west = cellLonLat(120, 200, CELLS_PER_DEGREE);
+    const east = cellLonLat(185, 200, CELLS_PER_DEGREE);
+    const options = { radiusMetres: 2500, cellMetres: 60 };
+    const alone = terrain.viewshed({ observers: [west], ...options });
+    const both = terrain.viewshed({ observers: [west, east], ...options });
+    const deadShare = (grid) => grid.deadCells / (grid.deadCells + grid.visibleCells);
+    expect(alone.deadCells).toBeGreaterThan(0);
+    expect(deadShare(both)).toBeLessThan(deadShare(alone) / 2);
+  });
+
+  test('ground seen by two posts on the same side is marked as overlap', () => {
+    const posts = [cellLonLat(100, 200, CELLS_PER_DEGREE), cellLonLat(130, 200, CELLS_PER_DEGREE)];
+    const grid = terrain.viewshed({ observers: posts, radiusMetres: 1500, cellMetres: 60 });
+    expect(grid.overlapCells).toBeGreaterThan(0);
+    expect(grid.values).toContain(2);
   });
 });
 
