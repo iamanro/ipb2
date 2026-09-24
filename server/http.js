@@ -18,6 +18,16 @@ export function sendJson(response, value, status = 200) {
   response.end(body);
 }
 
+/** Send a binary body. Tile URLs carry a data version, so they may be cached long. */
+export function sendBytes(response, body, contentType, cacheControl = 'no-store') {
+  response.writeHead(200, {
+    'Content-Type': contentType,
+    'Content-Length': body.byteLength,
+    'Cache-Control': cacheControl,
+  });
+  response.end(body);
+}
+
 export function integerParameter(query, name, fallback, minimum, maximum) {
   const raw = query.get(name);
   if (raw === null) return fallback;

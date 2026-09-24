@@ -6,13 +6,14 @@ public equipment catalogue, threat courses of action with an event matrix, and
 a classroom exercise layer (collection requirements, reports, RFIs, scenario
 clock, AAR export).
 Runs as one Node process against local SQLite databases — no Docker, no
-external services, no accounts.
+external services, no accounts. (One opt-in exception: the "Satellite HD"
+basemap streams Esri imagery and needs internet; see [Basemaps](#basemaps).)
 
 ```mermaid
 graph LR
   A[Browser] --> B[Vite dev/preview server]
   B --> C["/api/ipb — studies, features, threats, COAs, events"]
-  B --> D["/api/terrain — DEM, LOS, viewshed, MCOO"]
+  B --> D["/api/terrain — DEM, LOS, viewshed, MCOO, basemap tiles"]
   B --> E["/api/equipment — ODIN WEG cards, bookmarks"]
   B --> G["/api/exercise — requirements, reports, RFI, scenario clock"]
   C & D & E & G --> F[(node:sqlite files<br/>modules/*/data + modules/*/state)]
@@ -104,14 +105,46 @@ first run also downloads ~1 GB of OpenMapTiles base sources (water polygons,
 Natural Earth). Any existing `.pmtiles` archive with the same schema works
 too.
 
+### Satellite imagery (optional)
+
+```bash
+node modules/terrain/tools/build_satellite.mjs
+```
+
+Downloads [EOxCloudless](https://cloudless.eox.at) Sentinel-2 imagery (10 m,
+zoom 8–14) into `modules/terrain/data/satellite.mbtiles` for the offline
+"Satellite" basemap. `--bounds` defaults to the built `terrain.db`'s bounds; the
+Libavá default is ~1,200 tiles, ~11 MB, well under a minute. `--year` picks the
+mosaic (default 2025). Safe to interrupt; rerunning resumes.
+
+**Licence:** 2016 imagery is CC BY 4.0; 2017 and later are **CC BY-NC-SA 4.0,
+non-commercial only** — commercial use needs a licence from EOX. The map shows
+the required attribution.
+
+## Basemaps
+
+The map's top-right switch picks the basemap:
+
+| Basemap         | Source                                                                                                     | Offline |
+| --------------- | ---------------------------------------------------------------------------------------------------------- | ------- |
+| Roads (default) | `vector.pmtiles`                                                                                           | yes     |
+| Terrain         | Roads plus hillshade rendered from `terrain.db`                                                            | yes     |
+| Satellite       | `satellite.mbtiles` inside its bounds, Roads around it                                                     | yes     |
+| Satellite HD    | [Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9), sub-metre | **no**  |
+
+A basemap whose data has not been built is greyed out, with the command to
+build it in its tooltip. Satellite HD is the only part of the app that talks
+to an outside service, and only while it is selected; Esri's terms require
+the on-map attribution and do not allow caching its tiles for offline use.
+
 ## Modules
 
-| Module      | Route                      | Data                                         | State                                                     |
-| ----------- | -------------------------- | -------------------------------------------- | --------------------------------------------------------- |
-| `equipment` | `/equipment/`              | ODIN WEG cards, images (read-only)           | bookmarks + notes                                         |
-| `terrain`   | server-only, used by `ipb` | GLO-30 elevation, vector basemap (read-only) | —                                                         |
-| `ipb`       | `/ipb/`                    | —                                            | studies: AOI, OAKOC features, threats, COAs, event matrix |
-| `exercise`  | `/exercise/`               | —                                            | roster, PIR/SIR/indicators, reports, RFIs, scenario clock |
+| Module      | Route                      | Data                                      | State                                                     |
+| ----------- | -------------------------- | ----------------------------------------- | --------------------------------------------------------- |
+| `equipment` | `/equipment/`              | ODIN WEG cards, images (read-only)        | bookmarks + notes                                         |
+| `terrain`   | server-only, used by `ipb` | GLO-30 elevation, vector basemap, imagery | —                                                         |
+| `ipb`       | `/ipb/`                    | —                                         | studies: AOI, OAKOC features, threats, COAs, event matrix |
+| `exercise`  | `/exercise/`               | —                                         | roster, PIR/SIR/indicators, reports, RFIs, scenario clock |
 
 `exercise` can import an `ipb` study's event matrix (Requirements → Import
 from IPB): each threat COA becomes a PIR, each NAI it uses a SIR, each

@@ -552,6 +552,66 @@
       font-weight: 700;
     }
 
+    /* OpenLayers puts zoom top-left, under the MGRS readout; the left and
+     * bottom edges carry MGRS grid digits, so bottom-right above attribution. */
+    .map-panel .ol-zoom {
+      top: auto;
+      left: auto;
+      right: 0.5em;
+      bottom: 2.5em;
+    }
+
+    .basemap-switch {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      z-index: 4;
+      display: flex;
+      border: 1px solid var(--line-dark);
+      background: color-mix(in srgb, var(--white) 94%, transparent);
+      backdrop-filter: blur(4px);
+    }
+
+    .basemap-option {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      border: 0;
+      border-left: 1px solid var(--line);
+      padding: 7px 11px;
+      color: var(--blue-dark);
+      background: transparent;
+      font: 11px/1.4 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .basemap-option:first-child {
+      border-left: 0;
+    }
+
+    .basemap-option[aria-checked='true'] {
+      color: var(--white);
+      background: var(--blue-dark);
+    }
+
+    .basemap-option:disabled {
+      color: var(--muted);
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    .basemap-note {
+      color: var(--signal);
+      font-size: 9px;
+    }
+
+    .basemap-option[aria-checked='true'] .basemap-note {
+      color: inherit;
+      opacity: 0.8;
+    }
+
     .readout-toggle {
       margin-left: 4px;
       border: 1px solid var(--line-dark);

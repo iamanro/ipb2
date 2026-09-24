@@ -1,8 +1,18 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { HttpError, numberParameter, sendJson, serveFile } from '../../../server/http.js';
+import {
+  HttpError,
+  numberParameter,
+  sendBytes,
+  sendJson,
+  serveFile,
+} from '../../../server/http.js';
+import { encodePng } from '../../../server/png.js';
 import { openTerrain } from './dem.js';
+import { renderHillshade } from './hillshade.js';
+import { openImagery } from './imagery.js';
 import { LEGEND, mobilityOverlay } from './mobility.js';
 
 const ID = 'terrain';
@@ -10,6 +20,16 @@ const DATA_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 
 const ELEVATION_DATABASE = path.join(DATA_ROOT, 'terrain.db');
 const BASEMAP = path.join(DATA_ROOT, 'vector.pmtiles');
 const BASEMAP_URL = `/api/${ID}/tiles/vector.pmtiles`;
+const IMAGERY_DATABASE = path.join(DATA_ROOT, 'satellite.mbtiles');
+
+const HILLSHADE_TILE = /^hillshade\/(\d+)\/(\d+)\/(\d+)\.png$/;
+const SATELLITE_TILE = /^satellite\/(\d+)\/(\d+)\/(\d+)\.jpg$/;
+/** Past this the 30 m DEM has no more detail; the client upscales. */
+const HILLSHADE_MAX_ZOOM = 14;
+const HILLSHADE_MIN_ZOOM = 5;
+const HILLSHADE_CACHE_LIMIT = 512;
+/** Tile URLs carry the data's build time, so a rebuilt dataset gets new URLs. */
+const IMMUTABLE = 'public, max-age=31536000, immutable';
 
 function point(query, name) {
   const raw = query.get(name);
@@ -49,6 +69,37 @@ function elevationModel() {
   return terrain;
 }
 
+let imagery;
+
+/** The satellite archive, or null until tools/build_satellite.mjs has run. */
+function imageryArchive() {
+  if (!imagery && existsSync(IMAGERY_DATABASE)) imagery = openImagery(IMAGERY_DATABASE);
+  return imagery ?? null;
+}
+
+function tileAddress(match) {
+  const [z, x, y] = match.slice(1).map(Number);
+  if (x >= 2 ** z || y >= 2 ** z) throw new HttpError(404, 'No such tile.');
+  return { z, x, y };
+}
+
+const hillshadeCache = new Map();
+
+function hillshadePng(model, { z, x, y }) {
+  const key = `${z}/${x}/${y}`;
+  let png = hillshadeCache.get(key);
+  if (png) {
+    hillshadeCache.delete(key);
+  } else {
+    png = encodePng(256, 256, renderHillshade(model.elevation, z, x, y));
+    if (hillshadeCache.size >= HILLSHADE_CACHE_LIMIT) {
+      hillshadeCache.delete(hillshadeCache.keys().next().value);
+    }
+  }
+  hillshadeCache.set(key, png);
+  return png;
+}
+
 export default {
   id: ID,
   async handle({ route, url, request, response }) {
@@ -57,8 +108,31 @@ export default {
       await serveFile(request, response, BASEMAP, 'application/octet-stream');
       return;
     }
+    let match = HILLSHADE_TILE.exec(route);
+    if (match) {
+      const address = tileAddress(match);
+      if (address.z < HILLSHADE_MIN_ZOOM || address.z > HILLSHADE_MAX_ZOOM) {
+        throw new HttpError(404, 'No hillshade at this zoom.');
+      }
+      sendBytes(response, hillshadePng(elevationModel(), address), 'image/png', IMMUTABLE);
+      return;
+    }
+    match = SATELLITE_TILE.exec(route);
+    if (match) {
+      const archive = imageryArchive();
+      if (!archive) {
+        throw new HttpError(404, 'No satellite imagery. Build it with tools/build_satellite.mjs.');
+      }
+      const { z, x, y } = tileAddress(match);
+      const tile = archive.tile(z, x, y);
+      if (!tile) throw new HttpError(404, 'No imagery tile here.');
+      sendBytes(response, tile, 'image/jpeg', IMMUTABLE);
+      return;
+    }
     if (route === 'meta') {
       const model = elevationModel();
+      const archive = imageryArchive();
+      const version = (value) => `?v=${encodeURIComponent(value ?? '')}`;
       sendJson(response, {
         elevation: {
           dataset: model.meta.dataset,
@@ -70,6 +144,18 @@ export default {
         basemap: {
           url: BASEMAP_URL,
           attribution: '© OpenMapTiles © OpenStreetMap contributors',
+        },
+        hillshade: {
+          url: `/api/${ID}/hillshade/{z}/{x}/{y}.png${version(model.meta.built_at)}`,
+          minZoom: HILLSHADE_MIN_ZOOM,
+          maxZoom: HILLSHADE_MAX_ZOOM,
+        },
+        imagery: archive && {
+          url: `/api/${ID}/satellite/{z}/{x}/{y}.jpg${version(archive.meta.builtAt)}`,
+          bounds: archive.meta.bounds,
+          minZoom: archive.meta.minZoom,
+          maxZoom: archive.meta.maxZoom,
+          attribution: archive.meta.attribution,
         },
         legend: LEGEND,
       });
@@ -131,5 +217,8 @@ export default {
   close() {
     terrain?.close();
     terrain = undefined;
+    imagery?.close();
+    imagery = undefined;
+    hillshadeCache.clear();
   },
 };

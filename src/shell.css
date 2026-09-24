@@ -1,4 +1,7 @@
-@layer reset, base, shell, components, responsive;
+@layer reset, vendor, base, shell, components, responsive;
+/* Third-party CSS goes in a layer below ours; unlayered it would beat every
+ * app rule regardless of specificity. */
+@import 'ol/ol.css' layer(vendor);
 
 @layer reset {
   *,

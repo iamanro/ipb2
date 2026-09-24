@@ -11,6 +11,34 @@ const EQUIPMENT_API = '/api/equipment';
 const DEFAULT_CENTER = [17.5, 49.7];
 const DEFAULT_ZOOM = 11;
 
+/** The one basemap that needs internet; every other one is served locally. */
+const ONLINE_IMAGERY = {
+  url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  maxZoom: 19,
+  attributions:
+    // Esri's credit for this item (arcgis.com item 10df2279f9684e4a9f6a7f08febac2a9).
+    'Tiles © Esri — Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community',
+};
+const BASEMAPS = [
+  { id: 'roads', label: 'Roads' },
+  {
+    id: 'terrain',
+    label: 'Terrain',
+    missing: 'No elevation data yet: run node modules/terrain/tools/build_terrain.mjs',
+  },
+  {
+    id: 'satellite',
+    label: 'Satellite',
+    missing: 'No imagery yet: run node modules/terrain/tools/build_satellite.mjs',
+  },
+  {
+    id: 'satellite-online',
+    label: 'Satellite HD',
+    note: 'online',
+    title: 'Streams Esri World Imagery; needs an internet connection',
+  },
+];
+
 const STEP_NAMES = {
   1: 'Define the environment',
   2: 'Describe the effects',
@@ -82,6 +110,7 @@ function createState() {
     selectedFeatureId: null,
     selectedCoaId: null,
     terrainMeta: null,
+    basemap: 'roads',
     equipmentQuery: '',
     equipmentResults: [],
     equipmentLoading: false,
@@ -108,6 +137,7 @@ function queryElements(root) {
     mapTarget: pick('#map-target'),
     pointerMgrs: pick('#pointer-mgrs'),
     gridToggle: pick('#grid-toggle'),
+    basemapSwitch: pick('#basemap-switch'),
     mapHint: pick('#map-hint'),
     mapClickInfo: pick('#map-click-info'),
     mapEmpty: pick('#map-empty'),
@@ -626,6 +656,69 @@ async function showElevationReadout(lon, lat) {
   } catch (error) {
     elements.mapClickInfo.textContent = error.message;
   }
+}
+
+// --- Basemap -------------------------------------------------------------------
+
+/** The map.setBasemap spec for a basemap id, or null while its data is missing. */
+function basemapSpec(id) {
+  const meta = state.terrainMeta;
+  const vector = { attributions: meta?.basemap.attribution };
+  if (id === 'roads') return { vector };
+  if (id === 'terrain') {
+    return (
+      meta && {
+        vector,
+        relief: {
+          url: meta.hillshade.url,
+          minZoom: meta.hillshade.minZoom,
+          maxZoom: meta.hillshade.maxZoom,
+          extent: meta.elevation.bounds,
+          attributions: meta.elevation.attribution,
+        },
+      }
+    );
+  }
+  if (id === 'satellite') {
+    return (
+      meta?.imagery && {
+        vector,
+        imagery: {
+          url: meta.imagery.url,
+          minZoom: meta.imagery.minZoom,
+          maxZoom: meta.imagery.maxZoom,
+          extent: meta.imagery.bounds,
+          attributions: meta.imagery.attribution,
+        },
+      }
+    );
+  }
+  return { imagery: ONLINE_IMAGERY };
+}
+
+function renderBasemapSwitch() {
+  elements.basemapSwitch.replaceChildren(
+    ...BASEMAPS.map((basemap) => {
+      const available = Boolean(basemapSpec(basemap.id));
+      const button = createElement('button', 'basemap-option', basemap.label);
+      button.type = 'button';
+      button.dataset.basemap = basemap.id;
+      button.setAttribute('role', 'radio');
+      button.setAttribute('aria-checked', String(state.basemap === basemap.id));
+      button.disabled = !available;
+      button.title = available ? (basemap.title ?? '') : basemap.missing;
+      if (basemap.note) button.append(createElement('span', 'basemap-note', basemap.note));
+      return button;
+    }),
+  );
+}
+
+function applyBasemap(id) {
+  const spec = basemapSpec(id);
+  if (!spec) return;
+  state.basemap = id;
+  mapController.setBasemap(spec);
+  renderBasemapSwitch();
 }
 
 // --- Toast -------------------------------------------------------------------
@@ -2592,6 +2685,11 @@ export function mount({ root, status }) {
     onPointerMove: onMapPointerMove,
   });
   mapController.setMgrsGrid(true);
+  renderBasemapSwitch();
+  elements.basemapSwitch.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-basemap]');
+    if (button && !button.disabled) applyBasemap(button.dataset.basemap);
+  });
   elements.gridToggle.addEventListener('click', () => {
     const visible = elements.gridToggle.getAttribute('aria-pressed') !== 'true';
     elements.gridToggle.setAttribute('aria-pressed', String(visible));
@@ -2608,6 +2706,8 @@ export function mount({ root, status }) {
     requestJson(`${TERRAIN_API}/meta`).then((meta) => {
       state.terrainMeta = meta;
       elements.statusDataset.textContent = meta.elevation.dataset;
+      // Now that attribution and local tile sources are known.
+      applyBasemap(state.basemap);
     }),
     loadStudies(),
     loadEquipmentBookmarks().then(() => {

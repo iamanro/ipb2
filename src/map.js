@@ -7,7 +7,9 @@ import { buffer as bufferExtent, getCenter as extentCenter, getWidth } from 'ol/
 import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import ImageLayer from 'ol/layer/Image.js';
+import TileLayer from 'ol/layer/Tile.js';
 import VectorSource from 'ol/source/Vector.js';
+import XYZ from 'ol/source/XYZ.js';
 import ImageCanvasSource from 'ol/source/ImageCanvas.js';
 import { PMTilesVectorSource } from 'ol-pmtiles';
 import Draw from 'ol/interaction/Draw.js';
@@ -295,10 +297,33 @@ function buildFeatureStyle(feature, iconCache) {
 
 const MGRS_INK = '#12324a';
 const MGRS_FONT = '"Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace';
+const MGRS_LINE_WIDTH = { zone: 2.2, square: 1.4, line: 0.8 };
+/**
+ * Two tones: dark ink over the pale vector basemap, and over imagery (dark
+ * and busy) white lines on a dark casing so they read on fields and forest.
+ */
 const MGRS_LINE_STYLE = {
-  zone: new Style({ stroke: new Stroke({ color: MGRS_INK, width: 2.2 }) }),
-  square: new Style({ stroke: new Stroke({ color: MGRS_INK, width: 1.4 }) }),
-  line: new Style({ stroke: new Stroke({ color: 'rgba(18, 50, 74, 0.5)', width: 0.8 }) }),
+  dark: {
+    zone: new Style({ stroke: new Stroke({ color: MGRS_INK, width: MGRS_LINE_WIDTH.zone }) }),
+    square: new Style({ stroke: new Stroke({ color: MGRS_INK, width: MGRS_LINE_WIDTH.square }) }),
+    line: new Style({
+      stroke: new Stroke({ color: 'rgba(18, 50, 74, 0.5)', width: MGRS_LINE_WIDTH.line }),
+    }),
+  },
+  light: Object.fromEntries(
+    Object.entries(MGRS_LINE_WIDTH).map(([rank, width]) => [
+      rank,
+      [
+        new Style({ stroke: new Stroke({ color: 'rgba(0, 0, 0, 0.45)', width: width + 1.6 }) }),
+        new Style({
+          stroke: new Stroke({
+            color: rank === 'line' ? 'rgba(255, 255, 255, 0.7)' : '#ffffff',
+            width,
+          }),
+        }),
+      ],
+    ]),
+  ),
 };
 const MGRS_LABEL_TEXT = {
   // Easting digits sit just above the bottom edge, northing digits just
@@ -309,19 +334,21 @@ const MGRS_LABEL_TEXT = {
   zone: { font: `700 13px ${MGRS_FONT}`, boxed: true },
 };
 
-function mgrsLabelStyle(kind, text) {
+function mgrsLabelStyle(kind, text, tone) {
   const { boxed, ...options } = MGRS_LABEL_TEXT[kind];
+  // Boxed labels carry their own white background and read on any basemap.
+  const light = tone === 'light' && !boxed;
   return new Style({
     text: new TextStyle({
       ...options,
       text,
-      fill: new Fill({ color: MGRS_INK }),
+      fill: new Fill({ color: light ? '#ffffff' : MGRS_INK }),
       ...(boxed
         ? {
             backgroundFill: new Fill({ color: 'rgba(255, 255, 255, 0.85)' }),
             padding: [2, 5, 2, 5],
           }
-        : { stroke: new Stroke({ color: '#ffffff', width: 3 }) }),
+        : { stroke: new Stroke({ color: light ? 'rgba(0, 0, 0, 0.8)' : '#ffffff', width: 3 }) }),
     }),
   });
 }
@@ -460,9 +487,15 @@ export function createMap(options) {
     declutter: true,
   });
 
+  // Raster basemap pieces, both off until setBasemap. Both sit over the
+  // vector basemap: imagery clipped to its coverage leaves the vector map
+  // visible around it, and hillshade is a translucent overlay by design.
+  const imageryLayer = new TileLayer({ visible: false });
+  const reliefLayer = new TileLayer({ visible: false });
+
   const map = new OlMap({
     target,
-    layers: [basemapLayer, mgrsLayer, featureLayer],
+    layers: [basemapLayer, imageryLayer, reliefLayer, mgrsLayer, featureLayer],
     view: new View({
       projection: MAP_PROJECTION,
       center: fromLonLat(center, MAP_PROJECTION),
@@ -666,8 +699,44 @@ export function createMap(options) {
     gridLayers.delete(name);
   }
 
-  function setBasemapVisible(visible) {
-    basemapLayer.setVisible(visible);
+  /** Point a raster layer at an XYZ tile spec, or hide it for `null`. */
+  function applyTileSpec(layer, spec) {
+    if (!spec) {
+      layer.setVisible(false);
+      return;
+    }
+    if (layer.get('tileUrl') !== spec.url) {
+      layer.setSource(
+        new XYZ({
+          url: spec.url,
+          attributions: spec.attributions,
+          minZoom: spec.minZoom,
+          maxZoom: spec.maxZoom,
+        }),
+      );
+      layer.set('tileUrl', spec.url);
+    }
+    // Clamp to the data's coverage so no tiles are requested outside it.
+    layer.setExtent(
+      spec.extent ? transformExtent(spec.extent, DATA_PROJECTION, MAP_PROJECTION) : undefined,
+    );
+    layer.setVisible(true);
+  }
+
+  /**
+   * Choose what sits under the analysis layers, bottom to top:
+   *   vector   { attributions } shows the vector basemap, null hides it
+   *   imagery  XYZ spec over it; with an `extent`, the vector map shows around it
+   *   relief   XYZ spec drawn over both (translucent hillshade)
+   * An XYZ spec is `{ url, attributions, minZoom?, maxZoom?, extent? }` with
+   * `extent` in lon/lat.
+   */
+  function setBasemap({ vector = null, imagery = null, relief = null }) {
+    basemapLayer.setVisible(Boolean(vector));
+    if (vector) basemapSource.setAttributions(vector.attributions);
+    applyTileSpec(imageryLayer, imagery);
+    applyTileSpec(reliefLayer, relief);
+    if (mgrsLayer.getVisible()) renderMgrsGrid(); // grid tone follows the basemap
   }
 
   function renderMgrsGrid() {
@@ -687,16 +756,17 @@ export function createMap(options) {
       drawExtent: toLonLatExtent(bufferExtent(extent, getWidth(extent) / 2)),
       spacing: mgrsGridSpacing(metresPerPixel),
     });
+    const tone = imageryLayer.getVisible() ? 'light' : 'dark';
     const features = lines.map(({ rank, coordinates }) => {
       const feature = new Feature(
         new LineString(coordinates.map((point) => fromLonLat(point, MAP_PROJECTION))),
       );
-      feature.setStyle(MGRS_LINE_STYLE[rank]);
+      feature.setStyle(MGRS_LINE_STYLE[tone][rank]);
       return feature;
     });
     for (const { kind, text, coordinate } of labels) {
       const feature = new Feature(new Point(fromLonLat(coordinate, MAP_PROJECTION)));
-      feature.setStyle(mgrsLabelStyle(kind, text));
+      feature.setStyle(mgrsLabelStyle(kind, text, tone));
       features.push(feature);
     }
     mgrsSource.clear(true);
@@ -744,7 +814,7 @@ export function createMap(options) {
     stopModify,
     setGrid,
     clearGrid,
-    setBasemapVisible,
+    setBasemap,
     setMgrsGrid,
     destroy,
   };
