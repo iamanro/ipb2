@@ -96,28 +96,20 @@ async function requestJson(path, { method = 'GET', body, signal = state.session.
 
 // --- URL state -----------------------------------------------------------
 
+/**
+ * Only the selected card is reflected in the URL, so a specific equipment
+ * card stays shareable and refresh-safe. Filters and search are pure
+ * in-memory state: picking filters never touches the address bar, and a
+ * reload always starts from the default unfiltered view.
+ */
 function readLocation() {
-  const parameters = new URLSearchParams(window.location.search);
-  state.query = parameters.get('q') || '';
-  KINDS.forEach((kind) => {
-    state.filters[kind] = new Set(parameters.getAll(kind));
-  });
-  elements.search.value = state.query;
-  const hash = window.location.hash;
-  state.requestedId = hash.startsWith('#card=') ? hash.slice(6) : null;
+  const hash = window.location.hash.replace(/^#/, '');
+  state.requestedId = hash.startsWith('card=') ? decodeURIComponent(hash.slice(5)) : null;
 }
 
 function writeLocation() {
-  const parameters = new URLSearchParams();
-  if (state.query) parameters.set('q', state.query);
-  KINDS.forEach((kind) => state.filters[kind].forEach((key) => parameters.append(kind, key)));
-  const search = parameters.toString();
-  const hash = state.selectedId ? `#card=${state.selectedId}` : '';
-  window.history.replaceState(
-    null,
-    '',
-    `${window.location.pathname}${search ? `?${search}` : ''}${hash}`,
-  );
+  const hash = state.selectedId ? `#card=${encodeURIComponent(state.selectedId)}` : '';
+  window.history.replaceState(null, '', `${window.location.pathname}${hash}`);
 }
 
 function activeFilterCount() {
@@ -403,17 +395,23 @@ function renderCards() {
 async function loadCards(append = false) {
   state.request?.abort();
   state.request = new AbortController();
-  const parameters = new URLSearchParams();
-  if (state.query) parameters.set('q', state.query);
-  KINDS.forEach((kind) => state.filters[kind].forEach((key) => parameters.append(kind, key)));
-  parameters.set('limit', String(PAGE_SIZE));
-  parameters.set('offset', String(append ? state.cards.length : 0));
-  if (!append) writeLocation();
+  // POST with a JSON body, not a GET query string: a wide multi-select
+  // across taxonomies can carry hundreds of filter keys, which would
+  // overflow the host's request-header size limit as a query string long
+  // before it approaches the JSON body limit.
+  const body = {
+    text: state.query || null,
+    filters: Object.fromEntries(KINDS.map((kind) => [kind, [...state.filters[kind]]])),
+    limit: PAGE_SIZE,
+    offset: append ? state.cards.length : 0,
+  };
   elements.resultStatus.hidden = false;
   elements.resultStatus.textContent = append ? 'Loading more records…' : 'Filtering local index…';
   elements.cardList.classList.add('is-loading');
   try {
-    const result = await requestJson(`${API}/cards?${parameters}`, {
+    const result = await requestJson(`${API}/cards`, {
+      method: 'POST',
+      body,
       signal: AbortSignal.any([state.request.signal, state.session.signal]),
     });
     state.cards = append ? [...state.cards, ...result.items] : result.items;
@@ -427,9 +425,7 @@ async function loadCards(append = false) {
       const requestedId = state.requestedId;
       state.requestedId = null;
       await selectCard(requestedId, false);
-    } else if (inList(state.selectedId)) {
-      writeLocation();
-    } else {
+    } else if (!inList(state.selectedId)) {
       clearDetail();
     }
   } catch (error) {

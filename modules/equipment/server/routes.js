@@ -57,11 +57,41 @@ async function imageContentType(file) {
   return 'application/octet-stream';
 }
 
-function apiCards(database, query) {
-  const limit = integerParameter(query, 'limit', 100, 1, 200);
-  const offset = integerParameter(query, 'offset', 0, 0, Number.MAX_SAFE_INTEGER);
-  const filters = Object.fromEntries(KINDS.map((kind) => [kind, query.getAll(kind)]));
-  const { items, total } = listCards(database, { text: query.get('q'), filters, limit, offset });
+function clampInteger(value, fallback, minimum, maximum) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(Math.max(number, minimum), maximum);
+}
+
+/** GET carries filters as repeated query params: fine for the handful of
+ * keys a plain text search sends, but a wide multi-select would overflow
+ * the request-header size limit. */
+function cardsParamsFromQuery(query) {
+  return {
+    text: query.get('q'),
+    filters: Object.fromEntries(KINDS.map((kind) => [kind, query.getAll(kind)])),
+    limit: integerParameter(query, 'limit', 100, 1, 200),
+    offset: integerParameter(query, 'offset', 0, 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+/** POST carries filters in a JSON body, which has no practical size limit
+ * for this data, so a wide multi-select across taxonomies stays safe. */
+async function cardsParamsFromBody(request) {
+  const body = await readJson(request);
+  const filters = body.filters && typeof body.filters === 'object' ? body.filters : {};
+  return {
+    text: typeof body.text === 'string' ? body.text : null,
+    filters: Object.fromEntries(
+      KINDS.map((kind) => [kind, Array.isArray(filters[kind]) ? filters[kind].map(String) : []]),
+    ),
+    limit: clampInteger(body.limit, 100, 1, 200),
+    offset: clampInteger(body.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function apiCards(database, { text, filters, limit, offset }) {
+  const { items, total } = listCards(database, { text, filters, limit, offset });
   const { images, classifications } = listCardExtras(
     database,
     items.map((item) => item.identifier),
@@ -179,8 +209,13 @@ export default {
   async handle({ route, url, request, response }) {
     database ??= openDatabase(DATABASE);
     if (route === 'stats') sendJson(response, stats(database));
-    else if (route === 'cards') sendJson(response, apiCards(database, url.searchParams));
-    else if (route.startsWith('cards/')) {
+    else if (route === 'cards') {
+      const params =
+        request.method === 'POST'
+          ? await cardsParamsFromBody(request)
+          : cardsParamsFromQuery(url.searchParams);
+      sendJson(response, apiCards(database, params));
+    } else if (route.startsWith('cards/')) {
       sendJson(response, apiCard(database, decodeURIComponent(route.slice('cards/'.length))));
     } else if (route === 'taxonomy') sendJson(response, apiTaxonomy(database, url.searchParams));
     else if (route.startsWith('images/')) {

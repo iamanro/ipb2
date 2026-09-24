@@ -6,22 +6,45 @@
       grid-template-columns: 286px 390px minmax(440px, 1fr);
     }
 
-    .filter-panel,
-    .results-panel,
-    .detail-panel {
+    /* Each workspace column is scrollable on its own axis. Kept as separate
+     * rules, not a shared selector, so one column's structure can change
+     * without silently touching the others (see .results-heading history). */
+    .filter-panel {
       min-height: 0;
       overflow-y: auto;
-    }
-
-    .filter-panel {
       padding: 24px 20px 28px;
       border-right: 1px solid var(--line-dark);
       background: var(--paper);
     }
 
-    .panel-heading,
-    .results-heading,
-    .detail-overline,
+    .results-panel {
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .detail-panel {
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    /* .panel-heading, .detail-overline, and .equipment-meta each happen to
+     * be a two-item row today, but each is its own component with its own
+     * children — a shared rule here is exactly the trap that broke
+     * .results-heading once (see git history). Kept isolated on purpose. */
+    .panel-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .detail-overline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
     .equipment-meta {
       display: flex;
       align-items: center;
@@ -264,6 +287,8 @@
       position: sticky;
       z-index: 2;
       top: 0;
+      display: flex;
+      flex-direction: column;
       padding: 22px 18px 15px;
       border-bottom: 1px solid var(--line-dark);
       background: color-mix(in srgb, var(--mist) 94%, transparent);
@@ -285,8 +310,11 @@
     .active-filters {
       display: flex;
       flex-wrap: wrap;
+      align-content: flex-start;
       gap: 6px;
       margin-top: 12px;
+      max-height: 96px;
+      overflow-y: auto;
     }
 
     .filter-chip {
@@ -904,7 +932,10 @@
         grid-template-columns: minmax(230px, 0.8fr) minmax(330px, 1.2fr);
       }
 
-      .filter-panel,
+      .filter-panel {
+        height: calc(100vh - var(--masthead));
+      }
+
       .results-panel {
         height: calc(100vh - var(--masthead));
       }
@@ -921,14 +952,10 @@
         display: block;
       }
 
-      .filter-panel,
-      .results-panel {
+      .filter-panel {
         height: auto;
         max-height: none;
         border-right: 0;
-      }
-
-      .filter-panel {
         padding: 20px 16px;
         border-bottom: 1px solid var(--line-dark);
       }
@@ -938,6 +965,9 @@
       }
 
       .results-panel {
+        height: auto;
+        max-height: none;
+        border-right: 0;
         min-height: 480px;
       }
 
