@@ -160,9 +160,13 @@ function createDialogNode(root) {
   input.type = 'text';
   input.autocomplete = 'off';
   const actions = createElement('div', 'dialog-actions');
+  // Enter in the text input submits the form with its *first* submit button,
+  // so Cancel must not be one, or Enter would discard what was typed. As the
+  // first focusable control it still takes Enter in inputless confirms,
+  // which keeps "Delete?" defaulting to the safe answer.
   const cancel = createElement('button', 'text-button', 'Cancel');
-  cancel.type = 'submit';
-  cancel.value = 'cancel';
+  cancel.type = 'button';
+  cancel.addEventListener('click', () => dialogNode.close('cancel'));
   const accept = createElement('button', 'dialog-accept');
   accept.type = 'submit';
   accept.value = 'accept';
@@ -643,9 +647,21 @@ function showToast(message) {
 
 function closeContextMenu() {
   elements.moduleRoot?.querySelector(':scope > .context-menu')?.remove();
-  document.removeEventListener('mousedown', closeContextMenu, true);
-  document.removeEventListener('contextmenu', closeContextMenu, true);
+  document.removeEventListener('mousedown', onContextMenuOutside, true);
+  document.removeEventListener('contextmenu', onContextMenuOutside, true);
   document.removeEventListener('keydown', onContextMenuKeydown, true);
+}
+
+/** A real click is mousedown → mouseup → click. Closing on a mousedown
+ * inside the menu would remove the item before its click fires, so only
+ * presses outside the menu dismiss it. */
+function onContextMenuOutside(event) {
+  const menu = elements.moduleRoot?.querySelector(':scope > .context-menu');
+  if (menu?.contains(event.target)) {
+    if (event.type === 'contextmenu') event.preventDefault();
+    return;
+  }
+  closeContextMenu();
 }
 
 function onContextMenuKeydown(event) {
@@ -697,8 +713,8 @@ function openContextMenu(x, y, items) {
   if (rect.right > window.innerWidth) menu.style.left = `${Math.max(0, x - rect.width)}px`;
   if (rect.bottom > window.innerHeight) menu.style.top = `${Math.max(0, y - rect.height)}px`;
   window.setTimeout(() => {
-    document.addEventListener('mousedown', closeContextMenu, true);
-    document.addEventListener('contextmenu', closeContextMenu, true);
+    document.addEventListener('mousedown', onContextMenuOutside, true);
+    document.addEventListener('contextmenu', onContextMenuOutside, true);
     document.addEventListener('keydown', onContextMenuKeydown, true);
   }, 0);
 }
