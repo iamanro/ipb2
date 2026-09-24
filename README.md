@@ -6,9 +6,10 @@ public equipment catalogue, threat courses of action with an event matrix, and
 a classroom exercise layer (collection requirements, reports, RFIs, scenario
 clock, AAR export).
 Runs as one Node process against local SQLite databases — no Docker, no
-external services, no accounts. (Opt-in exceptions: the "OpenTopoMap" and
-"Satellite HD" basemaps stream online tiles and need internet; see
-[Basemaps](#basemaps).)
+external services, no accounts. (Opt-in exceptions, each needing internet
+only while switched on: the "OpenTopoMap" and "Satellite HD" basemaps, see
+[Basemaps](#basemaps), and the real-time [weather](#weather-online) layers and
+forecast.)
 
 ```mermaid
 graph LR
@@ -196,9 +197,10 @@ In the MCOO, rivers, canals, lakes and wetlands are NO-GO; mapped streams are
 SLOW-GO (mostly fordable, but restricting).
 
 A basemap whose data has not been built is greyed out, with the command to
-build it in its tooltip. OpenTopoMap and Satellite HD are the only parts of
-the app that talk to an outside service, and only while selected. Both require
-the on-map attribution; neither allows bulk-caching its tiles for offline use.
+build it in its tooltip. OpenTopoMap and Satellite HD talk to an outside
+service only while selected (the only other online parts are the
+[weather](#weather-online) layers). Both require the on-map attribution;
+neither allows bulk-caching its tiles for offline use.
 
 Below the switch, **Layers** adds overlays that work over any basemap, all
 offline:
@@ -209,6 +211,31 @@ offline:
 | Slope classes | `terrain.db` slope in the MCOO bands: SLOW-GO 10–30° (amber), NO-GO ≥ 30° (red)        |
 | Roads & water | Roads, rivers and lakes from `vector.pmtiles`, drawn to read over the satellite layers |
 | Place names   | Towns, villages, peaks and waters from `vector.pmtiles` (needs its name layers, above) |
+
+### Weather (online)
+
+The **Weather** group in Layers streams current conditions, each labelled
+with the time of its data and refreshed while switched on:
+
+| Layer               | Source                                                                                                                          | Updated      |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Clouds              | [EUMETSAT](https://view.eumetsat.int) Meteosat cloud mask (~4–6 km pixels here), cloud shaded, clear ground left as is          | every 15 min |
+| Precipitation radar | [RainViewer](https://www.rainviewer.com/api.html) radar mosaic, past 2 h in 10-min frames; Play or drag the slider to step back | every 10 min |
+| Lightning           | EUMETSAT Meteosat Third Generation Lightning Imager, accumulated flash area (yellow → red: more flashes)                        | every 5 min  |
+| Wind (10 m)         | [Open-Meteo](https://open-meteo.com) model wind on a lattice over the view: arrows point downwind, labels m/s (gusts)           | every 15 min |
+
+Step 1's **Weather forecast** (button **Get forecast**) adds a 48-hour
+Open-Meteo forecast for the AOI centre: current conditions, then one row per
+3 h with weather, temperature, wind and gusts, precipitation total and
+chance, total and low cloud, and visibility. It prints with the worksheet;
+the printed map caption lists each weather layer with its data time.
+
+Nothing weather-related is cached for offline use, and none of it starts on
+its own: every request tells the service which area is being looked at
+(forecast: the AOI centre), so switch these on only where that is acceptable.
+Terms: RainViewer's free API is for personal and educational use; Open-Meteo's
+free API is non-commercial (data CC BY 4.0); EUMETSAT imagery is credited on
+the map.
 
 ## Modules
 

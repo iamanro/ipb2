@@ -664,6 +664,39 @@
       font-size: 10px;
     }
 
+    .overlay-group {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-top: 6px;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .overlay-text small.weather-error {
+      color: var(--signal);
+    }
+
+    .radar-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 0 4px 21px;
+    }
+
+    .radar-controls .readout-toggle {
+      margin-left: 0;
+    }
+
+    .radar-controls input[type='range'] {
+      flex: 1;
+      min-width: 0;
+      accent-color: var(--blue-dark);
+    }
+
     .basemap-switch {
       display: flex;
       flex-wrap: wrap;
@@ -885,8 +918,18 @@
     }
 
     /* Ten columns outgrow the worksheet column; print flows it normally. */
-    .light-data {
+    .light-data,
+    .weather-forecast {
       overflow-x: auto;
+    }
+
+    .weather-forecast h4 .basemap-note {
+      font-weight: 400;
+    }
+
+    .weather-now {
+      margin: 0 0 8px;
+      font: 11px/1.5 var(--data);
     }
 
     .light-table td,

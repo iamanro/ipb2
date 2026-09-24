@@ -4,6 +4,25 @@ import template from './view.html?raw';
 import { lightData } from '../../../src/astro.js';
 import { createMap } from '../../../src/map.js';
 import { formatArea, formatMetres, formatMgrs, parseCoordinate } from '../../../src/geo.js';
+import {
+  CLOUD_LAYER,
+  EUMETSAT_ATTRIBUTION,
+  LIGHTNING_LAYER,
+  OPEN_METEO_ATTRIBUTION,
+  RAINVIEWER_API,
+  RAINVIEWER_ATTRIBUTION,
+  RAINVIEWER_MAX_ZOOM,
+  compassPoint,
+  forecastUrl,
+  latestWmsTime,
+  parseForecast,
+  parseWind,
+  radarFrames,
+  weatherText,
+  windLattice,
+  windUrl,
+  wmsCapabilitiesUrl,
+} from '../../../src/weather.js';
 
 const API = '/api/ipb';
 const TERRAIN_API = '/api/terrain';
@@ -85,6 +104,51 @@ const OVERLAYS = [
   },
 ];
 
+const MINUTE = 60_000;
+/**
+ * Online weather overlays. Each request tells the service which area is being
+ * looked at, so they stay off until switched on. `refresh` is how often the
+ * newest image (or wind readings) is checked while on.
+ */
+const WEATHER_OVERLAYS = [
+  {
+    id: 'clouds',
+    label: 'Clouds',
+    source: 'Meteosat cloud mask, every 15 min',
+    caption: 'Clouds',
+    refresh: 5 * MINUTE,
+  },
+  {
+    id: 'radar',
+    label: 'Precipitation radar',
+    source: 'RainViewer, past 2 h',
+    caption: 'Radar',
+    refresh: 5 * MINUTE,
+  },
+  {
+    id: 'lightning',
+    label: 'Lightning',
+    source: 'Meteosat Lightning Imager; yellow → red: more flashes',
+    caption: 'Lightning',
+    refresh: 5 * MINUTE,
+  },
+  {
+    id: 'wind',
+    label: 'Wind (10 m)',
+    source: 'Open-Meteo model; arrows downwind, m/s (gusts)',
+    caption: 'Wind',
+    refresh: 15 * MINUTE,
+  },
+];
+const WEATHER_BY_ID = new Map(WEATHER_OVERLAYS.map((overlay) => [overlay.id, overlay]));
+const WEATHER_UNAVAILABLE = 'Unavailable: no connection, or the service is down';
+const RADAR_FRAME_MS = 700;
+const CLOCK = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
 const STEP_NAMES = {
   1: 'Define the environment',
   2: 'Describe the effects',
@@ -146,7 +210,13 @@ const MAP_VIEW_KEY = 'ipb.mapView';
 function loadMapView() {
   const view = {
     basemap: 'roads',
-    overlays: { contours: false, slope: false, roads: false, places: false },
+    overlays: {
+      contours: false,
+      slope: false,
+      roads: false,
+      places: false,
+      ...Object.fromEntries(WEATHER_OVERLAYS.map((overlay) => [overlay.id, false])),
+    },
     grid: true,
   };
   try {
@@ -204,6 +274,22 @@ function createState() {
     equipmentBookmarks: [],
     studyRequest: null,
     timers: new Map(),
+    weather: {
+      clouds: { time: null, checkedAt: 0, loading: false, error: null },
+      lightning: { time: null, checkedAt: 0, loading: false, error: null },
+      radar: { frames: [], index: -1, playing: false, checkedAt: 0, loading: false, error: null },
+      /** Readings by lattice key; `points` are the ones for the current view. */
+      wind: {
+        readings: new Map(),
+        points: [],
+        view: null,
+        checkedAt: 0,
+        loading: false,
+        error: null,
+      },
+      /** `key` is the location last asked for, `dataKey` the one `data` is for. */
+      forecast: { key: null, dataKey: null, data: null, fetchedAt: 0, loading: false, error: null },
+    },
   };
 }
 
@@ -877,12 +963,278 @@ function renderOverlayList() {
       row.append(checkbox, text);
       return row;
     }),
+    ...renderWeatherRows(),
   );
 }
 
 function applyOverlays() {
   mapController.setOverlays(overlaySpec());
   renderOverlayList();
+}
+
+// --- Weather (online) ------------------------------------------------------------
+
+function minutesAgo(time) {
+  const minutes = Math.max(0, Math.round((Date.now() - time) / MINUTE));
+  return minutes < 1 ? 'just now' : `${minutes} min ago`;
+}
+
+/** What the Layers panel says under a weather overlay's name. */
+function weatherStatus(overlay) {
+  const entry = state.weather[overlay.id];
+  if (!state.overlays[overlay.id]) return overlay.source;
+  if (entry.error) return entry.error;
+  const time = weatherTime(overlay.id);
+  if (time !== null) return `${overlay.source} · ${CLOCK.format(time)} (${minutesAgo(time)})`;
+  return entry.loading ? 'Loading…' : overlay.source;
+}
+
+/** The time of the data shown for a weather overlay, or null. */
+function weatherTime(id) {
+  const entry = state.weather[id];
+  if (id === 'radar') return entry.frames[entry.index]?.time ?? null;
+  if (id === 'wind') return entry.points[0]?.time ?? null;
+  return entry.time;
+}
+
+function renderWeatherRows() {
+  const heading = createElement('div', 'overlay-group', 'Weather');
+  heading.append(createElement('span', 'basemap-note', 'online'));
+  const rows = [heading];
+  for (const overlay of WEATHER_OVERLAYS) {
+    const on = state.overlays[overlay.id];
+    const entry = state.weather[overlay.id];
+    const row = createElement('label', 'overlay-option');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.dataset.overlay = overlay.id;
+    checkbox.checked = on;
+    const text = createElement('span', 'overlay-text', overlay.label);
+    const status = createElement('small', null, weatherStatus(overlay));
+    status.classList.toggle('weather-error', Boolean(on && entry.error));
+    if (overlay.id === 'radar') status.dataset.radarStatus = '';
+    text.append(status);
+    row.append(checkbox, text);
+    rows.push(row);
+    // Outside the <label>, so its buttons don't toggle the checkbox.
+    if (overlay.id === 'radar' && on && entry.frames.length > 1) rows.push(renderRadarControls());
+  }
+  return rows;
+}
+
+function renderRadarControls() {
+  const radar = state.weather.radar;
+  const controls = createElement('div', 'radar-controls');
+  const play = createElement('button', 'readout-toggle', radar.playing ? 'Pause' : 'Play');
+  play.type = 'button';
+  play.dataset.radar = 'play';
+  play.setAttribute('aria-pressed', String(radar.playing));
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = '0';
+  slider.max = String(radar.frames.length - 1);
+  slider.value = String(radar.index);
+  slider.dataset.radar = 'frame';
+  slider.setAttribute('aria-label', 'Radar frame');
+  controls.append(play, slider);
+  return controls;
+}
+
+function weatherSpec() {
+  const { overlays, weather } = state;
+  const wms = (id, layer) =>
+    overlays[id] && weather[id].time !== null
+      ? { layer, time: weather[id].time, attributions: EUMETSAT_ATTRIBUTION }
+      : null;
+  return {
+    clouds: wms('clouds', CLOUD_LAYER),
+    lightning: wms('lightning', LIGHTNING_LAYER),
+    radar:
+      overlays.radar && weather.radar.frames.length
+        ? {
+            frames: weather.radar.frames,
+            index: weather.radar.index,
+            maxZoom: RAINVIEWER_MAX_ZOOM,
+            attributions: RAINVIEWER_ATTRIBUTION,
+          }
+        : null,
+    wind:
+      overlays.wind && weather.wind.points.length
+        ? { points: weather.wind.points, attributions: OPEN_METEO_ATTRIBUTION }
+        : null,
+  };
+}
+
+function applyWeather() {
+  mapController?.setWeather(weatherSpec());
+}
+
+/** Newest image time of a Meteosat WMS layer, from its small per-layer capabilities. */
+async function loadWmsTime(id, layer) {
+  const response = await fetch(wmsCapabilitiesUrl(layer), { signal: state.session.signal });
+  if (!response.ok) throw new Error(`EUMETSAT ${response.status}`);
+  const time = latestWmsTime(await response.text());
+  if (time === null) throw new Error('EUMETSAT: no image time');
+  state.weather[id].time = time;
+}
+
+async function loadRadar() {
+  const radar = state.weather.radar;
+  const frames = radarFrames(await requestJson(RAINVIEWER_API));
+  if (!frames.length) throw new Error('RainViewer: no frames');
+  const shown = radar.frames[radar.index]?.time;
+  const atNewest = radar.index === radar.frames.length - 1;
+  radar.frames = frames;
+  // Follow the newest frame unless the analyst stepped back to an older one.
+  const kept = frames.findIndex((frame) => frame.time === shown);
+  radar.index = atNewest || kept < 0 ? frames.length - 1 : kept;
+}
+
+/** Wind at the lattice points of the current view; fetches only missing or stale ones. */
+async function loadWind() {
+  const wind = state.weather.wind;
+  const view = wind.view ?? {
+    bounds: mapController.getBounds(),
+    size: [elements.mapTarget.clientWidth, elements.mapTarget.clientHeight],
+  };
+  const { points } = windLattice(view.bounds, view.size);
+  const now = Date.now();
+  const { refresh } = WEATHER_BY_ID.get('wind');
+  for (const [key, reading] of wind.readings) {
+    if (now - reading.fetchedAt > 4 * refresh) wind.readings.delete(key);
+  }
+  const missing = points.filter(
+    (point) => !(now - (wind.readings.get(point.key)?.fetchedAt ?? 0) < refresh),
+  );
+  if (missing.length) {
+    const readings = parseWind(await requestJson(windUrl(missing)), missing);
+    for (const reading of readings) wind.readings.set(reading.key, { ...reading, fetchedAt: now });
+  }
+  wind.points = points.map((point) => wind.readings.get(point.key)).filter(Boolean);
+}
+
+const WEATHER_LOADERS = {
+  clouds: () => loadWmsTime('clouds', CLOUD_LAYER),
+  lightning: () => loadWmsTime('lightning', LIGHTNING_LAYER),
+  radar: loadRadar,
+  wind: loadWind,
+};
+
+/** Run one overlay's loader; a request made while one is running runs after it. */
+function loadWeather(id) {
+  const entry = state.weather[id];
+  if (entry.loading) {
+    entry.again = true;
+    return;
+  }
+  entry.loading = true;
+  renderOverlayList();
+  WEATHER_LOADERS[id]()
+    .then(
+      () => {
+        entry.error = null;
+      },
+      (error) => {
+        if (error.name !== 'AbortError') entry.error = WEATHER_UNAVAILABLE;
+      },
+    )
+    .finally(() => {
+      entry.loading = false;
+      entry.checkedAt = Date.now();
+      if (state.session.signal.aborted) return;
+      applyWeather();
+      renderOverlayList();
+      if (entry.again) {
+        entry.again = false;
+        if (state.overlays[id]) loadWeather(id);
+      }
+    });
+}
+
+/** Load every switched-on overlay whose data is older than its refresh period. */
+function refreshWeather() {
+  const now = Date.now();
+  for (const overlay of WEATHER_OVERLAYS) {
+    const entry = state.weather[overlay.id];
+    if (state.overlays[overlay.id] && now - entry.checkedAt >= overlay.refresh) {
+      loadWeather(overlay.id);
+    }
+  }
+}
+
+/** Check once a minute while the page is visible; each overlay keeps its own period. */
+function scheduleWeatherRefresh() {
+  state.timers.set(
+    'weather',
+    window.setTimeout(() => {
+      if (document.visibilityState === 'visible') refreshWeather();
+      scheduleWeatherRefresh();
+    }, MINUTE),
+  );
+}
+
+function toggleWeather(id, on) {
+  state.overlays[id] = on;
+  const entry = state.weather[id];
+  // Switching back on after a failure retries at once.
+  if (on && entry.error) entry.checkedAt = 0;
+  if (!on && id === 'radar') setRadarPlaying(false);
+  applyWeather();
+  renderOverlayList();
+  if (on) refreshWeather();
+  saveMapView();
+}
+
+function onWeatherViewChange(view) {
+  state.weather.wind.view = view;
+  if (!state.overlays.wind) return;
+  window.clearTimeout(state.timers.get('wind'));
+  state.timers.set(
+    'wind',
+    window.setTimeout(() => loadWeather('wind'), 400),
+  );
+}
+
+function showRadarFrame(index) {
+  const radar = state.weather.radar;
+  radar.index = index;
+  applyWeather();
+  // Update in place: re-rendering would steal the slider from under the pointer.
+  const status = elements.overlayList.querySelector('[data-radar-status]');
+  if (status) status.textContent = weatherStatus(WEATHER_BY_ID.get('radar'));
+  const slider = elements.overlayList.querySelector('[data-radar="frame"]');
+  if (slider) slider.value = String(index);
+}
+
+function setRadarPlaying(playing) {
+  const radar = state.weather.radar;
+  radar.playing = playing;
+  window.clearTimeout(state.timers.get('radar-play'));
+  if (playing) {
+    const tick = () => {
+      const last = radar.frames.length - 1;
+      showRadarFrame(radar.index >= last ? 0 : radar.index + 1);
+      // Linger on the newest frame so the loop reads as "up to now".
+      const delay = radar.index === last ? 3 * RADAR_FRAME_MS : RADAR_FRAME_MS;
+      state.timers.set('radar-play', window.setTimeout(tick, delay));
+    };
+    state.timers.set('radar-play', window.setTimeout(tick, RADAR_FRAME_MS));
+  }
+  const button = elements.overlayList.querySelector('[data-radar="play"]');
+  if (button) {
+    button.textContent = playing ? 'Pause' : 'Play';
+    button.setAttribute('aria-pressed', String(playing));
+  }
+}
+
+/** "Clouds 21:45, Radar 21:50" for the print caption. */
+function weatherCaption() {
+  return WEATHER_OVERLAYS.filter((overlay) => state.overlays[overlay.id])
+    .map((overlay) => {
+      const time = weatherTime(overlay.id);
+      return time === null ? null : `${overlay.caption} ${CLOCK.format(time)}`;
+    })
+    .filter(Boolean);
 }
 
 function renderBasemapSwitch() {
@@ -1407,6 +1759,7 @@ function renderStep1Worksheet() {
   );
   container.append(facts);
   container.append(renderLightData(study));
+  container.append(renderForecast(study));
 
   const noteLabel = createElement('label', 'field-label', 'Environment notes');
   noteLabel.setAttribute('for', 'step1-note');
@@ -1474,10 +1827,7 @@ function renderLightData(study) {
   const block = createElement('section', 'worksheet-block light-data');
   block.append(createElement('h4', null, 'Light data'));
 
-  const bounds = study.bounds;
-  const [lon, lat] = bounds
-    ? [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
-    : mapController.getCenter();
+  const { lon, lat, place } = worksheetLocation(study);
   const [year, month, day] = state.lightForm.start.split('-').map(Number);
   const firstDay = new Date(year, month - 1, day);
 
@@ -1502,13 +1852,7 @@ function renderLightData(study) {
   controls.append(startInput, daysSelect);
   block.append(controls);
 
-  block.append(
-    createElement(
-      'p',
-      'panel-note',
-      `${bounds ? 'AOI centre' : 'Map centre (draw an AOI to fix the location)'} ${formatMgrs(lon, lat, 4)} · times in ${timeZoneLabel(firstDay)}`,
-    ),
-  );
+  block.append(createElement('p', 'panel-note', `${place} · times in ${timeZoneLabel(firstDay)}`));
 
   const time = new Intl.DateTimeFormat(undefined, {
     hour: '2-digit',
@@ -1563,6 +1907,163 @@ function renderLightData(study) {
     ),
   );
   return block;
+}
+
+/** The AOI centre, or the map centre until an AOI is drawn. */
+function worksheetLocation(study) {
+  const bounds = study.bounds;
+  const [lon, lat] = bounds
+    ? [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
+    : mapController.getCenter();
+  const place = `${bounds ? 'AOI centre' : 'Map centre (draw an AOI to fix the location)'} ${formatMgrs(lon, lat, 4)}`;
+  return { lon, lat, place, onAoi: Boolean(bounds) };
+}
+
+// --- Step 1: weather forecast (online) -----------------------------------------
+
+const FORECAST_TIME = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+function formatNumber(value, digits = 0) {
+  return Number.isFinite(value) ? value.toFixed(digits) : '—';
+}
+
+/** "W 4 (9)": direction the wind comes from, speed, gusts when notably higher. */
+function formatWind({ direction, wind, gusts }) {
+  if (!Number.isFinite(wind)) return '—';
+  const from = Number.isFinite(direction) && wind >= 0.5 ? `${compassPoint(direction)} ` : '';
+  const gust = Number.isFinite(gusts) && gusts >= wind + 3 ? ` (${Math.round(gusts)})` : '';
+  return `${from}${Math.round(wind)}${gust}`;
+}
+
+function formatVisibility(metres) {
+  return Number.isFinite(metres) ? (metres / 1000).toFixed(metres < 10_000 ? 1 : 0) : '—';
+}
+
+/** Where the forecast is for, rounded so small map moves reuse it. */
+function forecastKey(lon, lat) {
+  return `${lat.toFixed(2)},${lon.toFixed(2)}`;
+}
+
+/**
+ * 48-hour model forecast for the worksheet location, fetched only on request:
+ * the request tells open-meteo.com where the AOI is.
+ */
+function renderForecast(study) {
+  const { lon, lat, place, onAoi } = worksheetLocation(study);
+  const forecast = state.weather.forecast;
+  const key = forecastKey(lon, lat);
+  const requested = forecast.key === key;
+  const loading = requested && forecast.loading;
+  const data = forecast.dataKey === key ? forecast.data : null;
+
+  const block = createElement('section', 'worksheet-block weather-forecast');
+  const heading = createElement('h4', null, 'Weather forecast ');
+  heading.append(createElement('span', 'basemap-note', 'online'));
+  block.append(heading);
+
+  const controls = createElement('div', 'light-controls');
+  const button = createElement(
+    'button',
+    'text-button',
+    loading ? 'Loading…' : data ? 'Refresh forecast' : 'Get forecast',
+  );
+  button.type = 'button';
+  button.disabled = loading;
+  button.addEventListener('click', () => loadForecast(lon, lat));
+  controls.append(button);
+  block.append(controls);
+  if (requested && forecast.error) {
+    block.append(createElement('p', 'inline-error', forecast.error));
+  }
+
+  if (!data) {
+    block.append(
+      createElement(
+        'p',
+        'panel-note',
+        `48-hour model forecast for the ${onAoi ? 'AOI' : 'map'} centre from open-meteo.com. Getting it sends that location to the service.`,
+      ),
+    );
+    return block;
+  }
+
+  const now = data.current;
+  if (now) {
+    block.append(
+      createElement(
+        'p',
+        'weather-now',
+        `Now (${CLOCK.format(now.time)}): ${weatherText(now.code)}, ${formatNumber(now.temperature)} °C, wind ${formatWind(now)} m/s, cloud ${formatNumber(now.cloud)} % (low ${formatNumber(now.cloudLow)} %), visibility ${formatVisibility(now.visibility)} km, precipitation ${formatNumber(now.precipitation, 1)} mm`,
+      ),
+    );
+  }
+
+  const table = document.createElement('table');
+  table.className = 'data-table light-table weather-table';
+  const headRow = document.createElement('tr');
+  [
+    'Time',
+    'Weather',
+    '°C',
+    'Wind m/s (gusts)',
+    'Precip. mm (prob.)',
+    'Cloud % (low)',
+    'Visibility km',
+  ].forEach((label) => headRow.append(createElement('th', null, label)));
+  const head = document.createElement('thead');
+  head.append(headRow);
+  const body = document.createElement('tbody');
+  for (const hour of data.hours) {
+    const row = document.createElement('tr');
+    const probability = Number.isFinite(hour.probability) ? ` (${hour.probability} %)` : '';
+    [
+      FORECAST_TIME.format(hour.time),
+      weatherText(hour.code),
+      formatNumber(hour.temperature),
+      formatWind(hour),
+      `${formatNumber(hour.precipitation, 1)}${probability}`,
+      `${formatNumber(hour.cloud)} (${formatNumber(hour.cloudLow)})`,
+      formatVisibility(hour.visibility),
+    ].forEach((text) => row.append(createElement('td', null, text)));
+    body.append(row);
+  }
+  table.append(head, body);
+  block.append(table);
+  block.append(
+    createElement(
+      'p',
+      'panel-note',
+      `${place} · times in ${timeZoneLabel(new Date())} · weather, precipitation (total, chance) and gusts: the worst of the 3 h from the row's time; the rest at that time; wind from the named direction · model forecast by Open-Meteo.com (CC BY 4.0), fetched ${CLOCK.format(forecast.fetchedAt)}`,
+    ),
+  );
+  return block;
+}
+
+async function loadForecast(lon, lat) {
+  const forecast = state.weather.forecast;
+  const key = forecastKey(lon, lat);
+  const replaceBlock = () => {
+    const block = elements.worksheet1.querySelector('.weather-forecast');
+    if (block && state.study) block.replaceWith(renderForecast(state.study.study));
+  };
+  Object.assign(forecast, { key, loading: true, error: null });
+  replaceBlock();
+  try {
+    const data = parseForecast(await requestJson(forecastUrl(lon, lat)));
+    if (forecast.key !== key) return;
+    Object.assign(forecast, { data, dataKey: key, fetchedAt: Date.now() });
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    if (forecast.key === key) forecast.error = WEATHER_UNAVAILABLE;
+  } finally {
+    if (forecast.key === key) forecast.loading = false;
+  }
+  if (!state.session.signal.aborted) replaceBlock();
 }
 
 // --- Step 2: describe the effects ----------------------------------------
@@ -3312,7 +3813,10 @@ function preparePrintMap() {
   const [lon, lat] = mapController.getCenter();
   const basemap = BASEMAPS.find((entry) => entry.id === state.basemap)?.label ?? state.basemap;
   const spec = overlaySpec();
-  const overlays = OVERLAYS.filter((overlay) => spec[overlay.id]).map((overlay) => overlay.label);
+  const overlays = [
+    ...OVERLAYS.filter((overlay) => spec[overlay.id]).map((overlay) => overlay.label),
+    ...weatherCaption(),
+  ];
   const caption = createElement('figcaption');
   caption.append(
     createElement('strong', null, `${state.study.study.name} — ${STEP_NAMES[state.step]}`),
@@ -3422,6 +3926,7 @@ export function mount({ root, status }) {
     onFeatureChange: onMapFeatureChange,
     onDraw: onMapDraw,
     onPointerMove: onMapPointerMove,
+    onViewChange: onWeatherViewChange,
   });
   mapController.setMgrsGrid(state.grid);
   elements.gridToggle.setAttribute('aria-pressed', String(state.grid));
@@ -3434,10 +3939,26 @@ export function mount({ root, status }) {
   elements.overlayList.addEventListener('change', (event) => {
     const id = event.target.dataset.overlay;
     if (!id) return;
+    if (WEATHER_BY_ID.has(id)) {
+      toggleWeather(id, event.target.checked);
+      return;
+    }
     state.overlays[id] = event.target.checked;
     applyOverlays();
     saveMapView();
   });
+  elements.overlayList.addEventListener('input', (event) => {
+    if (event.target.dataset.radar !== 'frame') return;
+    setRadarPlaying(false);
+    showRadarFrame(Number(event.target.value));
+  });
+  elements.overlayList.addEventListener('click', (event) => {
+    if (event.target.closest('[data-radar="play"]')) {
+      setRadarPlaying(!state.weather.radar.playing);
+    }
+  });
+  refreshWeather();
+  scheduleWeatherRefresh();
   elements.gridToggle.addEventListener('click', () => {
     state.grid = !state.grid;
     elements.gridToggle.setAttribute('aria-pressed', String(state.grid));
