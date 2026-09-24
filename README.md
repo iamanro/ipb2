@@ -80,7 +80,11 @@ Builds `modules/terrain/data/terrain.db`: a one-arc-second elevation grid
 resampled from Copernicus GLO-30, used for slope, line-of-sight, viewshed, and
 the MCOO mobility overlay. `--bounds` defaults to `17.2,49.5,17.8,49.9` (the
 Libavá training area, Czech Republic) if omitted. The terrain API only has
-data inside whatever bounds you build.
+data inside whatever bounds you build: contours, slope classes, hillshade,
+viewshed, line of sight and the MCOO all stop at its edge. Covering a whole
+country is practical — all of Czechia (`--bounds 12.09,48.55,18.87,51.06`, the
+extent of a Czech Geofabrik extract) is 28 GLO-30 tiles, ~1 GB downloaded,
+an 890 MB `terrain.db`, and about a minute to build.
 
 The 1°×1° GLO-30 tiles covering `--bounds` are downloaded from the public
 [AWS Open Data bucket](https://registry.opendata.aws/copernicus-dem/) (no
@@ -120,7 +124,9 @@ node modules/terrain/tools/build_satellite.mjs
 Downloads [EOxCloudless](https://cloudless.eox.at) Sentinel-2 imagery (10 m,
 zoom 8–14) into `modules/terrain/data/satellite.mbtiles` for the offline
 "Satellite" basemap. `--bounds` defaults to the built `terrain.db`'s bounds; the
-Libavá default is ~1,200 tiles, ~11 MB, well under a minute. `--year` picks the
+Libavá default is ~1,200 tiles, ~11 MB, well under a minute. A country-wide
+`terrain.db` is too large at zoom 14 (the tool stops above 20,000 tiles): pass
+`--bounds` for your area of interest, or lower `--max-zoom`. `--year` picks the
 mosaic (default 2025). Safe to interrupt; rerunning resumes.
 
 **Licence:** 2016 imagery is CC BY 4.0; 2017 and later are **CC BY-NC-SA 4.0,
