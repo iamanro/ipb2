@@ -5897,11 +5897,18 @@ export function mount({ root, status }) {
   const initialStudyId = state.studyId;
 
   Promise.all([
-    requestJson(`${TERRAIN_API}/meta`).then((meta) => {
-      state.terrainMeta = meta;
-      // Now that attribution and local tile sources are known.
-      applyBasemap(state.basemap);
-    }),
+    requestJson(`${TERRAIN_API}/meta`).then(
+      (meta) => {
+        state.terrainMeta = meta;
+        // Now that attribution and local tile sources are known.
+        applyBasemap(state.basemap);
+      },
+      (error) => {
+        if (error.name === 'AbortError') throw error;
+        // Non-critical: without terrain data (not built yet) studies still
+        // open; the Map popover's overlays say what is missing.
+      },
+    ),
     loadStudies(),
     loadEquipmentBookmarks().then(() => {
       if (state.step === 3) renderToolPanel();

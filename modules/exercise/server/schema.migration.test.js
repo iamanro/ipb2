@@ -22,13 +22,10 @@ function tableCounts(database, tables) {
   return Object.fromEntries(tables.map((table) => [table, database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n]));
 }
 
-describe('evidence_links/indicators requirement_id migration, on a copy of the real state db', () => {
-  test('never touches the real file: runs against a copy only', () => {
-    expect(existsSync(REAL_DB)).toBe(true);
-  });
-
+// A fresh clone (CI) has no local state db: nothing to prove against. The
+// migration runs on a copy only, never on the real file.
+describe.skipIf(!existsSync(REAL_DB))('evidence_links/indicators requirement_id migration, on a copy of the real state db', () => {
   test('preserves every row count and backfills requirement_id correctly', () => {
-    if (!existsSync(REAL_DB)) return; // no real state db in this checkout (fresh clone) — nothing to prove against
     tmpDir = mkdtempSync(path.join(os.tmpdir(), 'exercise-migration-real-'));
     const copy = path.join(tmpDir, 'exercise.db');
     copyFileSync(REAL_DB, copy);
