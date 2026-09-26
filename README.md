@@ -1125,6 +1125,12 @@ first), so a new module is backed up and reset without touching those tools.
 | `npm run check`    | Format check + lint + typecheck; run before committing                                                                                                                       |
 | `npm run format`   | Auto-format with Prettier conventions (`vp fmt --write`)                                                                                                                     |
 
+CI (`.github/workflows/ci.yml`, GitHub Actions, every push to `master` and
+every pull request) runs `vp lint`, `npm test` and `npm run test:e2e` on
+Node 24 against a fresh clone (no reference data), and checks that the
+Docker image builds; nothing is pushed or deployed. The format check
+(`npm run check`) is not part of CI yet: the tree isn't formatted.
+
 ## Deployment (Docker / Podman)
 
 Runs the same app as `npm start`, but as a container behind a TLS-terminating
