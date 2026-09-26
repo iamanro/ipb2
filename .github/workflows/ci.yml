@@ -29,8 +29,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Lint
-        run: npx vp lint
+      - name: Format, lint and typecheck
+        run: npm run check
 
       - name: Unit tests
         run: npm test
