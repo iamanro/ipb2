@@ -4,17 +4,7 @@ import { formatDtg } from '../../../src/dtg.js';
 import { formatMgrs } from '../../../src/geo.js';
 import { formatSidc, parseSidc } from '../../../src/symbols/sidc.js';
 import { HttpError } from '../../../server/http.js';
-import {
-  assertCanEdit,
-  CELLS,
-  canRelease,
-  canSee,
-  isWhite,
-  liveCellsFor,
-  normalizeRelease,
-  ownerCellForCreate,
-  visibilitySql,
-} from '../../../server/policy.js';
+import { normalizeRelease } from '../../../server/policy.js';
 import { referenceFile } from '../../../server/reference.js';
 import { openState, transact } from '../../../server/state.js';
 import { computePirFulfillment } from './fulfillment.js';
@@ -32,6 +22,12 @@ import {
 } from './scenarioGeography.js';
 import { MIGRATIONS } from './schema.js';
 import { dueEvents, reanchor, scenarioNowMs } from './scenarioClock.js';
+
+// Duplicated from `server/policy.js`, not imported (docs/adr/0002 rule 4: a
+// store takes no user and imports nothing from policy.js) — the same reason
+// `src/release.js` keeps its own copy for the browser bundle. This is the
+// only place the store still needs the literal cell list, to validate an
+// inject's `release_to`.
 
 const REQUIREMENT_KINDS = ['PIR', 'FFIR'];
 const RELIABILITY = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -72,31 +68,29 @@ export function openStore(file, { regionsFile } = {}) {
       }))
     : null;
   return {
+    database,
     listRequirements,
     createRequirement,
     updateRequirement,
     deleteRequirement,
-    releaseRequirement,
     createSir,
     updateSir,
     deleteSir,
     createIndicator,
     updateIndicator,
     deleteIndicator,
+    createEvidenceLink,
+    deleteEvidenceLink,
     importIpbStudy,
     listNais,
     listReports,
     createReport,
     updateReport,
     deleteReport,
-    releaseReport,
-    createEvidenceLink,
-    deleteEvidenceLink,
     listTracks,
     createTrack,
     updateTrack,
     deleteTrack,
-    releaseTrack,
     addTrackPosition,
     listCollectors,
     createCollector,
@@ -111,14 +105,12 @@ export function openStore(file, { regionsFile } = {}) {
     createIntsum,
     updateIntsum,
     deleteIntsum,
-    releaseIntsum,
     draftIntsum,
     listRfis,
     createRfi,
     updateRfi,
     transitionRfi,
     deleteRfi,
-    releaseRfi,
     listMessages,
     readClock,
     patchClock,
@@ -126,7 +118,7 @@ export function openStore(file, { regionsFile } = {}) {
     createScenarioEvent,
     cancelScenarioEvent,
     fireScenarioEvent,
-    tickScenario,
+    dueScenarioEventIds,
     getRegions,
     listScenarios,
     createScenario,
@@ -143,6 +135,16 @@ export function openStore(file, { regionsFile } = {}) {
     updatePlace,
     deletePlace,
     listActivity,
+    shapeRequirement,
+    shapeReport,
+    shapeTrack,
+    shapeCollector,
+    shapeTasking,
+    shapeIntsum,
+    shapeRfi,
+    shapeNai,
+    shapeMessage,
+    shapeScenarioEvent,
     close,
   };
 }
@@ -246,7 +248,10 @@ function validateFields(reportType, fields) {
   return result;
 }
 
-/** The first NAI (by id) whose geometry contains the point, or null. */
+/** The first NAI (by id) whose geometry contains the point, or null. Reads
+ * every NAI's raw geometry regardless of visibility — matching a point
+ * against a shape is not "reading another item", it never exposes more
+ * than the numeric id an existing report/SIR/tasking could already carry. */
 function findMatchingNaiId(lon, lat) {
   if (lon === null || lat === null) return null;
   const candidates = database
@@ -259,119 +264,66 @@ function findMatchingNaiId(lon, lat) {
 }
 
 /**
- * A report's `nai_id`: an explicit id (validated), explicit `null` to
- * clear it, or — when not given at all — the auto-match against the point.
+ * A report's `nai_id`: an explicit id (read with `access.see`, 404 if
+ * hidden), explicit `null` to clear it, or — when not given at all — the
+ * auto-match against the point.
  */
-function resolveNaiId(explicit, lon, lat) {
+function resolveNaiId(explicit, lon, lat, access) {
   if (explicit !== undefined) {
     if (explicit === null) return null;
     if (!Number.isInteger(explicit)) throw new HttpError(400, 'nai_id must be an integer.');
-    assertExists('nais', explicit, 'NAI');
+    access.see('nai', explicit);
     return explicit;
   }
   return findMatchingNaiId(lon, lat);
 }
 
-function resolveTrackId(value) {
+function resolveTrackId(value, access) {
   if (value === undefined || value === null) return null;
   if (!Number.isInteger(value)) throw new HttpError(400, 'track_id must be an integer.');
-  assertExists('tracks', value, 'Track');
+  access.see('track', value);
   return value;
-}
-
-/**
- * Every mutation appends one activity row, inside the same transaction.
- * `target` may be a function to defer reading a value (such as an inserted
- * id) that only exists after `work()` runs.
- */
-function mutate(action, target, work) {
-  return transact(database, () => {
-    const result = work();
-    const targetLabel = typeof target === 'function' ? target() : target;
-    // `liveCells` (attached by `withCells`/`deletedWithCells`/the child
-    // helpers) is `[owner_cell, ...releasable_to]` (see `liveCellsFor`); a
-    // mutation of a non-cell-owned row leaves it absent, so the activity
-    // row stays global (`owner_cell` NULL).
-    const cells = Array.isArray(result?.liveCells) ? result.liveCells : null;
-    const ownerCell = cells ? cells[0] : null;
-    const releasableTo = cells ? cells.slice(1) : [];
-    database
-      .prepare(
-        'INSERT INTO activity (at, action, target, detail, owner_cell, releasable_to) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .run(now(), action, targetLabel, null, ownerCell, JSON.stringify(releasableTo));
-    return result;
-  });
 }
 
 function fetchRow(table, id) {
   return database.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) ?? null;
 }
 
-function assertExists(table, id, label) {
-  if (!fetchRow(table, id)) throw new HttpError(404, `${label} ${id} not found.`);
-}
-
-// -- cells (docs/phase1-access.md C2/C3/C4) ------------------------------
-//
-// Every cell-owned table (requirements, reports, rfis, tracks, collectors,
-// taskings, intsums, nais, messages) is filtered by `visibilitySql`/`canSee`
-// on every read, stamped by `ownerCellForCreate` on create, and exposes a
-// release/reassign path. Child rows (sirs, indicators, evidence_links,
-// track_positions) carry no columns of their own: their visibility and live
-// cells come from the ancestor cell-owned row.
-//
-// A mutation of a cell-owned row (directly or through a child) attaches a
-// `liveCells` array to what it returns; routes.js lifts that onto
-// `request.liveCells` and strips the key before sending the response, so
-// server/api.js can publish the right `cells` on the live event (C4).
-
-/** A cell-owned row visible to `user`, or a 404 (never a 403: an invisible
- * row must look the same as a nonexistent one). */
-function fetchVisibleRow(user, table, id, label) {
-  const row = fetchRow(table, id);
-  if (!row || !canSee(user, row)) throw new HttpError(404, `${label} ${id} not found.`);
-  return row;
-}
-
-/** Every row of a cell-owned table visible to `user`, in `orderBy` order. */
-function listVisible(user, table, orderBy) {
-  const { sql, params } = visibilitySql(user, { alias: undefined });
-  return database.prepare(`SELECT * FROM ${table} WHERE ${sql} ORDER BY ${orderBy}`).all(...params);
-}
-
-/** Attaches `liveCells` (C4) to a shaped cell-owned row for routes.js to lift off. */
-function withCells(shaped) {
-  return { ...shaped, liveCells: liveCellsFor(shaped) };
-}
-
-/** Same, but for a delete (`{ deleted: true }` plus the cells the deleted row reached). */
-function deletedWithCells(row) {
-  return { deleted: true, liveCells: liveCellsFor(row) };
-}
-
-/** A `release<Table>(user, id, cells)` closure for the five releasable
- * resources (C3): requirements, reports, tracks, intsums, rfis. */
-function makeRelease(table, label, shapeFn) {
-  return (user, id, cells) => {
-    const row = fetchVisibleRow(user, table, id, label);
-    if (!canRelease(user, row)) throw new HttpError(403, `You cannot release this ${label.toLowerCase()}.`);
-    const normalized = normalizeRelease(cells, row.owner_cell);
-    return mutate(`${table}:release`, String(id), () => {
-      database
-        .prepare(`UPDATE ${table} SET releasable_to = ?, updated_at = ? WHERE id = ?`)
-        .run(JSON.stringify(normalized), now(), id);
-      return withCells(shapeFn(fetchRow(table, id)));
-    });
+/** `row.owner_cell`/`releasable_to` (a JSON string) or a dispatcher-given
+ * `owner` (`releasable_to` already an array) — either way, what the
+ * activity log needs for one mutation. `null` for a global change. */
+function cellsOf(source) {
+  if (!source) return null;
+  return {
+    owner_cell: source.owner_cell,
+    releasable_to: Array.isArray(source.releasable_to) ? source.releasable_to : JSON.parse(source.releasable_to),
   };
 }
 
-/** White may reassign a cell-owned row's `owner_cell`; a patch's
- * `owner_cell` field is handled uniformly by every update* below. */
-function ownerReassignField(user, patch) {
-  if (!('owner_cell' in patch)) return null;
-  if (!isWhite(user)) throw new HttpError(403, 'Only White may reassign the owning cell.');
-  return requireEnum(patch.owner_cell, 'owner_cell', CELLS);
+/**
+ * Every mutation appends one activity row, inside the same transaction.
+ * `target` may be a function to defer reading a value (such as an inserted
+ * id) that only exists after `work()` runs. `cells` (from `cellsOf`) is the
+ * item the mutation touched, or null for a change with no single cell-owned
+ * subject (the scenario clock, scenario/country/place management).
+ */
+function mutate(action, target, cells, work) {
+  return transact(database, () => {
+    const result = work();
+    const targetLabel = typeof target === 'function' ? target() : target;
+    database
+      .prepare(
+        'INSERT INTO activity (at, action, target, detail, owner_cell, releasable_to) VALUES (?, ?, ?, NULL, ?, ?)',
+      )
+      .run(now(), action, targetLabel, cells ? cells.owner_cell : null, JSON.stringify(cells ? cells.releasable_to : []));
+    return result;
+  });
+}
+
+/** Every row of a cell-owned table the requester can see, in `orderBy` order. */
+function visibleRows(access, kind, table, orderBy) {
+  const { sql, params } = access.visible(kind, {});
+  return database.prepare(`SELECT * FROM ${table} WHERE ${sql} ORDER BY ${orderBy}`).all(...params);
 }
 
 // -- requirements tree ------------------------------------------------------
@@ -380,6 +332,7 @@ function shapeIndicator(row) {
   return {
     id: row.id,
     sir_id: row.sir_id,
+    requirement_id: row.requirement_id,
     description: row.description,
     observed: Boolean(row.observed),
     source: row.source,
@@ -388,23 +341,78 @@ function shapeIndicator(row) {
   };
 }
 
-function sirFulfillment(sirId) {
+function shapeEvidenceLinkBase(row) {
+  return {
+    id: row.id,
+    report_id: row.report_id,
+    requirement_id: row.requirement_id,
+    target_kind: row.target_kind,
+    target_id: row.target_id,
+    relation: row.relation,
+    note: row.note,
+    created_at: row.created_at,
+  };
+}
+
+/** A light citation preview — never the full shaped report (no need for its
+ * own nested links), and only when the viewer can still see it. */
+function reportSummary(row) {
+  return {
+    id: row.id,
+    text: row.text,
+    occurred_at: row.occurred_at,
+    reliability: row.reliability,
+    credibility: row.credibility,
+    owner_cell: row.owner_cell,
+  };
+}
+
+/**
+ * An evidence link as shown on the requirement/SIR it supports: the cited
+ * report, or — deleting a report never deletes the links citing it (see
+ * `docs/adr/0002`, schema.js) — `report: null, withdrawn: true` once it's
+ * gone. A report that still exists but the *viewer* can no longer see
+ * (reassigned away since the link was made) shows neither: `report: null`,
+ * `withdrawn: false`, same as any other row this viewer isn't shown.
+ */
+function shapeEvidenceLinkWithReport(row, access) {
+  const reportRow = fetchRow('reports', row.report_id);
+  let report = null;
+  if (reportRow) {
+    try {
+      access.see('report', row.report_id);
+      report = reportSummary(reportRow);
+    } catch {
+      report = null;
+    }
+  }
+  return { ...shapeEvidenceLinkBase(row), report, withdrawn: !reportRow };
+}
+
+/** A SIR's fulfillment counts only evidence from reports the requester can
+ * currently see (docs/adr/0002 rule: fulfillment is per viewer). */
+function sirFulfillment(sirId, access) {
+  const { sql, params } = access.visible('report', { alias: 'r' });
   const links = database
     .prepare(
       `SELECT el.relation, r.credibility
        FROM evidence_links el JOIN reports r ON r.id = el.report_id
-       WHERE el.target_kind = 'sir' AND el.target_id = ?`,
+       WHERE el.target_kind = 'sir' AND el.target_id = ? AND ${sql}`,
     )
-    .all(sirId)
+    .all(sirId, ...params)
     .map((row) => ({ sirId, relation: row.relation, credibility: row.credibility }));
   return computePirFulfillment([sirId], links);
 }
 
-function shapeSir(row) {
+function shapeSir(row, access) {
   const indicators = database
     .prepare('SELECT * FROM indicators WHERE sir_id = ? ORDER BY created_at, id')
     .all(row.id)
     .map(shapeIndicator);
+  const links = database
+    .prepare("SELECT * FROM evidence_links WHERE target_kind = 'sir' AND target_id = ? ORDER BY created_at, id")
+    .all(row.id)
+    .map((link) => shapeEvidenceLinkWithReport(link, access));
   return {
     id: row.id,
     requirement_id: row.requirement_id,
@@ -413,40 +421,46 @@ function shapeSir(row) {
     time_window_end: row.time_window_end,
     nai_id: row.nai_id,
     indicators,
-    fulfillment: sirFulfillment(row.id),
+    links,
+    fulfillment: sirFulfillment(row.id, access),
     source: row.source,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-function requirementFulfillment(requirementId, sirIds) {
+function requirementFulfillment(requirementId, sirIds, access) {
+  const { sql, params } = access.visible('report', { alias: 'r' });
   const blanket = database
     .prepare(
       `SELECT el.relation, r.credibility
        FROM evidence_links el JOIN reports r ON r.id = el.report_id
-       WHERE el.target_kind = 'requirement' AND el.target_id = ?`,
+       WHERE el.target_kind = 'requirement' AND el.target_id = ? AND ${sql}`,
     )
-    .all(requirementId)
+    .all(requirementId, ...params)
     .map((row) => ({ sirId: null, relation: row.relation, credibility: row.credibility }));
   const perSir = sirIds.length
     ? database
         .prepare(
           `SELECT el.target_id AS sir_id, el.relation, r.credibility
            FROM evidence_links el JOIN reports r ON r.id = el.report_id
-           WHERE el.target_kind = 'sir' AND el.target_id IN (${sirIds.map(() => '?').join(',')})`,
+           WHERE el.target_kind = 'sir' AND el.target_id IN (${sirIds.map(() => '?').join(',')}) AND ${sql}`,
         )
-        .all(...sirIds)
+        .all(...sirIds, ...params)
         .map((row) => ({ sirId: row.sir_id, relation: row.relation, credibility: row.credibility }))
     : [];
   return computePirFulfillment(sirIds, [...blanket, ...perSir]);
 }
 
-function shapeRequirement(row) {
+function shapeRequirement(row, { access }) {
   const sirs = database
     .prepare('SELECT * FROM sirs WHERE requirement_id = ? ORDER BY created_at, id')
     .all(row.id)
-    .map(shapeSir);
+    .map((sir) => shapeSir(sir, access));
+  const links = database
+    .prepare("SELECT * FROM evidence_links WHERE target_kind = 'requirement' AND target_id = ? ORDER BY created_at, id")
+    .all(row.id)
+    .map((link) => shapeEvidenceLinkWithReport(link, access));
   return {
     id: row.id,
     kind: row.kind,
@@ -455,9 +469,11 @@ function shapeRequirement(row) {
     ltiov: row.ltiov,
     priority: row.priority,
     sirs,
+    links,
     fulfillment: requirementFulfillment(
       row.id,
       sirs.map((sir) => sir.id),
+      access,
     ),
     source: row.source,
     owner_cell: row.owner_cell,
@@ -467,42 +483,38 @@ function shapeRequirement(row) {
   };
 }
 
-function listRequirements(user) {
-  return listVisible(user, 'requirements', 'priority DESC, created_at, id').map(shapeRequirement);
-}
-
-function createRequirement(user, { kind, text, decision_point: decisionPoint, ltiov, priority, owner_cell: ownerCell }) {
-  requireEnum(kind, 'kind', REQUIREMENT_KINDS);
-  const cleanText = requireString(text, 'text');
-  const cleanOwner = ownerCellForCreate(user, ownerCell);
-  const timestamp = now();
-  return mutate(
-    'requirement:create',
-    () => cleanText,
-    () => {
-      const { lastInsertRowid } = database
-        .prepare(
-          `INSERT INTO requirements (kind, text, decision_point, ltiov, priority, owner_cell, releasable_to, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
-        )
-        .run(
-          kind,
-          cleanText,
-          optionalString(decisionPoint, 'decision_point'),
-          optionalString(ltiov, 'ltiov'),
-          Number.isInteger(priority) ? priority : 0,
-          cleanOwner,
-          timestamp,
-          timestamp,
-        );
-      return withCells(shapeRequirement(fetchRow('requirements', Number(lastInsertRowid))));
-    },
+function listRequirements(access) {
+  return visibleRows(access, 'requirement', 'requirements', 'priority DESC, created_at, id').map((row) =>
+    shapeRequirement(row, { access }),
   );
 }
 
-function updateRequirement(user, id, patch) {
-  const existing = fetchVisibleRow(user, 'requirements', id, 'Requirement');
-  assertCanEdit(user, existing);
+function createRequirement(owner, { kind, text, decision_point: decisionPoint, ltiov, priority }, access) {
+  requireEnum(kind, 'kind', REQUIREMENT_KINDS);
+  const cleanText = requireString(text, 'text');
+  const timestamp = now();
+  return mutate('requirement:create', () => cleanText, cellsOf(owner), () => {
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO requirements (kind, text, decision_point, ltiov, priority, owner_cell, releasable_to, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        kind,
+        cleanText,
+        optionalString(decisionPoint, 'decision_point'),
+        optionalString(ltiov, 'ltiov'),
+        Number.isInteger(priority) ? priority : 0,
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
+        timestamp,
+        timestamp,
+      );
+    return shapeRequirement(fetchRow('requirements', Number(lastInsertRowid)), { access });
+  });
+}
+
+function updateRequirement(item, patch, access) {
   const fields = [];
   const params = [];
   if ('text' in patch) {
@@ -522,99 +534,47 @@ function updateRequirement(user, id, patch) {
     fields.push('priority = ?');
     params.push(patch.priority);
   }
-  const reassign = ownerReassignField(user, patch);
-  if (reassign) {
-    fields.push('owner_cell = ?');
-    params.push(reassign);
-  }
-  return mutate('requirement:update', String(id), () => {
+  return mutate('requirement:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database
-        .prepare(`UPDATE requirements SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, id);
+      database.prepare(`UPDATE requirements SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
     }
-    return withCells(shapeRequirement(fetchRow('requirements', id)));
+    return shapeRequirement(fetchRow('requirements', item.id), { access });
   });
 }
 
-function deleteRequirement(user, id) {
-  const row = fetchVisibleRow(user, 'requirements', id, 'Requirement');
-  assertCanEdit(user, row);
-  return mutate('requirement:delete', String(id), () => {
-    database.prepare('DELETE FROM requirements WHERE id = ?').run(id);
-    return deletedWithCells(row);
+function deleteRequirement(item) {
+  return mutate('requirement:delete', String(item.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM requirements WHERE id = ?').run(item.id);
+    return { deleted: true };
   });
 }
 
-const releaseRequirement = makeRelease('requirements', 'Requirement', shapeRequirement);
-
-/** The requirement a SIR belongs to, for visibility inheritance — null if
- * the SIR (or its requirement) doesn't exist. */
-function requirementForSir(sirId) {
-  const sir = fetchRow('sirs', sirId);
-  if (!sir) return null;
-  return fetchRow('requirements', sir.requirement_id);
-}
-
-/** The requirement an indicator belongs to (via its SIR), for visibility inheritance. */
-function requirementForIndicator(indicatorId) {
-  const indicator = fetchRow('indicators', indicatorId);
-  if (!indicator) return null;
-  return requirementForSir(indicator.sir_id);
-}
-
-function assertSirVisible(user, sirId) {
-  const requirement = requirementForSir(sirId);
-  if (!requirement || !canSee(user, requirement)) throw new HttpError(404, `SIR ${sirId} not found.`);
-  return requirement;
-}
-
-function assertIndicatorVisible(user, indicatorId) {
-  const requirement = requirementForIndicator(indicatorId);
-  if (!requirement || !canSee(user, requirement)) {
-    throw new HttpError(404, `Indicator ${indicatorId} not found.`);
-  }
-  return requirement;
-}
-
-function createSir(
-  user,
-  requirementId,
-  { text, time_window_start: start, time_window_end: end, nai_id: naiId },
-) {
-  const requirement = fetchVisibleRow(user, 'requirements', requirementId, 'Requirement');
-  assertCanEdit(user, requirement);
+function createSir(item, { text, time_window_start: start, time_window_end: end, nai_id: naiId }, access) {
   const cleanText = requireString(text, 'text');
-  const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null);
+  const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null, access);
   const timestamp = now();
-  return mutate(
-    'sir:create',
-    () => cleanText,
-    () => {
-      const { lastInsertRowid } = database
-        .prepare(
-          `INSERT INTO sirs (requirement_id, text, time_window_start, time_window_end, nai_id, created_at, updated_at)
+  return mutate('sir:create', () => cleanText, cellsOf(item), () => {
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO sirs (requirement_id, text, time_window_start, time_window_end, nai_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          requirementId,
-          cleanText,
-          optionalString(start, 'time_window_start'),
-          optionalString(end, 'time_window_end'),
-          validNaiId,
-          timestamp,
-          timestamp,
-        );
-      return { ...shapeSir(fetchRow('sirs', Number(lastInsertRowid))), liveCells: liveCellsFor(requirement) };
-    },
-  );
+      )
+      .run(
+        item.id,
+        cleanText,
+        optionalString(start, 'time_window_start'),
+        optionalString(end, 'time_window_end'),
+        validNaiId,
+        timestamp,
+        timestamp,
+      );
+    return shapeSir(fetchRow('sirs', Number(lastInsertRowid)), access);
+  });
 }
 
-function updateSir(user, id, patch) {
-  const requirement = assertSirVisible(user, id);
-  assertCanEdit(user, requirement);
+function updateSir(item, part, patch, access) {
   const fields = [];
   const params = [];
   if ('text' in patch) {
@@ -631,52 +591,44 @@ function updateSir(user, id, patch) {
   }
   if ('nai_id' in patch) {
     fields.push('nai_id = ?');
-    params.push(resolveNaiId(patch.nai_id, null, null));
+    params.push(resolveNaiId(patch.nai_id, null, null, access));
   }
-  return mutate('sir:update', String(id), () => {
+  return mutate('sir:update', String(part.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE sirs SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE sirs SET ${fields.join(', ')} WHERE id = ?`).run(...params, part.id);
     }
-    return { ...shapeSir(fetchRow('sirs', id)), liveCells: liveCellsFor(requirement) };
+    return shapeSir(fetchRow('sirs', part.id), access);
   });
 }
 
-function deleteSir(user, id) {
-  const requirement = assertSirVisible(user, id);
-  assertCanEdit(user, requirement);
-  return mutate('sir:delete', String(id), () => {
-    database.prepare('DELETE FROM sirs WHERE id = ?').run(id);
-    return deletedWithCells(requirement);
+function deleteSir(item, part) {
+  return mutate('sir:delete', String(part.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM sirs WHERE id = ?').run(part.id);
+    return { deleted: true };
   });
 }
 
-function createIndicator(user, sirId, { description }) {
-  const requirement = assertSirVisible(user, sirId);
-  assertCanEdit(user, requirement);
+function createIndicator(item, { sir_id: sirId, description }) {
+  if (!Number.isInteger(sirId)) throw new HttpError(400, 'sir_id must be an integer.');
+  const sir = fetchRow('sirs', sirId);
+  if (!sir || sir.requirement_id !== item.id) {
+    throw new HttpError(400, `sir_id ${sirId} does not belong to this requirement.`);
+  }
   const cleanDescription = requireString(description, 'description');
   const timestamp = now();
-  return mutate(
-    'indicator:create',
-    () => cleanDescription,
-    () => {
-      const { lastInsertRowid } = database
-        .prepare(
-          'INSERT INTO indicators (sir_id, description, observed, created_at, updated_at) VALUES (?, ?, 0, ?, ?)',
-        )
-        .run(sirId, cleanDescription, timestamp, timestamp);
-      return {
-        ...shapeIndicator(fetchRow('indicators', Number(lastInsertRowid))),
-        liveCells: liveCellsFor(requirement),
-      };
-    },
-  );
+  return mutate('indicator:create', () => cleanDescription, cellsOf(item), () => {
+    const { lastInsertRowid } = database
+      .prepare(
+        'INSERT INTO indicators (sir_id, requirement_id, description, observed, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)',
+      )
+      .run(sirId, item.id, cleanDescription, timestamp, timestamp);
+    return shapeIndicator(fetchRow('indicators', Number(lastInsertRowid)));
+  });
 }
 
-function updateIndicator(user, id, patch) {
-  const requirement = assertIndicatorVisible(user, id);
-  assertCanEdit(user, requirement);
+function updateIndicator(item, part, patch) {
   const fields = [];
   const params = [];
   if ('description' in patch) {
@@ -687,24 +639,61 @@ function updateIndicator(user, id, patch) {
     fields.push('observed = ?');
     params.push(patch.observed ? 1 : 0);
   }
-  return mutate('indicator:update', String(id), () => {
+  return mutate('indicator:update', String(part.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database
-        .prepare(`UPDATE indicators SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, id);
+      database.prepare(`UPDATE indicators SET ${fields.join(', ')} WHERE id = ?`).run(...params, part.id);
     }
-    return { ...shapeIndicator(fetchRow('indicators', id)), liveCells: liveCellsFor(requirement) };
+    return shapeIndicator(fetchRow('indicators', part.id));
   });
 }
 
-function deleteIndicator(user, id) {
-  const requirement = assertIndicatorVisible(user, id);
-  assertCanEdit(user, requirement);
-  return mutate('indicator:delete', String(id), () => {
-    database.prepare('DELETE FROM indicators WHERE id = ?').run(id);
-    return deletedWithCells(requirement);
+function deleteIndicator(item, part) {
+  return mutate('indicator:delete', String(part.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM indicators WHERE id = ?').run(part.id);
+    return { deleted: true };
+  });
+}
+
+/** Evidence links are parts of the requirement they support (CONTEXT.md):
+ * `item` is that requirement, already resolved and `canEdit`-checked by the
+ * dispatcher. `target_kind: 'requirement'` defaults `target_id` to `item`
+ * itself; `'sir'` needs a `target_id` that is actually one of its SIRs. The
+ * cited report is read with `access.see`, exactly the contract's "creating
+ * a link changes its target, not the report" rule. */
+function createEvidenceLink(item, { report_id: reportId, target_kind: targetKind, target_id: targetId, relation, note }, access) {
+  requireEnum(targetKind, 'target_kind', TARGET_KINDS);
+  let cleanTargetId;
+  if (targetKind === 'requirement') {
+    cleanTargetId = targetId ?? item.id;
+    if (cleanTargetId !== item.id) throw new HttpError(400, 'target_id must be this requirement.');
+  } else {
+    if (!Number.isInteger(targetId)) throw new HttpError(400, 'target_id must be an integer.');
+    const sir = fetchRow('sirs', targetId);
+    if (!sir || sir.requirement_id !== item.id) {
+      throw new HttpError(400, `target_id ${targetId} is not a SIR of this requirement.`);
+    }
+    cleanTargetId = targetId;
+  }
+  if (!Number.isInteger(reportId)) throw new HttpError(400, 'report_id must be an integer.');
+  const report = access.see('report', reportId);
+  requireEnum(relation, 'relation', RELATIONS);
+  return mutate('evidence:link', `report:${report.id}`, cellsOf(item), () => {
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO evidence_links (report_id, requirement_id, target_kind, target_id, relation, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(report.id, item.id, targetKind, cleanTargetId, relation, optionalString(note, 'note'), now());
+    return shapeEvidenceLinkWithReport(fetchRow('evidence_links', Number(lastInsertRowid)), access);
+  });
+}
+
+function deleteEvidenceLink(item, part) {
+  return mutate('evidence:unlink', String(part.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM evidence_links WHERE id = ?').run(part.id);
+    return { deleted: true };
   });
 }
 
@@ -746,13 +735,14 @@ function upsertBySource(table, source, derived, initial = {}) {
 }
 
 /**
- * Import (or refresh) an IPB study's event matrix as PIR/SIR/indicator rows.
- * Never deletes: rows that came from this study but are no longer in it are
- * returned by text under `stale` and left for the collection manager to
- * remove, since they may already carry evidence links and observations.
+ * Import (or refresh) an IPB study's event matrix as PIR/SIR/indicator rows,
+ * all owned by `owner` (the dispatcher's create-verb owner: exactly what it
+ * resolved from the actor/body, stored as-is). Never deletes: rows that
+ * came from this study but are no longer in it are returned by text under
+ * `stale` and left for the collection manager to remove, since they may
+ * already carry evidence links and observations.
  */
-function importIpbStudy(user, input) {
-  const ownerCell = ownerCellForCreate(user, input?.owner_cell);
+function importIpbStudy(owner, input) {
   const plan = planIpbImport(input);
   const summary = Object.fromEntries(
     ['requirements', 'sirs', 'indicators', 'nais'].map((table) => [
@@ -763,7 +753,7 @@ function importIpbStudy(user, input) {
   const tally = (table, outcome) => {
     summary[table][outcome] += 1;
   };
-  return mutate('ipb:import', plan.studyName, () => {
+  return mutate('ipb:import', plan.studyName, cellsOf(owner), () => {
     const naiIds = new Map();
     for (const nai of plan.nais) {
       const { id, outcome } = upsertBySource(
@@ -776,7 +766,7 @@ function importIpbStudy(user, input) {
           label: nai.label,
           geometry: nai.geometry === null ? null : JSON.stringify(nai.geometry),
         },
-        { owner_cell: ownerCell, releasable_to: '[]' },
+        { owner_cell: owner.owner_cell, releasable_to: JSON.stringify(owner.releasable_to) },
       );
       naiIds.set(nai.source, id);
       tally('nais', outcome);
@@ -787,7 +777,7 @@ function importIpbStudy(user, input) {
         'requirements',
         requirement.source,
         { text: requirement.text },
-        { kind: 'PIR', priority: 0, owner_cell: ownerCell, releasable_to: '[]' },
+        { kind: 'PIR', priority: 0, owner_cell: owner.owner_cell, releasable_to: JSON.stringify(owner.releasable_to) },
       );
       requirementIds.set(requirement.source, id);
       tally('requirements', outcome);
@@ -803,10 +793,11 @@ function importIpbStudy(user, input) {
       tally('sirs', outcome);
     }
     for (const indicator of plan.indicators) {
+      const sirId = sirIds.get(indicator.sirSource);
       const { outcome } = upsertBySource(
         'indicators',
         indicator.source,
-        { sir_id: sirIds.get(indicator.sirSource), description: indicator.description },
+        { sir_id: sirId, requirement_id: database.prepare('SELECT requirement_id FROM sirs WHERE id = ?').get(sirId)?.requirement_id ?? null, description: indicator.description },
         { observed: indicator.observed ? 1 : 0 },
       );
       tally('indicators', outcome);
@@ -826,7 +817,7 @@ function importIpbStudy(user, input) {
         .filter((row) => !live.has(row.source))
         .map((row) => row.text);
     }
-    return { ...summary, liveCells: liveCellsFor({ owner_cell: ownerCell, releasable_to: [] }) };
+    return summary;
   });
 }
 
@@ -846,29 +837,17 @@ function shapeNai(row) {
   };
 }
 
-function listNais(user) {
-  return listVisible(user, 'nais', 'id').map(shapeNai);
+function listNais(access) {
+  return visibleRows(access, 'nai', 'nais', 'id').map(shapeNai);
 }
 
 // -- reports & evidence -------------------------------------------------------
-
-function shapeEvidenceLink(row) {
-  return {
-    id: row.id,
-    report_id: row.report_id,
-    target_kind: row.target_kind,
-    target_id: row.target_id,
-    relation: row.relation,
-    note: row.note,
-    created_at: row.created_at,
-  };
-}
 
 function shapeReport(row) {
   const links = database
     .prepare('SELECT * FROM evidence_links WHERE report_id = ? ORDER BY created_at, id')
     .all(row.id)
-    .map(shapeEvidenceLink);
+    .map(shapeEvidenceLinkBase);
   return {
     id: row.id,
     text: row.text,
@@ -892,16 +871,16 @@ function shapeReport(row) {
   };
 }
 
-function listReports(user) {
-  return listVisible(user, 'reports', 'created_at DESC, id DESC').map(shapeReport);
+function listReports(access) {
+  return visibleRows(access, 'report', 'reports', 'created_at DESC, id DESC').map(shapeReport);
 }
 
 /**
  * Validates and shapes report fields; does not touch the database. Shared
  * by `createReport`/`updateReport` and by `createScenarioEvent`, which
  * validates a `report`-kind inject's payload the same way at schedule time
- * (see docs/staff-plan.md C7) so a malformed inject fails immediately
- * instead of hours later when the clock reaches it.
+ * so a malformed inject fails immediately instead of hours later when the
+ * clock reaches it.
  */
 function validateReportInput({
   text,
@@ -936,16 +915,16 @@ function validateReportInput({
 /**
  * `validateReportInput` plus the database-touching parts: resolving
  * `nai_id` (explicit, or auto point-in-polygon/point-radius against the
- * point) and `track_id` (explicit only). Used by both `createReport` and
- * `fireOne`, so a report created by a scenario inject gets the same
- * auto-NAI treatment as one entered by hand.
+ * point) and `track_id` (explicit only, read with `access.see`). Used by
+ * both `createReport` and `fireOne`, so a report created by a scenario
+ * inject gets the same auto-NAI treatment as one entered by hand.
  */
-function prepareReportFields(input) {
+function prepareReportFields(input, access) {
   const fields = validateReportInput(input);
   return {
     ...fields,
-    nai_id: resolveNaiId(input.nai_id, fields.lon, fields.lat),
-    track_id: resolveTrackId(input.track_id),
+    nai_id: resolveNaiId(input.nai_id, fields.lon, fields.lat, access),
+    track_id: resolveTrackId(input.track_id, access),
   };
 }
 
@@ -954,10 +933,8 @@ function prepareReportFields(input) {
  * inside an already-open transaction (this `transact` helper does not
  * support nesting), while `createReport` wraps it in `mutate` for the normal
  * write path. `fields` is the output of `prepareReportFields`.
- * `owner_cell`/`releasable_to` default to White/none for a hand-entered
- * report and are overridden by `fireOne` for a fired inject.
  */
-function insertReportRow(fields, { ownerCell = 'white', releasableTo = [] } = {}) {
+function insertReportRow(fields, ownerCell, releasableTo) {
   const timestamp = now();
   const { lastInsertRowid } = database
     .prepare(
@@ -988,19 +965,14 @@ function insertReportRow(fields, { ownerCell = 'white', releasableTo = [] } = {}
   return shapeReport(fetchRow('reports', Number(lastInsertRowid)));
 }
 
-function createReport(user, input) {
-  const ownerCell = ownerCellForCreate(user, input.owner_cell);
-  const fields = prepareReportFields(input);
-  return mutate(
-    'report:create',
-    () => fields.text,
-    () => withCells(insertReportRow(fields, { ownerCell })),
+function createReport(owner, input, access) {
+  const fields = prepareReportFields(input, access);
+  return mutate('report:create', () => fields.text, cellsOf(owner), () =>
+    insertReportRow(fields, owner.owner_cell, owner.releasable_to),
   );
 }
 
-function updateReport(user, id, patch) {
-  const row = fetchVisibleRow(user, 'reports', id, 'Report');
-  assertCanEdit(user, row);
+function updateReport(item, patch, access) {
   const fields = [];
   const params = [];
   if ('text' in patch) {
@@ -1020,7 +992,7 @@ function updateReport(user, id, patch) {
     params.push(optionalString(patch.source, 'source'));
   }
 
-  let reportType = row.report_type;
+  let reportType = item.report_type;
   if ('report_type' in patch) {
     reportType = requireEnum(patch.report_type, 'report_type', REPORT_TYPES);
     fields.push('report_type = ?');
@@ -1036,10 +1008,10 @@ function updateReport(user, id, patch) {
   }
 
   const locationChanged = 'lon' in patch || 'lat' in patch;
-  let lon = row.lon;
-  let lat = row.lat;
+  let lon = item.lon;
+  let lat = item.lat;
   if (locationChanged) {
-    const location = validateLocation('lon' in patch ? patch.lon : row.lon, 'lat' in patch ? patch.lat : row.lat);
+    const location = validateLocation('lon' in patch ? patch.lon : item.lon, 'lat' in patch ? patch.lat : item.lat);
     lon = location.lon;
     lat = location.lat;
     fields.push('lon = ?', 'lat = ?');
@@ -1050,7 +1022,7 @@ function updateReport(user, id, patch) {
   // setting nai_id explicitly in the same request.
   if ('nai_id' in patch) {
     fields.push('nai_id = ?');
-    params.push(resolveNaiId(patch.nai_id, lon, lat));
+    params.push(resolveNaiId(patch.nai_id, lon, lat, access));
   } else if (locationChanged) {
     fields.push('nai_id = ?');
     params.push(findMatchingNaiId(lon, lat));
@@ -1058,88 +1030,27 @@ function updateReport(user, id, patch) {
 
   if ('track_id' in patch) {
     fields.push('track_id = ?');
-    params.push(resolveTrackId(patch.track_id));
-  }
-  const reassign = ownerReassignField(user, patch);
-  if (reassign) {
-    fields.push('owner_cell = ?');
-    params.push(reassign);
+    params.push(resolveTrackId(patch.track_id, access));
   }
 
-  return mutate('report:update', String(id), () => {
+  return mutate('report:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE reports SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE reports SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
     }
-    return withCells(shapeReport(fetchRow('reports', id)));
+    return shapeReport(fetchRow('reports', item.id));
   });
 }
 
-function deleteReport(user, id) {
-  const row = fetchVisibleRow(user, 'reports', id, 'Report');
-  assertCanEdit(user, row);
-  return mutate('report:delete', String(id), () => {
-    database.prepare('DELETE FROM reports WHERE id = ?').run(id);
-    return deletedWithCells(row);
-  });
-}
-
-const releaseReport = makeRelease('reports', 'Report', shapeReport);
-
-function assertEvidenceTarget(targetKind, targetId) {
-  const table = targetKind === 'requirement' ? 'requirements' : 'sirs';
-  if (!fetchRow(table, targetId)) {
-    throw new HttpError(400, `Unknown ${targetKind} id ${targetId}.`);
-  }
-}
-
-function createEvidenceLink(
-  user,
-  reportId,
-  { target_kind: targetKind, target_id: targetId, relation, note },
-) {
-  // C2b: an evidence link needs canSee on the report (it's cited, not
-  // changed) but canEdit on the target — the requirement or SIR the link
-  // actually mutates (gains an inbound link). This is how a cell can cite
-  // a report merely released to it (e.g. a White inject) as evidence for
-  // its own PIR, while still being unable to attach evidence to a PIR it
-  // doesn't own.
-  const report = fetchVisibleRow(user, 'reports', reportId, 'Report');
-  requireEnum(targetKind, 'target_kind', TARGET_KINDS);
-  if (!Number.isInteger(targetId)) throw new HttpError(400, 'target_id must be an integer.');
-  assertEvidenceTarget(targetKind, targetId);
-  const targetOwner = targetKind === 'requirement' ? fetchRow('requirements', targetId) : requirementForSir(targetId);
-  assertCanEdit(user, targetOwner);
-  requireEnum(relation, 'relation', RELATIONS);
-  return mutate('evidence:link', `report:${reportId}`, () => {
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO evidence_links (report_id, target_kind, target_id, relation, note, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(reportId, targetKind, targetId, relation, optionalString(note, 'note'), now());
-    return {
-      ...shapeEvidenceLink(fetchRow('evidence_links', Number(lastInsertRowid))),
-      liveCells: liveCellsFor(report),
-    };
-  });
-}
-
-function deleteEvidenceLink(user, id) {
-  const link = fetchRow('evidence_links', id);
-  const report = link ? fetchRow('reports', link.report_id) : null;
-  if (!link || !report || !canSee(user, report)) {
-    throw new HttpError(404, `Evidence link ${id} not found.`);
-  }
-  // C2b: deleting a link changes its target (the requirement/SIR loses an
-  // inbound link), so it needs canEdit on the target, not the report.
-  const target =
-    link.target_kind === 'requirement' ? fetchRow('requirements', link.target_id) : requirementForSir(link.target_id);
-  assertCanEdit(user, target);
-  return mutate('evidence:unlink', String(id), () => {
-    database.prepare('DELETE FROM evidence_links WHERE id = ?').run(id);
-    return deletedWithCells(report);
+/** Deleting a report never deletes the evidence links citing it (no
+ * cascading FK on `report_id`, docs/adr/0002 + schema.js): they simply
+ * point at a `report_id` that no longer resolves, and read back
+ * `withdrawn: true` wherever they're shown. */
+function deleteReport(item) {
+  return mutate('report:delete', String(item.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM reports WHERE id = ?').run(item.id);
+    return { deleted: true };
   });
 }
 
@@ -1181,8 +1092,8 @@ function shapeTrack(row) {
   };
 }
 
-function listTracks(user) {
-  return listVisible(user, 'tracks', 'observed_at DESC, id DESC').map(shapeTrack);
+function listTracks(access) {
+  return visibleRows(access, 'track', 'tracks', 'observed_at DESC, id DESC').map(shapeTrack);
 }
 
 function getTrack(id) {
@@ -1190,7 +1101,6 @@ function getTrack(id) {
   if (!row) throw new HttpError(404, `Track ${id} not found.`);
   return shapeTrack(row);
 }
-
 
 function requireTimestamp(value, name) {
   const text = requireString(value, name);
@@ -1200,7 +1110,7 @@ function requireTimestamp(value, name) {
   return text;
 }
 
-function createTrack(user, { sidc, designation, status, lon, lat, observed_at: observedAt, notes, owner_cell: ownerCell }) {
+function createTrack(owner, { sidc, designation, status, lon, lat, observed_at: observedAt, notes }) {
   const validSidc = requireSidc(sidc);
   const validStatus = requireEnum(status ?? 'confirmed', 'status', TRACK_STATUSES);
   const validLon = requireLongitude(lon);
@@ -1208,44 +1118,38 @@ function createTrack(user, { sidc, designation, status, lon, lat, observed_at: o
   const validObserved = requireTimestamp(observedAt, 'observed_at');
   const validDesignation = optionalString(designation, 'designation');
   const validNotes = optionalString(notes, 'notes');
-  const cleanOwner = ownerCellForCreate(user, ownerCell);
-  return mutate(
-    'track:create',
-    () => validDesignation ?? validSidc,
-    () => {
-      const timestamp = now();
-      const { lastInsertRowid } = database
-        .prepare(
-          `INSERT INTO tracks (sidc, designation, status, lon, lat, observed_at, notes, owner_cell, releasable_to, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
-        )
-        .run(
-          validSidc,
-          validDesignation,
-          validStatus,
-          validLon,
-          validLat,
-          validObserved,
-          validNotes,
-          cleanOwner,
-          timestamp,
-          timestamp,
-        );
-      const id = Number(lastInsertRowid);
-      database
-        .prepare(
-          `INSERT INTO track_positions (track_id, lon, lat, observed_at, report_id, created_at)
-           VALUES (?, ?, ?, ?, NULL, ?)`,
-        )
-        .run(id, validLon, validLat, validObserved, timestamp);
-      return withCells(getTrack(id));
-    },
-  );
+  return mutate('track:create', () => validDesignation ?? validSidc, cellsOf(owner), () => {
+    const timestamp = now();
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO tracks (sidc, designation, status, lon, lat, observed_at, notes, owner_cell, releasable_to, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        validSidc,
+        validDesignation,
+        validStatus,
+        validLon,
+        validLat,
+        validObserved,
+        validNotes,
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
+        timestamp,
+        timestamp,
+      );
+    const id = Number(lastInsertRowid);
+    database
+      .prepare(
+        `INSERT INTO track_positions (track_id, lon, lat, observed_at, report_id, created_at)
+         VALUES (?, ?, ?, ?, NULL, ?)`,
+      )
+      .run(id, validLon, validLat, validObserved, timestamp);
+    return getTrack(id);
+  });
 }
 
-function updateTrack(user, id, patch) {
-  const existing = fetchVisibleRow(user, 'tracks', id, 'Track');
-  assertCanEdit(user, existing);
+function updateTrack(item, patch) {
   const fields = [];
   const params = [];
   if ('sidc' in patch) {
@@ -1264,31 +1168,22 @@ function updateTrack(user, id, patch) {
     fields.push('notes = ?');
     params.push(optionalString(patch.notes, 'notes'));
   }
-  const reassign = ownerReassignField(user, patch);
-  if (reassign) {
-    fields.push('owner_cell = ?');
-    params.push(reassign);
-  }
-  return mutate('track:update', String(id), () => {
+  return mutate('track:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE tracks SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE tracks SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
     }
-    return withCells(getTrack(id));
+    return getTrack(item.id);
   });
 }
 
-function deleteTrack(user, id) {
-  const row = fetchVisibleRow(user, 'tracks', id, 'Track');
-  assertCanEdit(user, row);
-  return mutate('track:delete', String(id), () => {
-    database.prepare('DELETE FROM tracks WHERE id = ?').run(id);
-    return deletedWithCells(row);
+function deleteTrack(item) {
+  return mutate('track:delete', String(item.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM tracks WHERE id = ?').run(item.id);
+    return { deleted: true };
   });
 }
-
-const releaseTrack = makeRelease('tracks', 'Track', (row) => getTrack(row.id));
 
 /**
  * Appends a position to a track's history. The head (`tracks.lon/lat/observed_at`)
@@ -1297,38 +1192,34 @@ const releaseTrack = makeRelease('tracks', 'Track', (row) => getTrack(row.id));
  * dragging the map picture backwards. When `report_id` is given, that
  * report is linked back to this track.
  */
-function addTrackPosition(user, trackId, { lon, lat, observed_at: observedAt, report_id: reportId }) {
-  const track = fetchRow('tracks', trackId);
-  if (!track || !canSee(user, track)) throw new HttpError(404, `Track ${trackId} not found.`);
-  assertCanEdit(user, track);
+function addTrackPosition(item, { lon, lat, observed_at: observedAt, report_id: reportId }, access) {
   const validLon = requireLongitude(lon);
   const validLat = requireLatitude(lat);
   const validObserved = requireTimestamp(observedAt, 'observed_at');
-  const validReportId = resolveTrackReportId(user, reportId);
-  return mutate('track:position', String(trackId), () => {
+  const validReportId = reportId === undefined || reportId === null ? null : resolveTrackReportId(reportId, access);
+  return mutate('track:position', String(item.id), cellsOf(item), () => {
     const timestamp = now();
     database
       .prepare(
         `INSERT INTO track_positions (track_id, lon, lat, observed_at, report_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(trackId, validLon, validLat, validObserved, validReportId, timestamp);
-    if (new Date(validObserved).getTime() >= new Date(track.observed_at).getTime()) {
+      .run(item.id, validLon, validLat, validObserved, validReportId, timestamp);
+    if (new Date(validObserved).getTime() >= new Date(item.observed_at).getTime()) {
       database
         .prepare('UPDATE tracks SET lon = ?, lat = ?, observed_at = ?, updated_at = ? WHERE id = ?')
-        .run(validLon, validLat, validObserved, timestamp, trackId);
+        .run(validLon, validLat, validObserved, timestamp, item.id);
     }
     if (validReportId !== null) {
-      database.prepare('UPDATE reports SET track_id = ? WHERE id = ?').run(trackId, validReportId);
+      database.prepare('UPDATE reports SET track_id = ? WHERE id = ?').run(item.id, validReportId);
     }
-    return { ...getTrack(trackId), liveCells: liveCellsFor(track) };
+    return getTrack(item.id);
   });
 }
 
-function resolveTrackReportId(user, reportId) {
-  if (reportId === undefined || reportId === null) return null;
+function resolveTrackReportId(reportId, access) {
   if (!Number.isInteger(reportId)) throw new HttpError(400, 'report_id must be an integer.');
-  fetchVisibleRow(user, 'reports', reportId, 'Report');
+  access.see('report', reportId);
   return reportId;
 }
 
@@ -1338,8 +1229,8 @@ function shapeCollector(row) {
   return { ...row, releasable_to: JSON.parse(row.releasable_to) };
 }
 
-function listCollectors(user) {
-  return listVisible(user, 'collectors', 'name, id').map(shapeCollector);
+function listCollectors(access) {
+  return visibleRows(access, 'collector', 'collectors', 'name, id').map(shapeCollector);
 }
 
 function requirePositiveNumberOrNull(value, name) {
@@ -1360,7 +1251,7 @@ function validateAvailability(from, to) {
   return { validFrom, validTo };
 }
 
-function createCollector(user, {
+function createCollector(owner, {
   name,
   discipline,
   unit,
@@ -1368,7 +1259,6 @@ function createCollector(user, {
   available_from: availableFrom,
   available_to: availableTo,
   notes,
-  owner_cell: ownerCell,
 }) {
   const validName = requireString(name, 'name');
   const validDiscipline = requireEnum(discipline, 'discipline', DISCIPLINES);
@@ -1376,13 +1266,12 @@ function createCollector(user, {
   const validRange = requirePositiveNumberOrNull(rangeKm, 'range_km');
   const { validFrom, validTo } = validateAvailability(availableFrom, availableTo);
   const validNotes = optionalString(notes, 'notes');
-  const cleanOwner = ownerCellForCreate(user, ownerCell);
-  return mutate('collector:create', () => validName, () => {
+  return mutate('collector:create', () => validName, cellsOf(owner), () => {
     const timestamp = now();
     const { lastInsertRowid } = database
       .prepare(
         `INSERT INTO collectors (name, discipline, unit, range_km, available_from, available_to, notes, owner_cell, releasable_to, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         validName,
@@ -1392,17 +1281,16 @@ function createCollector(user, {
         validFrom,
         validTo,
         validNotes,
-        cleanOwner,
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
         timestamp,
         timestamp,
       );
-    return withCells(shapeCollector(fetchRow('collectors', Number(lastInsertRowid))));
+    return shapeCollector(fetchRow('collectors', Number(lastInsertRowid)));
   });
 }
 
-function updateCollector(user, id, patch) {
-  const row = fetchVisibleRow(user, 'collectors', id, 'Collector');
-  assertCanEdit(user, row);
+function updateCollector(item, patch) {
   const fields = [];
   const params = [];
   if ('name' in patch) {
@@ -1422,8 +1310,8 @@ function updateCollector(user, id, patch) {
     params.push(requirePositiveNumberOrNull(patch.range_km, 'range_km'));
   }
   if ('available_from' in patch || 'available_to' in patch) {
-    const from = 'available_from' in patch ? patch.available_from : row.available_from;
-    const to = 'available_to' in patch ? patch.available_to : row.available_to;
+    const from = 'available_from' in patch ? patch.available_from : item.available_from;
+    const to = 'available_to' in patch ? patch.available_to : item.available_to;
     const validated = validateAvailability(from, to);
     if ('available_from' in patch) {
       fields.push('available_from = ?');
@@ -1438,27 +1326,20 @@ function updateCollector(user, id, patch) {
     fields.push('notes = ?');
     params.push(optionalString(patch.notes, 'notes'));
   }
-  const reassign = ownerReassignField(user, patch);
-  if (reassign) {
-    fields.push('owner_cell = ?');
-    params.push(reassign);
-  }
-  return mutate('collector:update', String(id), () => {
+  return mutate('collector:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE collectors SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE collectors SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
     }
-    return withCells(shapeCollector(fetchRow('collectors', id)));
+    return shapeCollector(fetchRow('collectors', item.id));
   });
 }
 
-function deleteCollector(user, id) {
-  const row = fetchVisibleRow(user, 'collectors', id, 'Collector');
-  assertCanEdit(user, row);
-  return mutate('collector:delete', String(id), () => {
-    database.prepare('DELETE FROM collectors WHERE id = ?').run(id);
-    return deletedWithCells(row);
+function deleteCollector(item) {
+  return mutate('collector:delete', String(item.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM collectors WHERE id = ?').run(item.id);
+    return { deleted: true };
   });
 }
 
@@ -1496,8 +1377,8 @@ function shapeTasking(row) {
   };
 }
 
-function listTaskings(user) {
-  return listVisible(user, 'taskings', 'start_at, id').map(shapeTasking);
+function listTaskings(access) {
+  return visibleRows(access, 'tasking', 'taskings', 'start_at, id').map(shapeTasking);
 }
 
 function validateTaskingWindow(startAt, endAt) {
@@ -1509,26 +1390,28 @@ function validateTaskingWindow(startAt, endAt) {
   return { start, end };
 }
 
-function requireCollectorId(user, value) {
+/** Taskings read the collector and the SIR's requirement via `access.see`
+ * (docs/adr/0002 rule 1: ids of other items arriving in a body). */
+function requireCollectorId(value, access) {
   if (!Number.isInteger(value)) throw new HttpError(400, 'collector_id must be an integer.');
-  fetchVisibleRow(user, 'collectors', value, 'Collector');
+  access.see('collector', value);
   return value;
 }
 
-function requireSirId(user, value) {
+function requireSirId(value, access) {
   if (!Number.isInteger(value)) throw new HttpError(400, 'sir_id must be an integer.');
-  assertSirVisible(user, value);
+  access.see('sir', value);
   return value;
 }
 
-function resolveTaskingReportId(user, value) {
+function resolveTaskingReportId(value, access) {
   if (value === undefined || value === null) return null;
   if (!Number.isInteger(value)) throw new HttpError(400, 'report_id must be an integer.');
-  fetchVisibleRow(user, 'reports', value, 'Report');
+  access.see('report', value);
   return value;
 }
 
-function createTasking(user, {
+function createTasking(owner, {
   collector_id: collectorId,
   sir_id: sirId,
   nai_id: naiId,
@@ -1537,63 +1420,56 @@ function createTasking(user, {
   status,
   report_id: reportId,
   notes,
-  owner_cell: ownerCell,
-}) {
-  const validCollectorId = requireCollectorId(user, collectorId);
-  const validSirId = requireSirId(user, sirId);
-  const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null);
+}, access) {
+  const validCollectorId = requireCollectorId(collectorId, access);
+  const validSirId = requireSirId(sirId, access);
+  const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null, access);
   const { start, end } = validateTaskingWindow(startAt, endAt);
   const validStatus = requireEnum(status ?? 'planned', 'status', TASKING_STATUSES);
-  const validReportId = resolveTaskingReportId(user, reportId);
+  const validReportId = resolveTaskingReportId(reportId, access);
   const validNotes = optionalString(notes, 'notes');
-  const cleanOwner = ownerCellForCreate(user, ownerCell);
-  return mutate(
-    'tasking:create',
-    () => `collector:${validCollectorId} sir:${validSirId}`,
-    () => {
-      const timestamp = now();
-      const { lastInsertRowid } = database
-        .prepare(
-          `INSERT INTO taskings (collector_id, sir_id, nai_id, start_at, end_at, status, report_id, notes, owner_cell, releasable_to, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
-        )
-        .run(
-          validCollectorId,
-          validSirId,
-          validNaiId,
-          start,
-          end,
-          validStatus,
-          validReportId,
-          validNotes,
-          cleanOwner,
-          timestamp,
-          timestamp,
-        );
-      return withCells(shapeTasking(fetchRow('taskings', Number(lastInsertRowid))));
-    },
-  );
+  return mutate('tasking:create', () => `collector:${validCollectorId} sir:${validSirId}`, cellsOf(owner), () => {
+    const timestamp = now();
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO taskings (collector_id, sir_id, nai_id, start_at, end_at, status, report_id, notes, owner_cell, releasable_to, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        validCollectorId,
+        validSirId,
+        validNaiId,
+        start,
+        end,
+        validStatus,
+        validReportId,
+        validNotes,
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
+        timestamp,
+        timestamp,
+      );
+    return shapeTasking(fetchRow('taskings', Number(lastInsertRowid)));
+  });
 }
 
-function updateTasking(user, id, patch) {
-  const row = fetchVisibleRow(user, 'taskings', id, 'Tasking');
-  assertCanEdit(user, row);
+function updateTasking(item, patch, access) {
   const fields = [];
   const params = [];
   if ('collector_id' in patch) {
     fields.push('collector_id = ?');
-    params.push(requireCollectorId(user, patch.collector_id));
+    params.push(requireCollectorId(patch.collector_id, access));
   }
   if ('sir_id' in patch) {
     fields.push('sir_id = ?');
-    params.push(requireSirId(user, patch.sir_id));
+    params.push(requireSirId(patch.sir_id, access));
   }
   if ('nai_id' in patch) {
     fields.push('nai_id = ?');
-    params.push(resolveNaiId(patch.nai_id, null, null));
+    params.push(resolveNaiId(patch.nai_id, null, null, access));
   }
-  const startAt = 'start_at' in patch ? patch.start_at : row.start_at;
-  const endAt = 'end_at' in patch ? patch.end_at : row.end_at;
+  const startAt = 'start_at' in patch ? patch.start_at : item.start_at;
+  const endAt = 'end_at' in patch ? patch.end_at : item.end_at;
   if ('start_at' in patch || 'end_at' in patch) {
     const { start, end } = validateTaskingWindow(startAt, endAt);
     if ('start_at' in patch) {
@@ -1611,44 +1487,38 @@ function updateTasking(user, id, patch) {
   }
   if ('report_id' in patch) {
     fields.push('report_id = ?');
-    params.push(resolveTaskingReportId(user, patch.report_id));
+    params.push(resolveTaskingReportId(patch.report_id, access));
   }
   if ('notes' in patch) {
     fields.push('notes = ?');
     params.push(optionalString(patch.notes, 'notes'));
   }
-  const reassign = ownerReassignField(user, patch);
-  if (reassign) {
-    fields.push('owner_cell = ?');
-    params.push(reassign);
-  }
-  return mutate('tasking:update', String(id), () => {
+  return mutate('tasking:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE taskings SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE taskings SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
     }
-    return withCells(shapeTasking(fetchRow('taskings', id)));
+    return shapeTasking(fetchRow('taskings', item.id));
   });
 }
 
-function deleteTasking(user, id) {
-  const row = fetchVisibleRow(user, 'taskings', id, 'Tasking');
-  assertCanEdit(user, row);
-  return mutate('tasking:delete', String(id), () => {
-    database.prepare('DELETE FROM taskings WHERE id = ?').run(id);
-    return deletedWithCells(row);
+function deleteTasking(item) {
+  return mutate('tasking:delete', String(item.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM taskings WHERE id = ?').run(item.id);
+    return { deleted: true };
   });
 }
 
 /**
  * Two kinds of conflict: two taskings of the same collector that overlap in
  * time, and a tasking scheduled outside its collector's availability
- * window. Read-only, so no activity entry.
+ * window. Read-only, so no activity entry. Only draws on taskings/collectors
+ * the requester can currently see (docs/adr/0002: per-viewer reads).
  */
-function listCollectionConflicts(user) {
-  const taskings = listVisible(user, 'taskings', 'collector_id, start_at');
-  const collectors = new Map(listVisible(user, 'collectors', 'id').map((c) => [c.id, c]));
+function listCollectionConflicts(access) {
+  const taskings = visibleRows(access, 'tasking', 'taskings', 'collector_id, start_at').map(shapeTasking);
+  const collectors = new Map(visibleRows(access, 'collector', 'collectors', 'id').map((c) => [c.id, c]));
 
   const byCollector = new Map();
   for (const tasking of taskings) {
@@ -1690,8 +1560,8 @@ function shapeIntsum(row) {
   return { ...row, sections: JSON.parse(row.sections), releasable_to: JSON.parse(row.releasable_to) };
 }
 
-function listIntsums(user) {
-  return listVisible(user, 'intsums', 'period_start DESC, id DESC').map(shapeIntsum);
+function listIntsums(access) {
+  return visibleRows(access, 'intsum', 'intsums', 'period_start DESC, id DESC').map(shapeIntsum);
 }
 
 function validateSectionKeys(sections) {
@@ -1722,28 +1592,25 @@ function mergeSections(existing, patchSections) {
   return merged;
 }
 
-function createIntsum(user, { period_start: periodStart, period_end: periodEnd, dtg, author, sections, owner_cell: ownerCell }) {
+function createIntsum(owner, { period_start: periodStart, period_end: periodEnd, dtg, author, sections }) {
   const start = requireTimestamp(periodStart, 'period_start');
   const end = requireTimestamp(periodEnd, 'period_end');
   const validDtg = optionalString(dtg, 'dtg') ?? formatDtg(Date.now());
   const validAuthor = optionalString(author, 'author');
   const validSections = validateSections(sections);
-  const cleanOwner = ownerCellForCreate(user, ownerCell);
-  return mutate('intsum:create', () => validDtg, () => {
+  return mutate('intsum:create', () => validDtg, cellsOf(owner), () => {
     const timestamp = now();
     const { lastInsertRowid } = database
       .prepare(
         `INSERT INTO intsums (period_start, period_end, dtg, author, sections, owner_cell, releasable_to, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(start, end, validDtg, validAuthor, JSON.stringify(validSections), cleanOwner, timestamp, timestamp);
-    return withCells(shapeIntsum(fetchRow('intsums', Number(lastInsertRowid))));
+      .run(start, end, validDtg, validAuthor, JSON.stringify(validSections), owner.owner_cell, JSON.stringify(owner.releasable_to), timestamp, timestamp);
+    return shapeIntsum(fetchRow('intsums', Number(lastInsertRowid)));
   });
 }
 
-function updateIntsum(user, id, patch) {
-  const row = fetchVisibleRow(user, 'intsums', id, 'INTSUM');
-  assertCanEdit(user, row);
+function updateIntsum(item, patch) {
   const fields = [];
   const params = [];
   if ('period_start' in patch) {
@@ -1764,41 +1631,33 @@ function updateIntsum(user, id, patch) {
   }
   if ('sections' in patch) {
     fields.push('sections = ?');
-    params.push(JSON.stringify(mergeSections(JSON.parse(row.sections), patch.sections)));
+    params.push(JSON.stringify(mergeSections(JSON.parse(item.sections), patch.sections)));
   }
-  const reassign = ownerReassignField(user, patch);
-  if (reassign) {
-    fields.push('owner_cell = ?');
-    params.push(reassign);
-  }
-  return mutate('intsum:update', String(id), () => {
+  return mutate('intsum:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE intsums SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE intsums SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
     }
-    return withCells(shapeIntsum(fetchRow('intsums', id)));
+    return shapeIntsum(fetchRow('intsums', item.id));
   });
 }
 
-function deleteIntsum(user, id) {
-  const row = fetchVisibleRow(user, 'intsums', id, 'INTSUM');
-  assertCanEdit(user, row);
-  return mutate('intsum:delete', String(id), () => {
-    database.prepare('DELETE FROM intsums WHERE id = ?').run(id);
-    return deletedWithCells(row);
+function deleteIntsum(item) {
+  return mutate('intsum:delete', String(item.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM intsums WHERE id = ?').run(item.id);
+    return { deleted: true };
   });
 }
-
-const releaseIntsum = makeRelease('intsums', 'INTSUM', shapeIntsum);
 
 /**
  * The auto-filled INTSUM draft over `[from, to]`: situation from the current
  * tracks, significant activity from reports in the window, PIR status from
  * `fulfillment.js`. Assessment/outlook are left for the analyst. Read-only,
- * so no activity entry — nothing is saved until `createIntsum`.
+ * so no activity entry — nothing is saved until `createIntsum`. Draws only
+ * on what the requester can currently see (docs/adr/0002: per-viewer reads).
  */
-function draftIntsum(user, fromIso, toIso) {
+function draftIntsum(access, fromIso, toIso) {
   if (typeof fromIso !== 'string' || !fromIso) throw new HttpError(400, 'from is required.');
   if (typeof toIso !== 'string' || !toIso) throw new HttpError(400, 'to is required.');
   const fromMs = new Date(fromIso).getTime();
@@ -1809,15 +1668,14 @@ function draftIntsum(user, fromIso, toIso) {
   const from = new Date(fromMs).toISOString();
   const to = new Date(toMs).toISOString();
 
-  const situation = listVisible(user, 'tracks', 'designation, id')
-    .map((track) => {
-      const mgrs = formatMgrs(track.lon, track.lat);
-      const dtg = formatDtg(new Date(track.observed_at).getTime());
-      const label = track.designation || track.sidc;
-      return `${label}: ${track.status.toUpperCase()} at ${mgrs}, last seen ${dtg}`;
-    });
+  const situation = visibleRows(access, 'track', 'tracks', 'designation, id').map((track) => {
+    const mgrs = formatMgrs(track.lon, track.lat);
+    const dtg = formatDtg(new Date(track.observed_at).getTime());
+    const label = track.designation || track.sidc;
+    return `${label}: ${track.status.toUpperCase()} at ${mgrs}, last seen ${dtg}`;
+  });
 
-  const { sql: reportVisSql, params: reportVisParams } = visibilitySql(user);
+  const { sql: reportVisSql, params: reportVisParams } = access.visible('report', {});
   const significantActivity = database
     .prepare(
       `SELECT * FROM reports WHERE occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at <= ? AND ${reportVisSql} ORDER BY occurred_at, id`,
@@ -1829,33 +1687,14 @@ function draftIntsum(user, fromIso, toIso) {
       return `${dtg} \u2013 ${report.report_type.toUpperCase()} \u2013 ${mgrs} \u2013 ${report.text} (Admiralty ${report.reliability}${report.credibility})`;
     });
 
-  const pirStatus = listVisible(user, 'requirements', 'priority DESC, id')
-    .map((requirement) => {
-      const sirIds = database
-        .prepare('SELECT id FROM sirs WHERE requirement_id = ?')
-        .all(requirement.id)
-        .map((sir) => sir.id);
-      const blanket = database
-        .prepare(
-          `SELECT el.relation, r.credibility
-           FROM evidence_links el JOIN reports r ON r.id = el.report_id
-           WHERE el.target_kind = 'requirement' AND el.target_id = ?`,
-        )
-        .all(requirement.id)
-        .map((row) => ({ sirId: null, relation: row.relation, credibility: row.credibility }));
-      const perSir = sirIds.length
-        ? database
-            .prepare(
-              `SELECT el.target_id AS sir_id, el.relation, r.credibility
-               FROM evidence_links el JOIN reports r ON r.id = el.report_id
-               WHERE el.target_kind = 'sir' AND el.target_id IN (${sirIds.map(() => '?').join(',')})`,
-            )
-            .all(...sirIds)
-            .map((row) => ({ sirId: row.sir_id, relation: row.relation, credibility: row.credibility }))
-        : [];
-      const fulfillment = computePirFulfillment(sirIds, [...blanket, ...perSir]);
-      return { requirement_id: requirement.id, text: requirement.text, ...fulfillment };
-    });
+  const pirStatus = visibleRows(access, 'requirement', 'requirements', 'priority DESC, id').map((requirement) => {
+    const sirIds = database
+      .prepare('SELECT id FROM sirs WHERE requirement_id = ?')
+      .all(requirement.id)
+      .map((sir) => sir.id);
+    const fulfillment = requirementFulfillment(requirement.id, sirIds, access);
+    return { requirement_id: requirement.id, text: requirement.text, ...fulfillment };
+  });
 
   return {
     period_start: from,
@@ -1876,61 +1715,51 @@ function shapeRfi(row) {
   return { ...row, releasable_to: JSON.parse(row.releasable_to) };
 }
 
-function listRfis(user) {
-  return listVisible(user, 'rfis', 'created_at DESC, id DESC').map(shapeRfi);
+function listRfis(access) {
+  return visibleRows(access, 'rfi', 'rfis', 'created_at DESC, id DESC').map(shapeRfi);
 }
 
-function createRfi(user, {
+function createRfi(owner, {
   requester,
   requirement_id: requirementId,
   sir_id: sirId,
   question,
   priority,
   nlt,
-  owner_cell: ownerCell,
-}) {
+}, access) {
   const cleanQuestion = requireString(question, 'question');
   const cleanPriority =
     priority === undefined ? 'routine' : requireEnum(priority, 'priority', RFI_PRIORITIES);
   if (requirementId !== undefined && requirementId !== null) {
-    fetchVisibleRow(user, 'requirements', requirementId, 'Requirement');
+    access.see('requirement', requirementId);
   }
   if (sirId !== undefined && sirId !== null) {
-    assertSirVisible(user, sirId);
+    access.see('sir', sirId);
   }
-  // The requester's cell owns the RFI (docs/phase1-access.md), same
-  // ownership rule as everything else: White may pick any cell, everyone
-  // else is pinned to their own.
-  const cleanOwner = ownerCellForCreate(user, ownerCell);
   const timestamp = now();
-  return mutate(
-    'rfi:create',
-    () => cleanQuestion,
-    () => {
-      const { lastInsertRowid } = database
-        .prepare(
-          `INSERT INTO rfis (requester, requirement_id, sir_id, question, priority, nlt, state, owner_cell, releasable_to, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, '[]', ?, ?)`,
-        )
-        .run(
-          optionalString(requester, 'requester'),
-          requirementId ?? null,
-          sirId ?? null,
-          cleanQuestion,
-          cleanPriority,
-          optionalString(nlt, 'nlt'),
-          cleanOwner,
-          timestamp,
-          timestamp,
-        );
-      return withCells(shapeRfi(fetchRow('rfis', Number(lastInsertRowid))));
-    },
-  );
+  return mutate('rfi:create', () => cleanQuestion, cellsOf(owner), () => {
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO rfis (requester, requirement_id, sir_id, question, priority, nlt, state, owner_cell, releasable_to, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+      )
+      .run(
+        optionalString(requester, 'requester'),
+        requirementId ?? null,
+        sirId ?? null,
+        cleanQuestion,
+        cleanPriority,
+        optionalString(nlt, 'nlt'),
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
+        timestamp,
+        timestamp,
+      );
+    return shapeRfi(fetchRow('rfis', Number(lastInsertRowid)));
+  });
 }
 
-function updateRfi(user, id, patch) {
-  const existing = fetchVisibleRow(user, 'rfis', id, 'RFI');
-  assertCanEdit(user, existing);
+function updateRfi(item, patch) {
   const fields = [];
   const params = [];
   if ('assignee' in patch) {
@@ -1949,66 +1778,58 @@ function updateRfi(user, id, patch) {
     fields.push('nlt = ?');
     params.push(optionalString(patch.nlt, 'nlt'));
   }
-  const reassign = ownerReassignField(user, patch);
-  if (reassign) {
-    fields.push('owner_cell = ?');
-    params.push(reassign);
-  }
-  return mutate('rfi:update', String(id), () => {
+  return mutate('rfi:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE rfis SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE rfis SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
     }
-    return withCells(shapeRfi(fetchRow('rfis', id)));
+    return shapeRfi(fetchRow('rfis', item.id));
   });
 }
 
 /**
- * The one path that changes RFI state. Answering can create the evidence
- * link that closes the loop back to the requirement/SIR it was raised
- * against, in the same transaction as the state change. When White answers
- * a non-White RFI, the answer report is automatically released to the
+ * The one path that changes RFI state. The owner cell may make every
+ * transition except `answered`, which needs White (docs/adr/0002 + CONTEXT.md:
+ * White coordinates collection across cells, so the requester answering
+ * their own RFI isn't sensible). Answering can create the evidence link
+ * that closes the loop back to the requirement/SIR it was raised against,
+ * in the same transaction as the state change. When White answers a
+ * non-White RFI, the answer report is automatically released to the
  * requesting cell — otherwise the requester couldn't see their own answer.
  */
-function transitionRfi(user, id, toState, { answer_report_id: answerReportId, relation } = {}) {
-  const row = fetchVisibleRow(user, 'rfis', id, 'RFI');
-  if (!canTransition(row.state, toState)) {
-    throw new HttpError(409, `Cannot move an RFI from ${row.state} to ${toState}.`);
+function transitionRfi(item, { state: toState, answer_report_id: answerReportId, relation }, access) {
+  if (!canTransition(item.state, toState)) {
+    throw new HttpError(409, `Cannot move an RFI from ${item.state} to ${toState}.`);
   }
-  // C2b: release is read-only, so a cell an RFI was only released to can
-  // never transition it. Every transition otherwise needs canEdit (White
-  // or the owning cell) — except 'answered', which White alone may set:
-  // White coordinates collection across cells, so the requester answering
-  // their own RFI isn't a sensible transition.
-  if (toState === 'answered') {
-    if (!isWhite(user)) throw new HttpError(403, 'Only White may answer an RFI.');
-  } else {
-    assertCanEdit(user, row);
+  if (toState === 'answered' && !access.white) {
+    throw new HttpError(403, 'Only White may answer an RFI.');
   }
   let answerReport = null;
   if (toState === 'answered') {
     if (!Number.isInteger(answerReportId)) {
       throw new HttpError(400, 'answer_report_id is required to answer an RFI.');
     }
-    answerReport = fetchVisibleRow(user, 'reports', answerReportId, 'Report');
+    answerReport = access.see('report', answerReportId);
   }
-  return mutate('rfi:transition', `${row.state}->${toState}`, () => {
+  return mutate('rfi:transition', `${item.state}->${toState}`, cellsOf(item), () => {
     database
       .prepare(
         'UPDATE rfis SET state = ?, answer_report_id = COALESCE(?, answer_report_id), updated_at = ? WHERE id = ?',
       )
-      .run(toState, answerReportId ?? null, now(), id);
-    if (toState === 'answered' && (row.requirement_id || row.sir_id)) {
-      const targetKind = row.sir_id ? 'sir' : 'requirement';
-      const targetId = row.sir_id ?? row.requirement_id;
+      .run(toState, answerReportId ?? null, now(), item.id);
+    if (toState === 'answered' && (item.requirement_id || item.sir_id)) {
+      const targetKind = item.sir_id ? 'sir' : 'requirement';
+      const targetId = item.sir_id ?? item.requirement_id;
+      const requirementId = item.sir_id ? fetchRow('sirs', item.sir_id).requirement_id : item.requirement_id;
       database
         .prepare(
-          `INSERT INTO evidence_links (report_id, target_kind, target_id, relation, note, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO evidence_links (report_id, requirement_id, target_kind, target_id, relation, note, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           answerReportId,
+          requirementId,
           targetKind,
           targetId,
           relation ?? 'confirms',
@@ -2016,34 +1837,22 @@ function transitionRfi(user, id, toState, { answer_report_id: answerReportId, re
           now(),
         );
     }
-    if (
-      toState === 'answered' &&
-      isWhite(user) &&
-      answerReport &&
-      answerReport.owner_cell !== row.owner_cell
-    ) {
-      const released = normalizeRelease(
-        [...JSON.parse(answerReport.releasable_to), row.owner_cell],
-        answerReport.owner_cell,
-      );
+    if (toState === 'answered' && answerReport && answerReport.owner_cell !== item.owner_cell) {
+      const released = normalizeRelease([...JSON.parse(answerReport.releasable_to), item.owner_cell], answerReport.owner_cell);
       database
         .prepare('UPDATE reports SET releasable_to = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(released), now(), answerReportId);
     }
-    return withCells(shapeRfi(fetchRow('rfis', id)));
+    return shapeRfi(fetchRow('rfis', item.id));
   });
 }
 
-function deleteRfi(user, id) {
-  const row = fetchVisibleRow(user, 'rfis', id, 'RFI');
-  assertCanEdit(user, row);
-  return mutate('rfi:delete', String(id), () => {
-    database.prepare('DELETE FROM rfis WHERE id = ?').run(id);
-    return deletedWithCells(row);
+function deleteRfi(item) {
+  return mutate('rfi:delete', String(item.id), cellsOf(item), () => {
+    database.prepare('DELETE FROM rfis WHERE id = ?').run(item.id);
+    return { deleted: true };
   });
 }
-
-const releaseRfi = makeRelease('rfis', 'RFI', shapeRfi);
 
 // -- scenario clock & events --------------------------------------------------
 
@@ -2076,7 +1885,7 @@ function patchClock({ rate, paused, jump_to: jumpTo }) {
     jumpToMs = new Date(jumpTo).getTime();
     if (Number.isNaN(jumpToMs)) throw new HttpError(400, 'jump_to must be a valid timestamp.');
   }
-  return mutate('scenario:clock', 'clock', () => {
+  return mutate('scenario:clock', 'clock', null, () => {
     const current = readClockRow();
     const next = reanchor(current, { rate, paused, jumpToMs });
     database
@@ -2097,6 +1906,11 @@ function listScenarioEvents() {
     .prepare('SELECT * FROM scenario_events ORDER BY trigger_at, id')
     .all()
     .map(shapeScenarioEvent);
+}
+
+/** An inject's `release_to` (default Blue): the cells its report or message goes to besides White. */
+function injectReleaseTo(cells) {
+  return normalizeRelease(cells ?? ['blue'], 'white');
 }
 
 function createScenarioEvent({ trigger_at: triggerAt, kind, payload }) {
@@ -2127,28 +1941,26 @@ function createScenarioEvent({ trigger_at: triggerAt, kind, payload }) {
   }
   // The cells a fired inject reaches: both report and message injects are
   // White-owned (the game-master schedules them), released to `release_to`
-  // (defaulting to Blue — the usual training audience) on firing.
-  const releaseTo = normalizeRelease(payload.release_to ?? ['blue'], 'white');
+  // (defaulting to Blue — the usual training audience) on firing. Scheduling
+  // itself is White-only knowledge (no `owner_cell` released to anyone),
+  // so nobody else sees "something is coming" in the activity log.
+  const releaseTo = injectReleaseTo(payload.release_to);
   const timestamp = now();
-  return mutate(
-    'scenario:schedule',
-    () => kind,
-    () => {
-      const { lastInsertRowid } = database
-        .prepare(
-          `INSERT INTO scenario_events (trigger_at, kind, payload, state, created_at, updated_at)
+  return mutate('scenario:schedule', () => kind, { owner_cell: 'white', releasable_to: [] }, () => {
+    const { lastInsertRowid } = database
+      .prepare(
+        `INSERT INTO scenario_events (trigger_at, kind, payload, state, created_at, updated_at)
          VALUES (?, ?, ?, 'pending', ?, ?)`,
-        )
-        .run(
-          new Date(triggerMs).toISOString(),
-          kind,
-          JSON.stringify({ ...payload, release_to: releaseTo }),
-          timestamp,
-          timestamp,
-        );
-      return shapeScenarioEvent(fetchRow('scenario_events', Number(lastInsertRowid)));
-    },
-  );
+      )
+      .run(
+        new Date(triggerMs).toISOString(),
+        kind,
+        JSON.stringify({ ...payload, release_to: releaseTo }),
+        timestamp,
+        timestamp,
+      );
+    return shapeScenarioEvent(fetchRow('scenario_events', Number(lastInsertRowid)));
+  });
 }
 
 function assertPendingEvent(id) {
@@ -2160,7 +1972,7 @@ function assertPendingEvent(id) {
 
 function cancelScenarioEvent(id) {
   assertPendingEvent(id);
-  mutate('scenario:cancel', String(id), () => {
+  mutate('scenario:cancel', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
     database
       .prepare("UPDATE scenario_events SET state = 'cancelled', updated_at = ? WHERE id = ?")
       .run(now(), id);
@@ -2171,8 +1983,8 @@ function shapeMessage(row) {
   return { ...row, releasable_to: JSON.parse(row.releasable_to) };
 }
 
-function listMessages(user) {
-  return listVisible(user, 'messages', 'fired_at DESC, id DESC').map(shapeMessage);
+function listMessages(access) {
+  return visibleRows(access, 'message', 'messages', 'fired_at DESC, id DESC').map(shapeMessage);
 }
 
 function insertMessageRow(text, firedAt, releasableTo) {
@@ -2188,34 +2000,37 @@ function insertMessageRow(text, firedAt, releasableTo) {
  * Fires one event: for a report inject, creates the report from the
  * payload, owned by White and released to `payload.release_to`; for a
  * message inject, inserts a `messages` row the same way. Always called
- * from inside another mutation's transaction (`fireScenarioEvent` or
- * `tickScenario`), so this inserts rows directly rather than through
- * `createReport`, which would try to open a second, nested transaction.
- * Returns the cells the fired item reaches, for the caller to publish.
+ * from inside another mutation's transaction (`fireScenarioEvent`), so this
+ * inserts rows directly rather than through `createReport`, which would try
+ * to open a second, nested transaction. Returns the ids created and the
+ * cells the fired item reaches, for the caller to announce.
  */
-function fireOne(row) {
+function fireOne(row, access) {
   const timestamp = now();
   const payload = JSON.parse(row.payload);
-  const releaseTo = normalizeRelease(payload.release_to ?? ['blue'], 'white');
+  const releaseTo = injectReleaseTo(payload.release_to);
   let createdReportId = null;
   let createdMessageId = null;
   if (row.kind === 'report') {
-    const fields = prepareReportFields({
-      text: payload.text,
-      occurred_at: payload.occurred_at ?? row.trigger_at,
-      source: payload.source ?? 'Scenario inject',
-      author: payload.author ?? 'Game Master',
-      reliability: payload.reliability ?? 'F',
-      credibility: payload.credibility ?? 6,
-      lon: payload.lon,
-      lat: payload.lat,
-      report_type: payload.report_type,
-      fields: payload.fields,
-      sidc: payload.sidc,
-      nai_id: payload.nai_id,
-      track_id: payload.track_id,
-    });
-    createdReportId = insertReportRow(fields, { ownerCell: 'white', releasableTo: releaseTo }).id;
+    const fields = prepareReportFields(
+      {
+        text: payload.text,
+        occurred_at: payload.occurred_at ?? row.trigger_at,
+        source: payload.source ?? 'Scenario inject',
+        author: payload.author ?? 'Game Master',
+        reliability: payload.reliability ?? 'F',
+        credibility: payload.credibility ?? 6,
+        lon: payload.lon,
+        lat: payload.lat,
+        report_type: payload.report_type,
+        fields: payload.fields,
+        sidc: payload.sidc,
+        nai_id: payload.nai_id,
+        track_id: payload.track_id,
+      },
+      access,
+    );
+    createdReportId = insertReportRow(fields, 'white', releaseTo).id;
   } else {
     createdMessageId = insertMessageRow(payload.text, timestamp, releaseTo);
   }
@@ -2224,48 +2039,39 @@ function fireOne(row) {
       "UPDATE scenario_events SET state = 'fired', fired_at = ?, updated_at = ? WHERE id = ?",
     )
     .run(timestamp, timestamp, row.id);
-  return {
-    reportId: createdReportId,
-    messageId: createdMessageId,
-    liveCells: liveCellsFor({ owner_cell: 'white', releasable_to: releaseTo }),
-  };
+  return { reportId: createdReportId, messageId: createdMessageId, cells: ['white', ...releaseTo] };
 }
 
-function fireScenarioEvent(id) {
+/** `POST scenario-events/:id/fire`'s handler: fires one event — whether a
+ * human game-master clicked "Fire now" or the module's own `connect`d
+ * ticker called this through `runAs` — and announces it to exactly the
+ * cells the inject reaches (docs/adr/0002: `reach: 'handler'`). */
+function fireScenarioEvent(id, access) {
   const row = assertPendingEvent(id);
-  return mutate('scenario:fire', String(id), () => {
-    const { liveCells } = fireOne(row);
-    return { ...shapeScenarioEvent(fetchRow('scenario_events', id)), liveCells };
+  return mutate('scenario:fire', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
+    const { cells } = fireOne(row, access);
+    return { event: shapeScenarioEvent(fetchRow('scenario_events', id)), cells };
   });
 }
 
-/** Fires every event whose trigger time has arrived. Idempotent: refiring
- * finds nothing pending left to fire. `liveCells` is the union of every
- * fired item's cells, so the one tick's live event reaches everyone who
- * received something without leaking which cell got which inject. */
-function tickScenario() {
+/** Pending events whose trigger time has arrived, in trigger order — for
+ * the module's own `connect`d ticker, which fires each through `runAs`
+ * individually so every one is announced only to its own cells. */
+function dueScenarioEventIds() {
   const clock = readClockRow();
   const nowMs = scenarioNowMs(clock);
   const pending = database.prepare("SELECT * FROM scenario_events WHERE state = 'pending'").all();
-  const due = dueEvents(pending, nowMs);
-  if (!due.length) return { fired: [] };
-  return mutate('scenario:tick', `${due.length} event(s)`, () => {
-    const results = due.map((row) => ({ id: row.id, ...fireOne(row) }));
-    const liveCells = [...new Set(results.flatMap((r) => r.liveCells))];
-    return {
-      fired: results.map(({ id, reportId, messageId }) => ({ id, reportId, messageId })),
-      liveCells,
-    };
-  });
+  return dueEvents(pending, nowMs).map((row) => row.id);
 }
 
 // -- exercise scenarios (fictional countries + renamed places over Czechia) ---
 //
 // One "scenario" holds every country and place the IPB and print maps draw
-// when it is active. `regions.json` (built from kraje/okresy)
-// is read through `referenceFile`, so a rebuild is picked up without a
-// restart; countries/places are plain rows, with `geometry`/`regions` stored
-// as JSON text and parsed back out when shaping a row for the API.
+// when it is active. `regions.json` (built from kraje/okresy) is read
+// through `referenceFile`, so a rebuild is picked up without a restart;
+// countries/places are plain rows, with `geometry`/`regions` stored as JSON
+// text and parsed back out when shaping a row for the API. None of this is
+// cell-owned — every route here is `verb: 'none'`.
 
 /** The current `regions.json` FeatureCollection, or null if it hasn't been built. */
 function currentRegionsData() {
@@ -2419,7 +2225,7 @@ function insertPlaceRow(scenarioId, { real_name: realName, kind, lon, lat, name 
 
 /** Inserts the EXAMPLE scenario built from `regionsData` and marks it seeded. */
 function seedExampleScenario(regionsData) {
-  return mutate('scenario:example', 'example', () => {
+  return mutate('scenario:example', 'example', null, () => {
     const plan = planExampleScenario(regionsData);
     const scenarioId = insertScenarioRow({ name: plan.name, example: true });
     plan.countries.forEach((country, index) => insertCountryRow(scenarioId, index, country));
@@ -2456,14 +2262,10 @@ function listScenarios() {
 
 function createScenario({ name }) {
   const cleanName = requireBoundedString(name, 'name', 120);
-  return mutate(
-    'scenario:create',
-    () => cleanName,
-    () => {
-      const id = insertScenarioRow({ name: cleanName, example: false });
-      return shapeScenario(fetchRow('scenarios', id));
-    },
-  );
+  return mutate('scenario:create', () => cleanName, null, () => {
+    const id = insertScenarioRow({ name: cleanName, example: false });
+    return shapeScenario(fetchRow('scenarios', id));
+  });
 }
 
 function getScenario(id) {
@@ -2473,12 +2275,13 @@ function getScenario(id) {
 }
 
 function updateScenario(id, patch) {
-  assertExists('scenarios', id, 'Scenario');
+  const existing = fetchRow('scenarios', id);
+  if (!existing) throw new HttpError(404, `Scenario ${id} not found.`);
   if (patch.active !== undefined && typeof patch.active !== 'boolean') {
     throw new HttpError(400, 'active must be a boolean.');
   }
   const cleanName = 'name' in patch ? requireBoundedString(patch.name, 'name', 120) : undefined;
-  return mutate('scenario:update', String(id), () => {
+  return mutate('scenario:update', String(id), null, () => {
     const timestamp = now();
     // Deactivate every other scenario first, inside this transaction, so the
     // partial unique index on scenarios(active) never sees two active rows.
@@ -2507,8 +2310,9 @@ function updateScenario(id, patch) {
 }
 
 function deleteScenario(id) {
-  assertExists('scenarios', id, 'Scenario');
-  mutate('scenario:delete', String(id), () => {
+  const existing = fetchRow('scenarios', id);
+  if (!existing) throw new HttpError(404, `Scenario ${id} not found.`);
+  mutate('scenario:delete', String(id), null, () => {
     database.prepare('DELETE FROM scenarios WHERE id = ?').run(id); // cascades to countries/places
   });
 }
@@ -2516,7 +2320,7 @@ function deleteScenario(id) {
 function duplicateScenario(id) {
   const row = fetchRow('scenarios', id);
   if (!row) throw new HttpError(404, `Scenario ${id} not found.`);
-  return mutate('scenario:duplicate', String(id), () => {
+  return mutate('scenario:duplicate', String(id), null, () => {
     const newId = insertScenarioRow({ name: `${row.name} (copy)`, example: false });
     for (const country of listCountries(id)) insertCountryRow(newId, country.position, country);
     for (const place of listPlaces(id)) insertPlaceRow(newId, place);
@@ -2530,31 +2334,28 @@ function getActiveScenario() {
 }
 
 function createCountry(scenarioId, { name, affiliation, color, regions, geometry }) {
-  assertExists('scenarios', scenarioId, 'Scenario');
+  const scenario = fetchRow('scenarios', scenarioId);
+  if (!scenario) throw new HttpError(404, `Scenario ${scenarioId} not found.`);
   const cleanName = requireBoundedString(name, 'name', 120);
   const cleanAffiliation = requireEnum(affiliation, 'affiliation', AFFILIATIONS);
   const cleanColor =
     color === undefined || color === null ? DEFAULT_COLORS[cleanAffiliation] : requireColor(color);
   const cleanRegions = normalizeRegionIds(regions);
   const cleanGeometry = normalizeGeometry(geometry);
-  return mutate(
-    'scenario-country:create',
-    () => cleanName,
-    () => {
-      const position = database
-        .prepare('SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?')
-        .get(scenarioId).n;
-      const id = insertCountryRow(scenarioId, position, {
-        name: cleanName,
-        affiliation: cleanAffiliation,
-        color: cleanColor,
-        regions: cleanRegions,
-        geometry: cleanGeometry,
-      });
-      touchScenario(scenarioId);
-      return shapeCountry(fetchRow('scenario_countries', id));
-    },
-  );
+  return mutate('scenario-country:create', () => cleanName, null, () => {
+    const position = database
+      .prepare('SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?')
+      .get(scenarioId).n;
+    const id = insertCountryRow(scenarioId, position, {
+      name: cleanName,
+      affiliation: cleanAffiliation,
+      color: cleanColor,
+      regions: cleanRegions,
+      geometry: cleanGeometry,
+    });
+    touchScenario(scenarioId);
+    return shapeCountry(fetchRow('scenario_countries', id));
+  });
 }
 
 function updateCountry(id, patch) {
@@ -2588,7 +2389,7 @@ function updateCountry(id, patch) {
     fields.push('position = ?');
     params.push(patch.position);
   }
-  return mutate('scenario-country:update', String(id), () => {
+  return mutate('scenario-country:update', String(id), null, () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
@@ -2604,41 +2405,38 @@ function updateCountry(id, patch) {
 function deleteCountry(id) {
   const row = fetchRow('scenario_countries', id);
   if (!row) throw new HttpError(404, `Country ${id} not found.`);
-  mutate('scenario-country:delete', String(id), () => {
+  mutate('scenario-country:delete', String(id), null, () => {
     database.prepare('DELETE FROM scenario_countries WHERE id = ?').run(id);
     touchScenario(row.scenario_id);
   });
 }
 
 function createPlace(scenarioId, { real_name: realName, kind, lon, lat, name }) {
-  assertExists('scenarios', scenarioId, 'Scenario');
+  const scenario = fetchRow('scenarios', scenarioId);
+  if (!scenario) throw new HttpError(404, `Scenario ${scenarioId} not found.`);
   const cleanRealName = requireBoundedString(realName, 'real_name', 120);
   const cleanKind = requirePlaceKind(kind);
   const cleanLon = requireLongitude(lon);
   const cleanLat = requireLatitude(lat);
   const cleanName = requireBoundedString(name, 'name', 120);
-  return mutate(
-    'scenario-place:create',
-    () => cleanName,
-    () => {
-      const id = insertPlaceRow(scenarioId, {
-        real_name: cleanRealName,
-        kind: cleanKind,
-        lon: cleanLon,
-        lat: cleanLat,
-        name: cleanName,
-      });
-      touchScenario(scenarioId);
-      return shapePlace(fetchRow('scenario_places', id));
-    },
-  );
+  return mutate('scenario-place:create', () => cleanName, null, () => {
+    const id = insertPlaceRow(scenarioId, {
+      real_name: cleanRealName,
+      kind: cleanKind,
+      lon: cleanLon,
+      lat: cleanLat,
+      name: cleanName,
+    });
+    touchScenario(scenarioId);
+    return shapePlace(fetchRow('scenario_places', id));
+  });
 }
 
 function updatePlace(id, patch) {
   const row = fetchRow('scenario_places', id);
   if (!row) throw new HttpError(404, `Place ${id} not found.`);
   const cleanName = 'name' in patch ? requireBoundedString(patch.name, 'name', 120) : undefined;
-  return mutate('scenario-place:update', String(id), () => {
+  return mutate('scenario-place:update', String(id), null, () => {
     if (cleanName !== undefined) {
       const timestamp = now();
       database
@@ -2653,7 +2451,7 @@ function updatePlace(id, patch) {
 function deletePlace(id) {
   const row = fetchRow('scenario_places', id);
   if (!row) throw new HttpError(404, `Place ${id} not found.`);
-  mutate('scenario-place:delete', String(id), () => {
+  mutate('scenario-place:delete', String(id), null, () => {
     database.prepare('DELETE FROM scenario_places WHERE id = ?').run(id);
     touchScenario(row.scenario_id);
   });
@@ -2661,9 +2459,14 @@ function deletePlace(id) {
 
 // -- AAR ----------------------------------------------------------------------
 
-function listActivity(user) {
+/** Every cell can see a global (White-scheduling-hidden aside) activity row;
+ * a cell-owned one follows the same visibility as the item it was about.
+ * `access.visible` works on any table with `owner_cell`/`releasable_to`
+ * columns given any item kind of this module (docs/adr/0002 rule 4) —
+ * `'requirement'` here is arbitrary, `activity` isn't one item kind's log. */
+function listActivity(access) {
+  const { sql, params } = access.visible('requirement', {});
   return database
-    .prepare('SELECT * FROM activity ORDER BY id DESC')
-    .all()
-    .filter((row) => row.owner_cell === null || canSee(user, row));
+    .prepare(`SELECT * FROM activity WHERE owner_cell IS NULL OR (${sql}) ORDER BY id DESC`)
+    .all(...params);
 }

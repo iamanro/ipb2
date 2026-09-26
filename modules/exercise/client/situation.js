@@ -414,7 +414,7 @@ export function createSituationController(ctx) {
   }
 
   async function reassignTrackOwner(track, ownerCell) {
-    await requestJson(`${api}/tracks/${track.id}`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/tracks/${track.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
     await load();
     renderSidebar();
   }

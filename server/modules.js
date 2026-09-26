@@ -1,10 +1,8 @@
 /**
- * Server-side module registry. Each entry serves `/api/<id>/...`.
- *
- * A module exports `{ id, handle(context), close() }`. `context` is
- * `{ route, url, request, response }` where `route` is the path after
- * `/api/<id>/`. `handle` sends the response itself and throws `HttpError` for
- * client-visible failures. Read-only reference data lives in `data/`, writable
+ * Server-side module registry. Each entry serves `/api/<id>/...` through
+ * `server/dispatch.js`: a module exports its cell-owned items, their parts
+ * and a route table (the shape is documented there), never a request
+ * handler of its own. Read-only reference data lives in `data/`, writable
  * run state in `state/` (see `server/state.js`).
  */
 import equipment from '../modules/equipment/server/routes.js';

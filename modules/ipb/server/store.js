@@ -1,3 +1,19 @@
+/**
+ * IPB state store. Item-scoped requests (docs/adr/0002-item-scoped-requests.md):
+ * `server/dispatch.js` resolves the study (and, for a part route, the part)
+ * named in the URL, checks the member's role and cell access, and only then
+ * calls in here with the resolved id(s) and the domain input. Nothing in
+ * this file sees the requesting user, imports `server/policy.js`, or
+ * composes an ownership check: a study/child id that reaches a function
+ * below is already known to exist for a route that needs no further access
+ * decision (see/change), or the dispatcher wants a plain 404 for "unknown"
+ * on a lookup a caller drives directly (`access.see`, list filters).
+ *
+ * `CHILDREN` is the whole point of the module: a new field or child
+ * resource is a data change here, not a new handler. `routes.js` reads
+ * `CHILDREN` to build the module's `parts` declaration and its per-kind
+ * route set.
+ */
 import {
   DEFAULT_SIDC,
   defaultThreatSidc,
@@ -6,16 +22,6 @@ import {
   withAffiliation,
 } from '../../../src/symbols/sidc.js';
 import { HttpError } from '../../../server/http.js';
-import {
-  assertCanEdit,
-  canRelease,
-  canSee,
-  isWhite,
-  liveCellsFor,
-  normalizeRelease,
-  ownerCellForCreate,
-  visibilitySql,
-} from '../../../server/policy.js';
 import { openState, transact } from '../../../server/state.js';
 import { sanitizeFilename, toGeoJson, toKml } from './export.js';
 import { MIGRATIONS } from './schema.js';
@@ -51,6 +57,11 @@ const STUDY_PATCH_FIELDS = [
   'classification',
   'weather_thresholds',
 ];
+/** A study create body may carry the ownership fields `server/dispatch.js`
+ * itself reads (`owner_cell`, `releasable_to`) — resolved into `owner`
+ * before this module ever sees them, so they're recognized here but never
+ * read off `body`. */
+const STUDY_CREATE_FIELDS = ['name', 'bounds', 'owner_cell', 'releasable_to'];
 
 /** `properties.graphic` → the geometry GeoJSON must have (C5's TACTICAL_GRAPHICS,
  * duplicated here as a server-side constant so this module never imports
@@ -90,12 +101,16 @@ const MAX_RANGE_RING_RADII = 8;
 const MAX_RANGE_RING_METRES = 100_000;
 
 /**
- * One entry per child resource. This table is the whole point of the module:
- * a new field or resource is a data change here, not a new handler.
+ * One entry per study part. `routes.js` turns this straight into the
+ * module's `parts` declaration (`table`/`label`, plus `item: 'study'` and
+ * `column: 'study_id'`, the same for every one), its per-kind route set
+ * (create, patch/delete by `:part`, reorder when `ordinal` is true), and
+ * `analyses`' one exception (immutable: no PATCH route).
  */
-const CHILDREN = {
+export const CHILDREN = {
   features: {
     table: 'features',
+    label: 'Feature',
     ordinal: false,
     columns: {
       layer: { type: 'enum', values: LAYERS, required: true },
@@ -107,6 +122,7 @@ const CHILDREN = {
   },
   threats: {
     table: 'threats',
+    label: 'Threat',
     ordinal: true,
     columns: {
       name: { type: 'string', required: true },
@@ -127,6 +143,7 @@ const CHILDREN = {
   },
   coas: {
     table: 'coas',
+    label: 'COA',
     ordinal: true,
     columns: {
       name: { type: 'string', required: true },
@@ -136,6 +153,7 @@ const CHILDREN = {
   },
   events: {
     table: 'events',
+    label: 'Event',
     ordinal: true,
     columns: {
       coa_id: { type: 'reference', table: 'coas', required: true },
@@ -162,6 +180,7 @@ const CHILDREN = {
   },
   analyses: {
     table: 'analyses',
+    label: 'Analysis',
     ordinal: false,
     hasUpdatedAt: false,
     columns: {
@@ -173,6 +192,7 @@ const CHILDREN = {
   /** The analyst's own layers; deleting one deletes its points (FK cascade). */
   layers: {
     table: 'layers',
+    label: 'Layer',
     ordinal: true,
     columns: {
       name: { type: 'string', required: true, nonEmpty: true },
@@ -182,6 +202,7 @@ const CHILDREN = {
   },
   points: {
     table: 'points',
+    label: 'Point',
     ordinal: true,
     columns: {
       layer_id: { type: 'reference', table: 'layers', required: true },
@@ -193,6 +214,7 @@ const CHILDREN = {
   },
   phases: {
     table: 'phases',
+    label: 'Phase',
     ordinal: true,
     columns: {
       name: { type: 'string', required: true, nonEmpty: true },
@@ -203,6 +225,7 @@ const CHILDREN = {
   /** kind key uses the endpoint's spelling; the table is `decision_points`. */
   'decision-points': {
     table: 'decision_points',
+    label: 'Decision point',
     ordinal: true,
     columns: {
       name: { type: 'string', required: true, nonEmpty: true },
@@ -221,6 +244,7 @@ const CHILDREN = {
   /** One upserted cell per (ascope, pmesii); see `createChild`'s special case. */
   'civil-considerations': {
     table: 'civil_considerations',
+    label: 'Civil consideration',
     ordinal: false,
     columns: {
       ascope: { type: 'enum', values: ASCOPE_VALUES, required: true },
@@ -232,26 +256,12 @@ const CHILDREN = {
 
 let database;
 
-/** C4: a mutation attaches the cells a live event about it should reach as a
- * Symbol-keyed property (never enumerated by `JSON.stringify`, so it rides
- * along on the return value without leaking into the HTTP response body);
- * `routes.js` reads it via `readLiveCells` and sets `request.liveCells`. */
-export const LIVE_CELLS = Symbol('liveCells');
-
-function withLiveCells(result, cells) {
-  Object.defineProperty(result, LIVE_CELLS, { value: cells, enumerable: false });
-  return result;
-}
-
-export function readLiveCells(result) {
-  return result?.[LIVE_CELLS];
-}
-
 // -- lifecycle --------------------------------------------------------------
 
 export function openStore(file) {
   database = openState(file, MIGRATIONS);
   return {
+    database: () => database,
     listStudies,
     createStudy,
     readStudy,
@@ -264,8 +274,7 @@ export function openStore(file) {
     bulkCreateFeatures,
     exportGeoJson,
     exportKml,
-    releaseStudy,
-    reassignStudy,
+    recordOwnershipChange,
     close,
   };
 }
@@ -477,21 +486,20 @@ function nextOrdinal(table, studyId) {
     .get(studyId).next;
 }
 
-/** `{ owner_cell, releasable_to: array }` from a raw studies row, for `canSee`/`canRelease`/`liveCellsFor`. */
-function studyPolicyItem(row) {
-  return { owner_cell: row.owner_cell, releasable_to: JSON.parse(row.releasable_to) };
+/** The study row, or a 404 — the dispatcher already resolved and access-checked
+ * the study for any route that names one; this is the plain existence check a
+ * direct (test, or cross-study-reference) lookup still needs. */
+function getStudyRow(id) {
+  const row = database.prepare('SELECT * FROM studies WHERE id = ?').get(id);
+  if (!row) throw new HttpError(404, `Study ${id} not found.`);
+  return row;
 }
 
-/**
- * The raw study row if it exists AND `user` can see it; otherwise a 404 —
- * never a 403, so a study a user can't see is indistinguishable from one
- * that doesn't exist (C2's "ids don't leak").
- */
-function assertStudyVisible(id, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  const row = database.prepare('SELECT * FROM studies WHERE id = ?').get(id);
-  if (!row || !canSee(user, studyPolicyItem(row))) {
-    throw new HttpError(404, `Study ${id} not found.`);
-  }
+/** A child row, or a 404 — see `getStudyRow`. */
+function getChildRow(kind, id) {
+  const config = childConfig(kind);
+  const row = database.prepare(`SELECT * FROM ${config.table} WHERE id = ?`).get(id);
+  if (!row) throw new HttpError(404, `Unknown ${kind} id ${id}.`);
   return row;
 }
 
@@ -619,7 +627,8 @@ function mergeEffective(kind, row, values) {
  * Every mutation goes through here: it bumps the parent study's revision and
  * `updated_at`, appends one activity row, and commits atomically. No exported
  * function touches the database outside this helper (or `createStudy`, which
- * has no parent study to bump yet).
+ * has no parent study to bump yet, or `recordOwnershipChange`, which runs
+ * inside the dispatcher's own release/reassign transaction).
  */
 function mutate(studyId, action, target, work, finalize) {
   return transact(database, () => {
@@ -638,9 +647,10 @@ function mutate(studyId, action, target, work, finalize) {
 
 // -- studies ------------------------------------------------------------------
 
-function readStudyRow(id) {
-  const row = database.prepare('SELECT * FROM studies WHERE id = ?').get(id);
-  if (!row) return null;
+/** A raw studies row, decoded — the study half of `readStudy`'s aggregate,
+ * and the shape `routes.js` hands the dispatcher as `items.study.shape` for
+ * its generated release/reassign responses. */
+export function shapeStudy(row) {
   return {
     id: row.id,
     name: row.name,
@@ -659,8 +669,15 @@ function readStudyRow(id) {
   };
 }
 
-function listStudies(user = { admin: true, cell: 'white', role: 'game-master' }) {
-  const { sql, params } = visibilitySql(user, { alias: 's' });
+function readStudyRow(id) {
+  return shapeStudy(getStudyRow(id));
+}
+
+/** `access` is the dispatcher's per-request capability; direct callers (tests)
+ * that don't care about visibility get the "see everything" default — this
+ * is a data default, not a policy one: it composes no cell/role decision. */
+function listStudies(access = { visible: () => ({ sql: '1=1', params: [] }) }) {
+  const { sql, params } = access.visible('study', { alias: 's' });
   const rows = database
     .prepare(
       `SELECT s.id, s.name, s.bounds, s.updated_at, s.owner_cell, s.releasable_to,
@@ -685,34 +702,42 @@ function listStudies(user = { admin: true, cell: 'white', role: 'game-master' })
   };
 }
 
-function createStudy(body, user = { admin: true, cell: 'white', role: 'game-master' }) {
+/** `owner` is `{ owner_cell, releasable_to }`, already resolved and validated
+ * by the dispatcher (verb `create`): stored exactly as given. Direct callers
+ * (tests) that don't care about ownership get White/unreleased — a data
+ * default, not a policy one: it composes no cell/role decision. */
+function createStudy(body, owner = { owner_cell: 'white', releasable_to: [] }) {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     throw new HttpError(400, 'A JSON object body is required.');
   }
   for (const key of Object.keys(body)) {
-    if (!['name', 'bounds', 'owner_cell'].includes(key)) {
-      throw new HttpError(400, `Unknown field: ${key}.`);
-    }
+    if (!STUDY_CREATE_FIELDS.includes(key)) throw new HttpError(400, `Unknown field: ${key}.`);
   }
   if (typeof body.name !== 'string' || !body.name.trim()) {
     throw new HttpError(400, 'name is required.');
   }
   const bounds = validateBounds(body.bounds ?? null);
-  const ownerCell = ownerCellForCreate(user, body.owner_cell);
   return transact(database, () => {
     const timestamp = new Date().toISOString();
     const info = database
       .prepare(
         `INSERT INTO studies
            (name, bounds, aoi, notes, revision, created_at, updated_at, owner_cell, releasable_to)
-         VALUES (?, ?, NULL, '{}', 1, ?, ?, ?, '[]')`,
+         VALUES (?, ?, NULL, '{}', 1, ?, ?, ?, ?)`,
       )
-      .run(body.name, bounds ? JSON.stringify(bounds) : null, timestamp, timestamp, ownerCell);
+      .run(
+        body.name,
+        bounds ? JSON.stringify(bounds) : null,
+        timestamp,
+        timestamp,
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
+      );
     const id = info.lastInsertRowid;
     database
       .prepare('INSERT INTO activity (study_id, at, action, target, detail) VALUES (?, ?, ?, ?, ?)')
       .run(id, timestamp, 'create', `study:${id}`, null);
-    return withLiveCells(readStudyRow(id), [ownerCell]);
+    return readStudyRow(id);
   });
 }
 
@@ -796,86 +821,50 @@ function applyStudyPatch(id, fields) {
   database.prepare(`UPDATE studies SET ${assignments.join(', ')} WHERE id = ?`).run(...params, id);
 }
 
-function updateStudy(id, patch, user = { admin: true, cell: 'white', role: 'game-master' }) {
+function updateStudy(id, patch) {
   const fields = validateStudyPatch(patch);
   return mutate(
     id,
     'update',
     `study:${id}`,
     () => {
-      const row = assertStudyVisible(id, user);
-      assertCanEdit(user, studyPolicyItem(row));
+      getStudyRow(id);
       applyStudyPatch(id, fields);
     },
     () => readStudyRow(id),
   );
 }
 
-function deleteStudy(id, user = { admin: true, cell: 'white', role: 'game-master' }) {
+function deleteStudy(id) {
   return mutate(
     id,
     'delete',
     `study:${id}`,
     () => {
-      const row = assertStudyVisible(id, user);
-      assertCanEdit(user, studyPolicyItem(row));
+      getStudyRow(id);
       database.prepare('DELETE FROM studies WHERE id = ?').run(id);
     },
     () => ({ deleted: true }),
   );
 }
 
-/** `POST studies/:id/release {cells}`: replaces `releasable_to`. C3: White, or an
- * analyst-or-above member of the owning cell. */
-function releaseStudy(id, cells, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  const row = assertStudyVisible(id, user);
-  if (!canRelease(user, studyPolicyItem(row))) {
-    throw new HttpError(403, 'You may not release this study.');
-  }
-  const before = liveCellsFor(studyPolicyItem(row));
-  const normalized = normalizeRelease(cells, row.owner_cell);
-  return mutate(
-    id,
-    'release',
-    `study:${id}`,
-    () => {
-      database
-        .prepare('UPDATE studies SET releasable_to = ? WHERE id = ?')
-        .run(JSON.stringify(normalized), id);
-    },
-    () => {
-      const study = readStudyRow(id);
-      const cellsAfter = liveCellsFor(study);
-      return withLiveCells(study, [...new Set([...before, ...cellsAfter])]);
-    },
-  );
-}
-
-/** `PATCH studies/:id/owner {owner_cell}`: White-only reassignment. */
-function reassignStudy(id, ownerCell, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  const row = assertStudyVisible(id, user);
-  if (!isWhite(user)) throw new HttpError(403, 'Only White may reassign a study.');
-  if (!['white', 'blue', 'red'].includes(ownerCell)) {
-    throw new HttpError(400, `Unknown cell: ${ownerCell}`);
-  }
-  const before = liveCellsFor(studyPolicyItem(row));
-  const existingReleasable = JSON.parse(row.releasable_to);
-  const normalizedReleasable = normalizeRelease(existingReleasable, ownerCell);
-  return mutate(
-    id,
-    'reassign',
-    `study:${id}`,
-    () => {
-      database
-        .prepare('UPDATE studies SET owner_cell = ?, releasable_to = ? WHERE id = ?')
-        .run(ownerCell, JSON.stringify(normalizedReleasable), id);
-    },
-    () => {
-      const study = readStudyRow(id);
-      const cellsAfter = liveCellsFor(study);
-      return withLiveCells(study, [...new Set([...before, ...cellsAfter])]);
-    },
-  );
+/**
+ * Runs inside `server/dispatch.js`'s own release/reassign transaction (it
+ * has already written `owner_cell`/`releasable_to`): bumps the study's
+ * revision/`updated_at` — mutating `after` in place, since that's the exact
+ * object the dispatcher shapes into its response — and appends one activity
+ * row, the same bookkeeping every other mutation gets via `mutate()`.
+ */
+function recordOwnershipChange({ action, after }) {
+  const timestamp = new Date().toISOString();
+  database
+    .prepare('UPDATE studies SET revision = revision + 1, updated_at = ? WHERE id = ?')
+    .run(timestamp, after.id);
+  after.revision += 1;
+  after.updated_at = timestamp;
+  database
+    .prepare('INSERT INTO activity (study_id, at, action, target, detail) VALUES (?, ?, ?, ?, ?)')
+    .run(after.id, timestamp, action, `study:${after.id}`, null);
 }
 
 // -- study aggregate ------------------------------------------------------------
@@ -901,8 +890,7 @@ function listChildren(kind, studyId) {
   return rows.map((row) => shapeChildRow(kind, row));
 }
 
-function readStudy(id, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  assertStudyVisible(id, user);
+function readStudy(id) {
   const study = readStudyRow(id);
   return {
     study,
@@ -988,10 +976,9 @@ function upsertCivilConsiderationRow(studyId, values) {
   return info.lastInsertRowid;
 }
 
-function createChild(kind, studyId, body, user = { admin: true, cell: 'white', role: 'game-master' }) {
+function createChild(kind, studyId, body) {
   childConfig(kind);
-  const study = assertStudyVisible(studyId, user);
-  assertCanEdit(user, studyPolicyItem(study));
+  getStudyRow(studyId);
   const values = validateBody(kind, body, false);
   let resultId;
   return mutate(
@@ -1004,34 +991,13 @@ function createChild(kind, studyId, body, user = { admin: true, cell: 'white', r
           ? upsertCivilConsiderationRow(studyId, values)
           : insertChildRow(kind, studyId, values);
     },
-    () => withLiveCells(readChildRow(kind, resultId), liveCellsFor(studyPolicyItem(study))),
+    () => readChildRow(kind, resultId),
   );
 }
 
-/** The parent study row for a child, visibility-checked; a child whose study
- * isn't visible reads exactly like an unknown child id (no id leak). */
-function assertChildVisible(kind, id, user = { admin: true, cell: 'white', role: 'game-master' }) {
+function updateChild(kind, id, patch) {
   const config = childConfig(kind);
-  const row = database.prepare(`SELECT * FROM ${config.table} WHERE id = ?`).get(id);
-  if (!row) throw new HttpError(404, `Unknown ${kind} id ${id}.`);
-  const study = database.prepare('SELECT * FROM studies WHERE id = ?').get(row.study_id);
-  if (!study || !canSee(user, studyPolicyItem(study))) {
-    throw new HttpError(404, `Unknown ${kind} id ${id}.`);
-  }
-  return { row, study };
-}
-
-/** `assertChildVisible` plus C2b: 403 (release is read-only) when the
- * child's study is visible but not owned by (or White for) `user`. */
-function assertChildEditable(kind, id, user) {
-  const { row, study } = assertChildVisible(kind, id, user);
-  assertCanEdit(user, studyPolicyItem(study));
-  return { row, study };
-}
-
-function updateChild(kind, id, patch, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  const config = childConfig(kind);
-  const { row, study } = assertChildEditable(kind, id, user);
+  const row = getChildRow(kind, id);
   const values = validateBody(kind, patch, true);
   for (const [name, spec] of Object.entries(config.columns)) {
     if (spec.type === 'reference' && name in values && values[name] !== null) {
@@ -1056,14 +1022,13 @@ function updateChild(kind, id, patch, user = { admin: true, cell: 'white', role:
         .prepare(`UPDATE ${config.table} SET ${assignments.join(', ')} WHERE id = ?`)
         .run(...params, id);
     },
-    () => withLiveCells(readChildRow(kind, id), liveCellsFor(studyPolicyItem(study))),
+    () => readChildRow(kind, id),
   );
 }
 
 /** `POST studies/:id/features/bulk`: validated like single creates, all or nothing. */
-function bulkCreateFeatures(studyId, items, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  const study = assertStudyVisible(studyId, user);
-  assertCanEdit(user, studyPolicyItem(study));
+function bulkCreateFeatures(studyId, items) {
+  getStudyRow(studyId);
   if (!Array.isArray(items)) throw new HttpError(400, 'features must be an array.');
   if (!items.length) throw new HttpError(400, 'features must not be empty.');
   if (items.length > MAX_BULK_FEATURES) {
@@ -1080,16 +1045,11 @@ function bulkCreateFeatures(studyId, items, user = { admin: true, cell: 'white',
         insertedIds.push(insertChildRow('features', studyId, values));
       }
     },
-    () =>
-      withLiveCells(
-        { items: insertedIds.map((id) => readChildRow('features', id)) },
-        liveCellsFor(studyPolicyItem(study)),
-      ),
+    () => ({ items: insertedIds.map((id) => readChildRow('features', id)) }),
   );
 }
 
-function exportGeoJson(studyId, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  assertStudyVisible(studyId, user);
+function exportGeoJson(studyId) {
   const study = readStudyRow(studyId);
   const features = listChildren('features', studyId);
   return {
@@ -1098,8 +1058,7 @@ function exportGeoJson(studyId, user = { admin: true, cell: 'white', role: 'game
   };
 }
 
-function exportKml(studyId, user = { admin: true, cell: 'white', role: 'game-master' }) {
-  assertStudyVisible(studyId, user);
+function exportKml(studyId) {
   const study = readStudyRow(studyId);
   const features = listChildren('features', studyId);
   return { body: toKml(study, features), filename: `${sanitizeFilename(study.name)}.kml` };
@@ -1110,13 +1069,13 @@ function exportKml(studyId, user = { admin: true, cell: 'white', role: 'game-mas
  * constraint on `ordinal`, so a plain two-row swap is safe: nothing else
  * reads ordinals except `ORDER BY ordinal, id`.
  */
-function reorderChild(kind, id, direction, user = { admin: true, cell: 'white', role: 'game-master' }) {
+function reorderChild(kind, id, direction) {
   const config = childConfig(kind);
   if (!config.ordinal) throw new HttpError(400, `${kind} does not support reordering.`);
   if (direction !== 'up' && direction !== 'down') {
     throw new HttpError(400, 'direction must be "up" or "down".');
   }
-  const { row, study } = assertChildEditable(kind, id, user);
+  const row = getChildRow(kind, id);
 
   const comparator = direction === 'up' ? '<' : '>';
   const order = direction === 'up' ? 'DESC' : 'ASC';
@@ -1128,12 +1087,7 @@ function reorderChild(kind, id, direction, user = { admin: true, cell: 'white', 
     )
     .get(row.study_id, row.ordinal);
   // Already first or last: a no-op, not an error.
-  if (!neighbor) {
-    return withLiveCells(
-      { items: listChildren(kind, row.study_id) },
-      liveCellsFor(studyPolicyItem(study)),
-    );
-  }
+  if (!neighbor) return { items: listChildren(kind, row.study_id) };
 
   return mutate(
     row.study_id,
@@ -1147,17 +1101,13 @@ function reorderChild(kind, id, direction, user = { admin: true, cell: 'white', 
         .prepare(`UPDATE ${config.table} SET ordinal = ? WHERE id = ?`)
         .run(row.ordinal, neighbor.id);
     },
-    () =>
-      withLiveCells(
-        { items: listChildren(kind, row.study_id) },
-        liveCellsFor(studyPolicyItem(study)),
-      ),
+    () => ({ items: listChildren(kind, row.study_id) }),
   );
 }
 
-function deleteChild(kind, id, user = { admin: true, cell: 'white', role: 'game-master' }) {
+function deleteChild(kind, id) {
   const config = childConfig(kind);
-  const { row, study } = assertChildEditable(kind, id, user);
+  const row = getChildRow(kind, id);
   return mutate(
     row.study_id,
     'delete',
@@ -1165,6 +1115,6 @@ function deleteChild(kind, id, user = { admin: true, cell: 'white', role: 'game-
     () => {
       database.prepare(`DELETE FROM ${config.table} WHERE id = ?`).run(id);
     },
-    () => withLiveCells({ deleted: true }, liveCellsFor(studyPolicyItem(study))),
+    () => ({ deleted: true }),
   );
 }

@@ -822,7 +822,10 @@ export function renderGraphicsAndRingsList({
     const label = await askText('Rename', feature.label);
     if (!label || label === feature.label) return;
     try {
-      const updated = await requestJson(`${API}/features/${feature.id}`, { method: 'PATCH', body: { label } });
+      const updated = await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, {
+        method: 'PATCH',
+        body: { label },
+      });
       Object.assign(feature, updated);
       onChanged();
     } catch (error) {
@@ -833,7 +836,7 @@ export function renderGraphicsAndRingsList({
   async function deleteFeature(feature) {
     if (!(await askConfirm(`Delete "${feature.label}"?`))) return;
     try {
-      await requestJson(`${API}/features/${feature.id}`, { method: 'DELETE' });
+      await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, { method: 'DELETE' });
       onChanged(feature.id);
     } catch (error) {
       if (error.name !== 'AbortError') showError(container, error.message);

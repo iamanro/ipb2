@@ -10,7 +10,6 @@ import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { requiredRole, roleAtLeast } from './access.js';
 import { SESSION_TTL_MS, hashToken, openAuthStore } from './auth.js';
 import { createDispatcher } from './dispatch.js';
 import { createExerciseLifecycle } from './exerciseLifecycle.js';
@@ -23,7 +22,7 @@ import {
   publish,
 } from './live.js';
 import { modules } from './modules.js';
-import { publishedCells } from './policy.js';
+import { roleAtLeast } from './policy.js';
 
 const byId = new Map(modules.map((module) => [module.id, module]));
 
@@ -39,10 +38,6 @@ const LOCAL_USER = {
   role: 'game-master',
   must_change_password: false,
 };
-/** Method names that actually change state — a HEAD (or any other
- * non-GET-but-still-a-read) doesn't belong in the audit trail or a live
- * broadcast (IPB-AUTH-007). */
-const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 /** An `X-Client-Id` longer than this is truncated before it ever reaches the
  * audit table (IPB-AUTH-006); the header is meant to hold a short id, not
  * an arbitrary payload. */
@@ -266,10 +261,7 @@ export function createApiMiddleware(mode) {
   }
 
   const lifecycle = createExerciseLifecycle({ getAuthStore: ensureAuthStore });
-  const dispatcher = createDispatcher(
-    modules.filter((module) => module.routes),
-    { publish, audit: (entry) => ensureAuthStore().audit(entry) },
-  );
+  const dispatcher = createDispatcher(modules, { publish, audit: (entry) => ensureAuthStore().audit(entry) });
 
   function sessionToken(request) {
     return parseCookies(request.headers.cookie)[SESSION_COOKIE];
@@ -610,8 +602,7 @@ export function createApiMiddleware(mode) {
 
       const moduleId = moduleMatch[1];
       const route = moduleMatch[2];
-      const module = byId.get(moduleId);
-      if (!module) throw new HttpError(404, 'Unknown module.');
+      if (!byId.has(moduleId)) throw new HttpError(404, 'Unknown module.');
       if (mode === 'on' && !request.user) throw new HttpError(401, 'Sign in required.');
       requirePasswordChanged(request);
       // C1: a non-admin with no membership in the current exercise can't
@@ -620,61 +611,21 @@ export function createApiMiddleware(mode) {
       if (!request.user.admin && !request.user.cell) {
         throw new HttpError(403, 'You are not assigned to the current exercise.');
       }
+      // Item-scoped requests (docs/adr/0002-item-scoped-requests.md): the
+      // dispatcher checks the role, resolves the item, announces and audits.
+      // The raw client id is never broadcast (IPB-AUTH-006), only its hash:
+      // `src/live.js` hashes its own id the same way to skip its own echo.
       const rawClientId = String(request.headers['x-client-id'] || '').slice(0, CLIENT_ID_HEADER_MAX) || null;
-      if (module.routes) {
-        // Item-scoped requests (docs/adr/0002-item-scoped-requests.md): the
-        // dispatcher checks the role, resolves the item, announces and audits.
-        await dispatcher.handle({
-          moduleId,
-          route,
-          url,
-          request,
-          response,
-          actor: request.user,
-          client: hashClientId(rawClientId),
-          rawClient: rawClientId,
-        });
-        return;
-      }
-      const required = requiredRole(moduleId, request.method, route);
-      if (!roleAtLeast(request.user.role, required)) {
-        throw new HttpError(403, `This action needs the ${required} role.`);
-      }
-
-      if (MUTATION_METHODS.has(request.method)) {
-        const { name: user } = request.user;
-        response.once('finish', () => {
-          if (response.statusCode >= 400) return;
-          const cells = publishedCells(request.liveCells);
-          publish({
-            module: moduleId,
-            method: request.method,
-            route,
-            // The raw id is never broadcast (IPB-AUTH-006): every
-            // subscriber, including an observer, sees this event, and a
-            // reusable raw id would let one client impersonate another's
-            // tab to suppress that tab's own refresh. `src/live.js` hashes
-            // its own id the same way to compare.
-            client: hashClientId(rawClientId),
-            user,
-            at: new Date().toISOString(),
-            // C4: set by a module handler on `request.liveCells`: the
-            // cells of a cell-owned item (or the union, for one affecting
-            // several), or LIVE_ALL for a global change. Unset = White
-            // only, so a handler that forgets can't leak to Blue/Red.
-            ...(cells ? { cells } : {}),
-          });
-          ensureAuthStore().audit({
-            user,
-            method: request.method,
-            path: url.pathname,
-            status: response.statusCode,
-            client: rawClientId,
-          });
-        });
-      }
-
-      await module.handle({ route, url, request, response });
+      await dispatcher.handle({
+        moduleId,
+        route,
+        url,
+        request,
+        response,
+        actor: request.user,
+        client: hashClientId(rawClientId),
+        rawClient: rawClientId,
+      });
     } catch (error) {
       if (response.headersSent) {
         response.destroy();

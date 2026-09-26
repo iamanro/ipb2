@@ -726,8 +726,10 @@ inject needs the Game Master role.
   on create, and reassign later) and is visible only to that cell,
   White/admins, and any cell it's been **released** to — its units inherit
   that visibility; an invisible ORBAT 404s on every route, including
-  export and unit routes. **Import** always lands in the importer's own
-  cell. The switcher shows each ORBAT's owner badge, a **Release…**
+  export and unit routes. **Import** creates an ORBAT the same way manual
+  creation does: it lands in the importer's own cell, unless White names
+  another in the imported file's `owner_cell`. The switcher shows each
+  ORBAT's owner badge, a **Release…**
   control, and, for White, a **Reassign** select. On the left, a unit
   outline: add, indent,
   reorder or duplicate units, drag and drop them, or use the keyboard
@@ -792,9 +794,9 @@ needed for the exercise's own controls — the scenario clock and the
 scenario/country/place library — plus the audit trail below. An admin with
 no membership acts as White's game-master by default; one *with* a
 membership uses it instead for these role checks (their cell visibility
-stays unrestricted regardless). `server/access.js`'s `requiredRole(moduleId,
-method, route)` is the single source of truth for the role a route needs;
-the server enforces it regardless of what a view shows or hides.
+stays unrestricted regardless). Each route declares the role it needs in
+its module's route table (`modules/<id>/server/routes.js`); the dispatcher
+enforces it regardless of what a view shows or hides.
 
 **Scenario events (injects) are game-master-only, including to read them**
 — unlike every other exercise GET — so the training audience can never see
@@ -954,20 +956,29 @@ user can actually release it) a "Release…" button opening an accessible
 dialog. Every badge pairs its colour with the cell's name as text, never
 colour alone.
 
-**Release is read-only.** Changing an item or anything under it (edit,
-delete, adding threats/units/SIRs/positions, reorder, import into it) takes
-White or membership of the owning cell (`canEdit`/`assertCanEdit`); the
-route's role requirement still applies on top. A cell an item was released
-to gets 403 "Released to your cell for reading only" and sees a
-"Read-only — owned by RED." note instead of edit controls. Cross-links
-need read on one side and edit on the other: Blue may cite a report
-released to it as evidence for Blue's own PIR. Only White answers an RFI.
+**One decision per request** ([ADR 0002](docs/adr/0002-item-scoped-requests.md)).
+Every route that touches cell-owned data names its item in the URL
+(`/api/exercise/requirements/7/indicators/42`, `/api/orbat/orbats/3/units/12`),
+and `server/dispatch.js` decides before any module code runs: a hidden item
+(or a part addressed through the wrong item) is 404, a change to an item
+merely released to your cell is 403 "Released to your cell for reading
+only", and the change is announced live to exactly that item's cells. Stores
+never see the user. Release (`POST …/:id/release`) and reassign
+(`PATCH …/:id/owner`, White only) are generated for every item kind. A
+route about no item declares who hears of its changes (`reach: 'everyone'`
+for the scenario clock, scenario geography and equipment bookmarks; White
+only otherwise), and a search sent as POST is neither announced nor
+audited. Each module has a sweep test generated from its route table
+(`server/routeSweep.js`): as Blue, every route of a hidden Red item must
+answer 404 and every change to a released one 403, so a new route is
+covered the day it's added.
 
-**Live updates fail closed.** A change is announced to the item's owner and
-release cells (plus White). A module marks a change every cell should hear
-about with `LIVE_ALL` (the scenario clock, scenario geography, equipment
-bookmarks); anything unmarked reaches White only, so a new route can't leak
-"Red just created something" to Blue by omission.
+**Release is read-only.** A cell an item was released to sees a
+"Read-only — owned by RED." note instead of edit controls. Blue may still
+cite a report released to it as evidence on its own PIR (an evidence link is
+a part of the requirement, not of the report); a deleted report leaves its
+links marked withdrawn, and requirement fulfillment only counts reports the
+viewer can read. Only White answers an RFI.
 
 **Membership**: an account's cell and role are assigned per exercise on
 the Admin module's **Members** tab (`GET/PUT/DELETE /api/auth/members*`,
@@ -1019,6 +1030,22 @@ wording and geometry and adds new rows, but never deletes; rows no longer in
 the study are listed for you to remove, and observations and evidence are
 kept.
 
+A requirement's SIRs, indicators and evidence links are its parts, addressed
+flat underneath it: `POST/PATCH/DELETE /api/exercise/requirements/:id/sirs[/:id]`,
+`.../indicators[/:id]` (creating one takes `sir_id` in the body, which must
+name a SIR of that same requirement), and `.../evidence[/:id]`. An evidence
+link is a part of the requirement it supports, not of the report it cites
+(CONTEXT.md): creating one (`POST .../evidence`) takes the citing `report_id`
+in the body plus `target_kind`/`target_id` (the requirement itself, or one of
+its SIRs) and reads the report with the same visibility a plain `GET` would
+— a cell may cite any report merely released to it, same as before. Deleting
+the *report* a link cites never deletes the link: it keeps citing that
+`report_id`, and reads back `report: null, withdrawn: true` wherever it's
+shown, never counting toward fulfillment. Fulfillment itself (a requirement's
+and each SIR's) is computed per viewer: only evidence from reports that
+viewer can currently see counts, so the same requirement can show different
+fulfillment to different cells looking at the identical rows.
+
 A report (`POST /api/exercise/reports`) can carry a location (`lon`/`lat`,
 both or neither), a type (`free`/`spotrep`/`salute`) with type-specific
 structured `fields`, and a reported SIDC. A located report is linked
@@ -1026,7 +1053,11 @@ automatically to the first imported NAI/TAI whose polygon contains it (or,
 for a point NAI, within 250 m), unless `nai_id` is given explicitly; moving a
 report's location re-runs the match. Scenario injects (`scenario_events` of
 kind `report`) take the same payload, including location, and are validated
-the same way when scheduled, not just when they fire.
+the same way when scheduled, not just when they fire. Firing one — by hand
+(`POST /api/exercise/scenario-events/:id/fire`, game-master role) or by the
+scenario clock itself once its trigger time arrives — creates the report or
+message owned by White and released to the inject's own `release_to` cells,
+announced only to them; nothing is exposed before it fires.
 
 `exercise` also owns the app-wide **current situation**: `tracks` (each with
 a head position, status, and DTG) and their `track_positions` history.

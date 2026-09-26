@@ -192,6 +192,12 @@ export function mountBuilder({ root, params, confirm }) {
     if (state.selectedUnitId && !byId.has(state.selectedUnitId)) state.selectedUnitId = null;
   }
 
+  /** The generated release/reassign endpoints answer with the ORBAT alone
+   * (no units): merge it into the open document rather than replacing one. */
+  function applyOrbatFields(orbat) {
+    state.doc = { ...state.doc, orbat };
+  }
+
   // --- rendering: ORBAT switcher -----------------------------------------------
 
   function renderSwitcher() {
@@ -296,12 +302,12 @@ export function mountBuilder({ root, params, confirm }) {
       item: orbat,
       onRelease: async (cells) => {
         try {
-          const doc = await requestJson(`${API}/orbats/${orbat.id}/release`, {
+          const updated = await requestJson(`${API}/orbats/${orbat.id}/release`, {
             method: 'POST',
             body: { cells },
             signal,
           });
-          applyDocument(doc);
+          applyOrbatFields(updated);
           renderAll();
         } catch (error) {
           if (error.name !== 'AbortError') window.alert(error.message);
@@ -317,12 +323,12 @@ export function mountBuilder({ root, params, confirm }) {
       }
       select.addEventListener('change', async () => {
         try {
-          const doc = await requestJson(`${API}/orbats/${orbat.id}/owner`, {
+          const updated = await requestJson(`${API}/orbats/${orbat.id}/owner`, {
             method: 'PATCH',
             body: { owner_cell: select.value },
             signal,
           });
-          applyDocument(doc);
+          applyOrbatFields(updated);
           renderAll();
         } catch (error) {
           if (error.name !== 'AbortError') window.alert(error.message);
@@ -490,7 +496,10 @@ export function mountBuilder({ root, params, confirm }) {
     const ok = await confirm(message);
     if (!ok) return;
     try {
-      const doc = await requestJson(`${API}/units/${id}`, { method: 'DELETE', signal });
+      const doc = await requestJson(`${API}/orbats/${state.doc.orbat.id}/units/${id}`, {
+        method: 'DELETE',
+        signal,
+      });
       applyDocument(doc);
       if (state.selectedUnitId === id) state.selectedUnitId = null;
       await loadOrbatList();
@@ -504,7 +513,10 @@ export function mountBuilder({ root, params, confirm }) {
   async function duplicateUnit(id) {
     if (!canEditOrbat()) return;
     try {
-      const result = await requestJson(`${API}/units/${id}/duplicate`, { method: 'POST', signal });
+      const result = await requestJson(`${API}/orbats/${state.doc.orbat.id}/units/${id}/duplicate`, {
+        method: 'POST',
+        signal,
+      });
       applyDocument({ orbat: result.orbat, units: result.units });
       state.selectedUnitId = result.unitId;
       await loadOrbatList();
@@ -519,7 +531,7 @@ export function mountBuilder({ root, params, confirm }) {
   async function moveUnit(id, parentId, position) {
     if (!canEditOrbat()) return;
     try {
-      const doc = await requestJson(`${API}/units/${id}`, {
+      const doc = await requestJson(`${API}/orbats/${state.doc.orbat.id}/units/${id}`, {
         method: 'PATCH',
         body: { parentId, position },
         signal,
@@ -550,7 +562,7 @@ export function mountBuilder({ root, params, confirm }) {
       state.saveTimers.delete(id);
       if (!toSend) return;
       try {
-        const doc = await requestJson(`${API}/units/${id}`, {
+        const doc = await requestJson(`${API}/orbats/${state.doc.orbat.id}/units/${id}`, {
           method: 'PATCH',
           body: toSend,
           signal,

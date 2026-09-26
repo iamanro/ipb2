@@ -1,13 +1,9 @@
 /**
- * Phase 1 cell/role policy (C2, docs/phase1-access.md). Pure, no I/O: every
- * function here takes plain data in and returns plain data or throws
- * `HttpError` — no database handle, no request/response. `server/api.js`
- * and every module's routes/store call into this instead of re-deriving
- * visibility or release rules of their own.
- *
- * `ROLES`/`roleAtLeast` moved here from `server/access.js` (which now
- * imports and re-exports them) so this file is the single place both the
- * role hierarchy and the cell rules live.
+ * The cell and role rules (docs/phase1-access.md). Pure, no I/O: plain data
+ * in, plain data out or an `HttpError`. `server/dispatch.js` is their one
+ * caller on the server (docs/adr/0002-item-scoped-requests.md); stores use
+ * only `normalizeRelease` to validate a release list they build themselves
+ * (an inject's cells, an RFI answer).
  */
 import { HttpError } from './http.js';
 
@@ -105,18 +101,11 @@ export function ownerCellForCreate(user, requested) {
 /**
  * Release grants READ access only. Changing a cell-owned item (or any child
  * row under it) takes White (incl. admin) or membership of the owning cell;
- * the route's role requirement (server/access.js) applies on top. A visible
+ * the route's declared role applies on top (server/dispatch.js). A visible
  * but not editable item answers 403 (it's already visible, so no 404).
  */
 export function canEdit(user, item) {
   return isWhite(user) || (Boolean(user?.cell) && user.cell === item.owner_cell);
-}
-
-/** Throws 403 unless `canEdit(user, item)`. */
-export function assertCanEdit(user, item) {
-  if (!canEdit(user, item)) {
-    throw new HttpError(403, `Released to your cell for reading only; the ${item.owner_cell} cell owns it.`);
-  }
 }
 
 /** White (incl. admin), or an `analyst`-or-above member of the owning
@@ -144,18 +133,4 @@ export function normalizeRelease(cells, owner) {
  * whoever it's released to (server/live.js also always delivers to White). */
 export function liveCellsFor(item) {
   return [item.owner_cell, ...releasableArray(item.releasable_to)];
-}
-
-/**
- * C4: what a module handler sets `request.liveCells` to for a change every
- * cell may hear about (the scenario clock, scenario geography, shared
- * bookmarks). Live events fail closed: a mutation that sets neither this
- * nor a cell list is announced to White only.
- */
-export const LIVE_ALL = 'all';
-
-/** The `cells` a live event is published with: undefined = everyone. */
-export function publishedCells(liveCells) {
-  if (liveCells === LIVE_ALL) return undefined;
-  return Array.isArray(liveCells) ? liveCells : ['white'];
 }

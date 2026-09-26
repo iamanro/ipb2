@@ -1,32 +1,6 @@
 import { HttpError } from '../../../server/http.js';
-import {
-  assertCanEdit,
-  canRelease,
-  canSee,
-  isWhite,
-  liveCellsFor,
-  normalizeRelease,
-  ownerCellForCreate,
-  visibilitySql,
-} from '../../../server/policy.js';
 import { openState, transact } from '../../../server/state.js';
 import { MIGRATIONS } from './schema.js';
-
-const DEFAULT_USER = { admin: true, cell: 'white', role: 'game-master' };
-
-/** C4: a mutation attaches the cells a live event about it should reach as a
- * Symbol-keyed property (never enumerated by `JSON.stringify`); `routes.js`
- * reads it via `readLiveCells` and sets `request.liveCells`. */
-export const LIVE_CELLS = Symbol('liveCells');
-
-function withLiveCells(result, cells) {
-  Object.defineProperty(result, LIVE_CELLS, { value: cells, enumerable: false });
-  return result;
-}
-
-export function readLiveCells(result) {
-  return result?.[LIVE_CELLS];
-}
 
 /** Mirrors `client/sidc.js`'s DEFAULT_SIDC: a friendly land infantry unit, no echelon. */
 const DEFAULT_SIDC = '10031000001211000000';
@@ -37,12 +11,21 @@ const MAX_DEPTH = 24;
 
 let database;
 
+/**
+ * Opens (or reopens) this module's state. Cell access is decided entirely
+ * by `server/dispatch.js` before any of these functions run: they take an
+ * already-resolved orbat/unit row (or, for creation, the `owner` the
+ * dispatcher computed) and never see the user.
+ */
 export function openStore(file) {
   database = openState(file, MIGRATIONS);
   return {
+    database,
+    orbatRow: (id) => fetchRow('orbats', id),
+    unitRow: (id) => fetchRow('units', id),
+    documentFor,
     listOrbats,
     createOrbat,
-    getDocument,
     updateOrbat,
     deleteOrbat,
     addUnit,
@@ -51,8 +34,6 @@ export function openStore(file) {
     duplicateUnit,
     exportOrbat,
     importOrbat,
-    releaseOrbat,
-    reassignOrbat,
     close,
   };
 }
@@ -70,43 +51,6 @@ function now() {
 
 function fetchRow(table, id) {
   return database.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) ?? null;
-}
-
-/** `{ owner_cell, releasable_to: array }` from a raw orbats row, for `canSee`/`canRelease`/`liveCellsFor`. */
-function orbatPolicyItem(row) {
-  return { owner_cell: row.owner_cell, releasable_to: JSON.parse(row.releasable_to) };
-}
-
-/** The raw orbat row if it exists AND `user` can see it; otherwise a 404 —
- * never a 403, so an ORBAT a user can't see is indistinguishable from one
- * that doesn't exist (C2's "ids don't leak"). */
-function requireOrbatRow(id, user = DEFAULT_USER) {
-  const row = fetchRow('orbats', id);
-  if (!row || !canSee(user, orbatPolicyItem(row))) {
-    throw new HttpError(404, `ORBAT ${id} not found.`);
-  }
-  return row;
-}
-
-/** A unit whose parent ORBAT `user` can see; a unit under an invisible ORBAT
- * reads exactly like an unknown unit id (no id leak). */
-function requireUnitRow(id, user = DEFAULT_USER) {
-  const row = fetchRow('units', id);
-  if (!row) throw new HttpError(404, `Unit ${id} not found.`);
-  const orbat = fetchRow('orbats', row.orbat_id);
-  if (!orbat || !canSee(user, orbatPolicyItem(orbat))) {
-    throw new HttpError(404, `Unit ${id} not found.`);
-  }
-  return row;
-}
-
-/** `requireUnitRow` plus C2b: 403 (release is read-only) when the unit's
- * ORBAT is visible but not owned by (or White for) `user`. */
-function requireEditableUnitRow(id, user = DEFAULT_USER) {
-  const row = requireUnitRow(id, user);
-  const orbat = fetchRow('orbats', row.orbat_id);
-  assertCanEdit(user, orbatPolicyItem(orbat));
-  return row;
 }
 
 function requireOrbatName(value) {
@@ -157,7 +101,9 @@ function countUnits(orbatId) {
   return database.prepare('SELECT COUNT(*) AS c FROM units WHERE orbat_id = ?').get(orbatId).c;
 }
 
-function shapeOrbat(row) {
+/** Shapes an `orbats` row for API responses (list, document, and the
+ * generated release/reassign endpoints). */
+export function shapeOrbat(row) {
   return {
     id: row.id,
     name: row.name,
@@ -208,9 +154,9 @@ function orderedUnits(orbatId) {
   return ordered;
 }
 
-function getDocument(id, user = DEFAULT_USER) {
-  const orbat = requireOrbatRow(id, user);
-  return { orbat: shapeOrbat(orbat), units: orderedUnits(id).map(shapeUnit) };
+/** `{ orbat, units }`, the shape `GET orbats/:item` and every unit mutation answers with. */
+function documentFor(orbatRow) {
+  return { orbat: shapeOrbat(orbatRow), units: orderedUnits(orbatRow.id).map(shapeUnit) };
 }
 
 function touchOrbat(orbatId) {
@@ -247,33 +193,34 @@ function shiftPositions(orbatId, parentId, fromInclusive, delta) {
 
 // -- orbats -------------------------------------------------------------------
 
-function listOrbats(user = DEFAULT_USER) {
-  const { sql, params } = visibilitySql(user);
+/** `access.visible('orbat')` limits the list to what the requester can see;
+ * `list.orbats` in `server/routes.js` supplies `access`. */
+function listOrbats(access) {
+  const { sql, params } = access.visible('orbat');
   return database
     .prepare(`SELECT * FROM orbats WHERE ${sql} ORDER BY updated_at DESC, id DESC`)
     .all(...params)
     .map(shapeOrbat);
 }
 
-function createOrbat(body, user = DEFAULT_USER) {
+/** `owner` is `{ owner_cell, releasable_to }`, computed by the dispatcher
+ * (`ownerCellForCreate`/`normalizeRelease`) and stored exactly as given. */
+function createOrbat(owner, body) {
   const name = requireOrbatName(body?.name);
   const description = limitedString(body?.description, 'description', 2000);
-  const ownerCell = ownerCellForCreate(user, body?.owner_cell);
   return transact(database, () => {
     const timestamp = now();
     const { lastInsertRowid } = database
       .prepare(
         `INSERT INTO orbats (name, description, created_at, updated_at, owner_cell, releasable_to)
-         VALUES (?, ?, ?, ?, ?, '[]')`,
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(name, description, timestamp, timestamp, ownerCell);
-    return withLiveCells(getDocument(Number(lastInsertRowid), user), [ownerCell]);
+      .run(name, description, timestamp, timestamp, owner.owner_cell, JSON.stringify(owner.releasable_to));
+    return documentFor(fetchRow('orbats', Number(lastInsertRowid)));
   });
 }
 
-function updateOrbat(id, patch, user = DEFAULT_USER) {
-  const row = requireOrbatRow(id, user);
-  assertCanEdit(user, orbatPolicyItem(row));
+function updateOrbat(orbat, patch) {
   const sets = [];
   const params = [];
   if ('name' in patch) {
@@ -288,69 +235,27 @@ function updateOrbat(id, patch, user = DEFAULT_USER) {
     if (sets.length) {
       sets.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE orbats SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE orbats SET ${sets.join(', ')} WHERE id = ?`).run(...params, orbat.id);
     }
-    return withLiveCells(getDocument(id, user), liveCellsFor(orbatPolicyItem(row)));
+    return documentFor(fetchRow('orbats', orbat.id));
   });
 }
 
-function deleteOrbat(id, user = DEFAULT_USER) {
-  const row = requireOrbatRow(id, user);
-  assertCanEdit(user, orbatPolicyItem(row));
+function deleteOrbat(orbat) {
   return transact(database, () => {
-    database.prepare('DELETE FROM orbats WHERE id = ?').run(id);
-    return withLiveCells({ deleted: true }, liveCellsFor(orbatPolicyItem(row)));
-  });
-}
-
-/** `POST orbats/:id/release {cells}`: replaces `releasable_to`. C3: White, or an
- * analyst-or-above member of the owning cell. */
-function releaseOrbat(id, cells, user = DEFAULT_USER) {
-  const row = requireOrbatRow(id, user);
-  if (!canRelease(user, orbatPolicyItem(row))) {
-    throw new HttpError(403, 'You may not release this ORBAT.');
-  }
-  const before = liveCellsFor(orbatPolicyItem(row));
-  const normalized = normalizeRelease(cells, row.owner_cell);
-  return transact(database, () => {
-    database
-      .prepare('UPDATE orbats SET releasable_to = ? WHERE id = ?')
-      .run(JSON.stringify(normalized), id);
-    const document = getDocument(id, user);
-    const cellsAfter = liveCellsFor(document.orbat);
-    return withLiveCells(document, [...new Set([...before, ...cellsAfter])]);
-  });
-}
-
-/** `PATCH orbats/:id/owner {owner_cell}`: White-only reassignment. */
-function reassignOrbat(id, ownerCell, user = DEFAULT_USER) {
-  const row = requireOrbatRow(id, user);
-  if (!isWhite(user)) throw new HttpError(403, 'Only White may reassign an ORBAT.');
-  if (!['white', 'blue', 'red'].includes(ownerCell)) {
-    throw new HttpError(400, `Unknown cell: ${ownerCell}`);
-  }
-  const before = liveCellsFor(orbatPolicyItem(row));
-  const normalizedReleasable = normalizeRelease(JSON.parse(row.releasable_to), ownerCell);
-  return transact(database, () => {
-    database
-      .prepare('UPDATE orbats SET owner_cell = ?, releasable_to = ? WHERE id = ?')
-      .run(ownerCell, JSON.stringify(normalizedReleasable), id);
-    const document = getDocument(id, user);
-    const cellsAfter = liveCellsFor(document.orbat);
-    return withLiveCells(document, [...new Set([...before, ...cellsAfter])]);
+    database.prepare('DELETE FROM orbats WHERE id = ?').run(orbat.id);
+    return { deleted: true };
   });
 }
 
 // -- units ----------------------------------------------------------------
 
-function addUnit(orbatId, body, user = DEFAULT_USER) {
-  const orbatRow = requireOrbatRow(orbatId, user);
-  assertCanEdit(user, orbatPolicyItem(orbatRow));
+function addUnit(orbat, body) {
   if (!body || !('parentId' in body)) throw new HttpError(400, 'parentId is required.');
   const parentId = normalizeParentId(body.parentId);
   if (parentId !== null) {
     const parentRow = fetchRow('units', parentId);
-    if (!parentRow || parentRow.orbat_id !== orbatId) {
+    if (!parentRow || parentRow.orbat_id !== orbat.id) {
       throw new HttpError(400, 'parentId must reference a unit in this ORBAT.');
     }
   }
@@ -363,9 +268,9 @@ function addUnit(orbatId, body, user = DEFAULT_USER) {
   const notes = limitedString(body.notes, 'notes', 4000);
 
   return transact(database, () => {
-    const count = siblingCount(orbatId, parentId);
+    const count = siblingCount(orbat.id, parentId);
     const position = 'position' in body ? clampInt(body.position, 'position', 0, count) : count;
-    shiftPositions(orbatId, parentId, position, 1);
+    shiftPositions(orbat.id, parentId, position, 1);
     const { lastInsertRowid } = database
       .prepare(
         `INSERT INTO units
@@ -373,7 +278,7 @@ function addUnit(orbatId, body, user = DEFAULT_USER) {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        orbatId,
+        orbat.id,
         parentId,
         position,
         sidc,
@@ -384,11 +289,11 @@ function addUnit(orbatId, body, user = DEFAULT_USER) {
         additional,
         notes,
       );
-    touchOrbat(orbatId);
-    return withLiveCells(
-      { ...getDocument(orbatId, user), unitId: Number(lastInsertRowid) },
-      liveCellsFor(orbatPolicyItem(orbatRow)),
-    );
+    touchOrbat(orbat.id);
+    return {
+      ...documentFor(fetchRow('orbats', orbat.id)),
+      unitId: Number(lastInsertRowid),
+    };
   });
 }
 
@@ -432,9 +337,7 @@ function moveUnitRow(unit, newParentId, explicitPosition) {
     .run(newParentId, target, unit.id);
 }
 
-function updateUnit(id, patch, user = DEFAULT_USER) {
-  const unit = requireEditableUnitRow(id, user);
-
+function updateUnit(unit, patch) {
   const fieldUpdates = {};
   if ('sidc' in patch) fieldUpdates.sidc = validateSidcValue(patch.sidc);
   if ('name' in patch) fieldUpdates.name = limitedString(patch.name, 'name', 120);
@@ -468,22 +371,19 @@ function updateUnit(id, patch, user = DEFAULT_USER) {
     if (keys.length) {
       const sets = keys.map((key) => `${columns[key]} = ?`);
       const params = keys.map((key) => fieldUpdates[key]);
-      database.prepare(`UPDATE units SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
+      database.prepare(`UPDATE units SET ${sets.join(', ')} WHERE id = ?`).run(...params, unit.id);
     }
     touchOrbat(unit.orbat_id);
-    const orbatRow = fetchRow('orbats', unit.orbat_id);
-    return withLiveCells(getDocument(unit.orbat_id, user), liveCellsFor(orbatPolicyItem(orbatRow)));
+    return documentFor(fetchRow('orbats', unit.orbat_id));
   });
 }
 
-function deleteUnit(id, user = DEFAULT_USER) {
-  const unit = requireEditableUnitRow(id, user);
+function deleteUnit(unit) {
   return transact(database, () => {
-    database.prepare('DELETE FROM units WHERE id = ?').run(id); // cascades to descendants
+    database.prepare('DELETE FROM units WHERE id = ?').run(unit.id); // cascades to descendants
     shiftPositions(unit.orbat_id, unit.parent_id, unit.position + 1, -1);
     touchOrbat(unit.orbat_id);
-    const orbatRow = fetchRow('orbats', unit.orbat_id);
-    return withLiveCells(getDocument(unit.orbat_id, user), liveCellsFor(orbatPolicyItem(orbatRow)));
+    return documentFor(fetchRow('orbats', unit.orbat_id));
   });
 }
 
@@ -514,21 +414,18 @@ function cloneSubtree(sourceRow, parentId, position) {
   return newId;
 }
 
-function duplicateUnit(id, user = DEFAULT_USER) {
+function duplicateUnit(unit) {
   // Unlike an import that creates a brand-new document owned by the
   // caller's own cell, a duplicate is inserted into the *same* ORBAT under
-  // its existing owner: it is a structural edit, not a read-only copy, so
-  // C2b applies the same as add/update/delete.
-  const unit = requireEditableUnitRow(id, user);
+  // its existing owner: it is a structural edit, not a read-only copy.
   return transact(database, () => {
     shiftPositions(unit.orbat_id, unit.parent_id, unit.position + 1, 1);
     const newId = cloneSubtree(unit, unit.parent_id, unit.position + 1);
     touchOrbat(unit.orbat_id);
-    const orbatRow = fetchRow('orbats', unit.orbat_id);
-    return withLiveCells(
-      { ...getDocument(unit.orbat_id, user), unitId: newId },
-      liveCellsFor(orbatPolicyItem(orbatRow)),
-    );
+    return {
+      ...documentFor(fetchRow('orbats', unit.orbat_id)),
+      unitId: newId,
+    };
   });
 }
 
@@ -552,14 +449,13 @@ function exportChildren(orbatId, parentId) {
   }));
 }
 
-function exportOrbat(id, user = DEFAULT_USER) {
-  const orbat = requireOrbatRow(id, user);
+function exportOrbat(orbat) {
   return {
     format: 'orbat',
     version: 1,
     name: orbat.name,
     description: orbat.description,
-    units: exportChildren(id, null),
+    units: exportChildren(orbat.id, null),
   };
 }
 
@@ -620,7 +516,10 @@ function insertImportedNode(orbatId, parentId, position, node) {
   node.children.forEach((child, index) => insertImportedNode(orbatId, newId, index, child));
 }
 
-function importOrbat(body, user = DEFAULT_USER) {
+/** `owner` is `{ owner_cell, releasable_to }`, computed by the dispatcher —
+ * an import always lands in the importer's own cell because the client
+ * never sends `owner_cell`/`releasable_to` on import (see `client/`). */
+function importOrbat(owner, body) {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     throw new HttpError(400, 'Body must be an object.');
   }
@@ -629,9 +528,6 @@ function importOrbat(body, user = DEFAULT_USER) {
   const name = requireOrbatName(body.name);
   const description = limitedString(body.description, 'description', 2000);
   if (!Array.isArray(body.units)) throw new HttpError(400, 'units must be an array.');
-  // The import always lands in the importer's own cell (not White's usual
-  // choice of any cell): an import is "my cell's copy" of an outside ORBAT.
-  const ownerCell = ownerCellForCreate(user, undefined);
 
   const counters = { count: 0 };
   const validated = body.units.map((node, index) =>
@@ -643,11 +539,11 @@ function importOrbat(body, user = DEFAULT_USER) {
     const { lastInsertRowid } = database
       .prepare(
         `INSERT INTO orbats (name, description, created_at, updated_at, owner_cell, releasable_to)
-         VALUES (?, ?, ?, ?, ?, '[]')`,
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(name, description, timestamp, timestamp, ownerCell);
+      .run(name, description, timestamp, timestamp, owner.owner_cell, JSON.stringify(owner.releasable_to));
     const orbatId = Number(lastInsertRowid);
     validated.forEach((node, index) => insertImportedNode(orbatId, null, index, node));
-    return getDocument(orbatId, user);
+    return documentFor(fetchRow('orbats', orbatId));
   });
 }

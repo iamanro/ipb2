@@ -5,7 +5,6 @@ import { expect, test } from 'vitest';
 import { HttpError } from './http.js';
 import {
   CELLS,
-  assertCanEdit,
   canEdit,
   canRelease,
   canSee,
@@ -302,7 +301,6 @@ test('canEdit: release grants read only; White and the owning cell may change an
   const red = { name: 'r', cell: 'red', role: 'observer' };
   expect(canSee(blue, redItem)).toBe(true);
   expect(canEdit(blue, redItem)).toBe(false);
-  expect(() => assertCanEdit(blue, redItem)).toThrow(expect.objectContaining({ status: 403 }));
   expect(canEdit(red, redItem)).toBe(true);
   expect(canEdit({ name: 'w', cell: 'white', role: 'observer' }, redItem)).toBe(true);
   expect(canEdit({ name: 'a', admin: true, cell: null, role: null }, redItem)).toBe(true);

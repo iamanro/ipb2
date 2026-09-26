@@ -274,7 +274,10 @@ function offsetField(value, onCommit, { allowEmpty = false, placeholder } = {}) 
 async function patchPhase(phase, body) {
   if (!(can('analyst') && canEditStudy())) return;
   try {
-    Object.assign(phase, await requestJson(`${API}/phases/${phase.id}`, { method: 'PATCH', body }));
+    Object.assign(
+      phase,
+      await requestJson(`${API}/studies/${phase.study_id}/phases/${phase.id}`, { method: 'PATCH', body }),
+    );
   } catch (error) {
     showError(elements.worksheet4, error.message);
   }
@@ -284,7 +287,7 @@ async function deletePhase(phase) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete phase "${phase.name}"?`))) return;
   try {
-    await requestJson(`${API}/phases/${phase.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${phase.study_id}/phases/${phase.id}`, { method: 'DELETE' });
     state.study.phases = state.study.phases.filter((entry) => entry.id !== phase.id);
     renderStep4Worksheet();
   } catch (error) {
@@ -383,7 +386,13 @@ export function renderPhasesSection(canEdit) {
 async function patchDecisionPoint(dp, body) {
   if (!(can('analyst') && canEditStudy())) return;
   try {
-    Object.assign(dp, await requestJson(`${API}/decision-points/${dp.id}`, { method: 'PATCH', body }));
+    Object.assign(
+      dp,
+      await requestJson(`${API}/studies/${dp.study_id}/decision-points/${dp.id}`, {
+        method: 'PATCH',
+        body,
+      }),
+    );
     renderStep4Worksheet();
   } catch (error) {
     showError(elements.worksheet4, error.message);
@@ -394,7 +403,7 @@ async function deleteDecisionPoint(dp) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete decision point "${dp.name}"?`))) return;
   try {
-    await requestJson(`${API}/decision-points/${dp.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${dp.study_id}/decision-points/${dp.id}`, { method: 'DELETE' });
     state.study.decision_points = state.study.decision_points.filter((entry) => entry.id !== dp.id);
     renderStep4Worksheet();
   } catch (error) {
@@ -721,7 +730,13 @@ async function openEventEditorFor(event) {
   const result = await openEventEditor({ event, tais, decisionPoints, hHour: state.study.study.h_hour });
   if (!result) return;
   try {
-    Object.assign(event, await requestJson(`${API}/events/${event.id}`, { method: 'PATCH', body: result }));
+    Object.assign(
+      event,
+      await requestJson(`${API}/studies/${event.study_id}/events/${event.id}`, {
+        method: 'PATCH',
+        body: result,
+      }),
+    );
     renderStep4Worksheet();
   } catch (error) {
     showError(elements.worksheet4, error.message);

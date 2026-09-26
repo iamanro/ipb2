@@ -1,5 +1,7 @@
 # Phase 1: exercise lifecycle, cells, release
 
+> **Superseded in part** by [ADR 0002](adr/0002-item-scoped-requests.md): the cell rules below (C1, C2, C2b, C6) still hold, but *where* they are applied changed. `server/access.js` and `request.liveCells` are gone; `server/dispatch.js` resolves the item named in each URL, checks role and cell, generates release/reassign (C3) and announces each change to the item's cells (C4). Evidence links are now parts of the requirement they support.
+
 Decisions (user, 2026-09-26):
 - One exercise at a time.
 - Cells: White / Blue / Red.

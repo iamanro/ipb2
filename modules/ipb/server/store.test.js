@@ -908,15 +908,9 @@ describe('openStore: study H-hour, classification and weather thresholds', () =>
   });
 });
 
-describe('openStore: cells (C2/C3 phase 1 access)', () => {
+describe('openStore: listStudies uses the access capability', () => {
   let file;
   let store;
-
-  const WHITE = { admin: false, cell: 'white', role: 'game-master' };
-  const BLUE = { admin: false, cell: 'blue', role: 'analyst' };
-  const BLUE_OBSERVER = { admin: false, cell: 'blue', role: 'observer' };
-  const RED = { admin: false, cell: 'red', role: 'analyst' };
-  const ADMIN = { admin: true, cell: null, role: null };
 
   beforeEach(() => {
     file = tempFile();
@@ -928,287 +922,34 @@ describe('openStore: cells (C2/C3 phase 1 access)', () => {
     removeDatabaseFiles(file);
   });
 
-  test('a study defaults to the creator cell; White may choose any cell', () => {
-    const blueStudy = store.createStudy({ name: 'Blue study' }, BLUE);
-    expect(blueStudy.owner_cell).toBe('blue');
-    expect(blueStudy.releasable_to).toEqual([]);
-
-    const whiteChosen = store.createStudy({ name: 'Red study', owner_cell: 'red' }, WHITE);
-    expect(whiteChosen.owner_cell).toBe('red');
-
-    const whiteDefault = store.createStudy({ name: 'White study' }, WHITE);
-    expect(whiteDefault.owner_cell).toBe('white');
-  });
-
-  test('a non-White user cannot create a study for another cell', () => {
-    expectStatus(() => store.createStudy({ name: 'x', owner_cell: 'red' }, BLUE), 400);
-  });
-
-  test('a user with no cell cannot create a study', () => {
-    expectStatus(
-      () => store.createStudy({ name: 'x' }, { admin: false, cell: null, role: null }),
-      403,
-    );
-  });
-
-  test('list only returns visible studies: own cell, released, or White/admin sees all', () => {
-    store.createStudy({ name: 'Blue A' }, BLUE);
-    const redStudy = store.createStudy({ name: 'Red A' }, RED);
-    store.createStudy({ name: 'White A' }, WHITE);
-
-    expect(store.listStudies(BLUE).items.map((s) => s.name)).toEqual(['Blue A']);
-    expect(store.listStudies(RED).items.map((s) => s.name)).toEqual(['Red A']);
-    expect(store.listStudies(WHITE).items.map((s) => s.name).sort()).toEqual([
-      'Blue A',
-      'Red A',
-      'White A',
-    ]);
-    expect(store.listStudies(ADMIN).items).toHaveLength(3);
-
-    store.releaseStudy(redStudy.id, ['blue'], RED);
-    expect(store.listStudies(BLUE).items.map((s) => s.name).sort()).toEqual(['Blue A', 'Red A']);
-  });
-
-  test('Blue cannot reach a Red study or any of its children via ANY route: 404, not 403', () => {
-    const redStudy = store.createStudy({ name: 'Red study' }, RED);
-    const coa = store.createChild('coas', redStudy.id, { name: 'MLCOA', kind: 'most-likely' }, RED);
-    const threat = store.createChild('threats', redStudy.id, { name: 'Tank co' }, RED);
-    const event = store.createChild(
-      'events',
-      redStudy.id,
-      { coa_id: coa.id, indicator: 'x' },
-      RED,
-    );
-    const layer = store.createChild('layers', redStudy.id, { name: 'L1' }, RED);
-    const point = store.createChild(
-      'points',
-      redStudy.id,
-      { layer_id: layer.id, name: 'P1', lon: 1, lat: 1 },
-      RED,
-    );
-    const phase = store.createChild(
-      'phases',
-      redStudy.id,
-      { name: 'Prep', start_offset: 0 },
-      RED,
-    );
-    const analysis = store.createChild(
-      'analyses',
-      redStudy.id,
-      { kind: 'mobility', params: {}, summary: {} },
-      RED,
-    );
-    store.createChild(
-      'civil-considerations',
-      redStudy.id,
-      { ascope: 'areas', pmesii: 'political', text: 'x' },
-      RED,
-    );
-
-    expectStatus(() => store.readStudy(redStudy.id, BLUE), 404);
-    expectStatus(() => store.updateStudy(redStudy.id, { name: 'y' }, BLUE), 404);
-    expectStatus(() => store.deleteStudy(redStudy.id, BLUE), 404);
-    expectStatus(() => store.exportGeoJson(redStudy.id, BLUE), 404);
-    expectStatus(() => store.exportKml(redStudy.id, BLUE), 404);
-    expectStatus(
-      () => store.createChild('coas', redStudy.id, { name: 'x', kind: 'most-likely' }, BLUE),
-      404,
-    );
-    expectStatus(
-      () =>
-        store.bulkCreateFeatures(
-          redStudy.id,
-          [{ layer: 'note', kind: 'point', geometry: POINT }],
-          BLUE,
-        ),
-      404,
-    );
-    for (const [kind, id] of [
-      ['coas', coa.id],
-      ['threats', threat.id],
-      ['events', event.id],
-      ['layers', layer.id],
-      ['points', point.id],
-      ['phases', phase.id],
-      ['analyses', analysis.id],
-    ]) {
-      expectStatus(() => store.updateChild(kind, id, { name: 'y' }, BLUE), 404);
-      expectStatus(() => store.deleteChild(kind, id, BLUE), 404);
-    }
-    expectStatus(() => store.reorderChild('threats', threat.id, 'up', BLUE), 404);
-    expectStatus(() => store.releaseStudy(redStudy.id, ['blue'], BLUE), 404);
-    expectStatus(() => store.reassignStudy(redStudy.id, 'blue', BLUE), 404);
-  });
-
-  test('once released to Blue, Blue can see the study, but release grants read only, not edit (C2b)', () => {
-    const redStudy = store.createStudy({ name: 'Red study' }, RED);
-    store.releaseStudy(redStudy.id, ['blue'], RED);
-    expect(store.readStudy(redStudy.id, BLUE).study.releasable_to).toEqual(['blue']);
-    expectStatus(
-      () => store.createChild('coas', redStudy.id, { name: 'seen', kind: 'most-likely' }, BLUE),
-      403,
-    );
-  });
-
-  test('an observer released cell can read but any write still 404s only when invisible (visibility != role)', () => {
-    const redStudy = store.createStudy({ name: 'Red study' }, RED);
-    store.releaseStudy(redStudy.id, ['blue'], RED);
-    // Visible to blue observer: read succeeds regardless of role (role gating is the API layer's job).
-    expect(store.readStudy(redStudy.id, BLUE_OBSERVER).study.id).toBe(redStudy.id);
-  });
-
-  test('release: a non-owner, non-White user gets 403; the owner cell analyst or White succeeds', () => {
-    const blueStudy = store.createStudy({ name: 'Blue study' }, BLUE);
-    expectStatus(() => store.releaseStudy(blueStudy.id, ['red'], RED), 404); // invisible to red
-    const visibleToRed = store.createStudy({ name: 'Blue2' }, BLUE);
-    store.releaseStudy(visibleToRed.id, ['red'], BLUE); // blue releases to red so red can see it
-    expectStatus(() => store.releaseStudy(visibleToRed.id, ['white'], RED), 403); // red isn't owner
-    const released = store.releaseStudy(blueStudy.id, ['red'], WHITE);
-    expect(released.releasable_to).toEqual(['red']);
-  });
-
-  test('release requires analyst or above within the owning cell', () => {
-    const blueStudy = store.createStudy({ name: 'Blue study' }, BLUE);
-    expectStatus(
-      () => store.releaseStudy(blueStudy.id, ['red'], BLUE_OBSERVER),
-      403,
-    );
-  });
-
-  test('release replaces (not merges) releasable_to, and never includes the owner', () => {
-    const blueStudy = store.createStudy({ name: 'Blue study' }, BLUE);
-    store.releaseStudy(blueStudy.id, ['red'], BLUE);
-    const second = store.releaseStudy(blueStudy.id, ['white', 'blue'], BLUE);
-    expect(second.releasable_to).toEqual(['white']); // blue (the owner) dropped; red un-released
-  });
-
-  test('reassign: White-only; a non-White user, even the owner, gets 403', () => {
-    const blueStudy = store.createStudy({ name: 'Blue study' }, BLUE);
-    expectStatus(() => store.reassignStudy(blueStudy.id, 'red', BLUE), 403);
-    const reassigned = store.reassignStudy(blueStudy.id, 'red', WHITE);
-    expect(reassigned.owner_cell).toBe('red');
-  });
-
-  test('reassign strips the new owner from releasable_to', () => {
-    const blueStudy = store.createStudy({ name: 'Blue study' }, BLUE);
-    store.releaseStudy(blueStudy.id, ['red'], BLUE);
-    const reassigned = store.reassignStudy(blueStudy.id, 'red', WHITE);
-    expect(reassigned.owner_cell).toBe('red');
-    expect(reassigned.releasable_to).toEqual([]);
-  });
-
-  test('an unknown cell is rejected on create, release and reassign', () => {
-    expectStatus(() => store.createStudy({ name: 'x', owner_cell: 'green' }, WHITE), 400);
-    const study = store.createStudy({ name: 'y' }, WHITE);
-    expectStatus(() => store.releaseStudy(study.id, ['green'], WHITE), 400);
-    expectStatus(() => store.reassignStudy(study.id, 'green', WHITE), 400);
-  });
-});
-
-describe('openStore: C2b — release grants read access only, never edit', () => {
-  let file;
-  let store;
-
-  const WHITE = { admin: false, cell: 'white', role: 'game-master' };
-  const BLUE = { admin: false, cell: 'blue', role: 'analyst' };
-  const RED = { admin: false, cell: 'red', role: 'analyst' };
-
-  beforeEach(() => {
-    file = tempFile();
-    store = openStore(file);
-  });
-
-  afterEach(() => {
-    store.close();
-    removeDatabaseFiles(file);
-  });
-
-  /** A Red study released to Blue, with one of every child kind and an
-   * analysis, all owned by Red. */
-  function redStudyReleasedToBlue() {
-    const study = store.createStudy({ name: 'Red study' }, RED);
-    const coa = store.createChild('coas', study.id, { name: 'MLCOA', kind: 'most-likely' }, RED);
-    const threat = store.createChild('threats', study.id, { name: 'Tank co' }, RED);
-    const event = store.createChild(
-      'events',
-      study.id,
-      { coa_id: coa.id, indicator: 'x' },
-      RED,
-    );
-    const layer = store.createChild('layers', study.id, { name: 'L1' }, RED);
-    const point = store.createChild(
-      'points',
-      study.id,
-      { layer_id: layer.id, name: 'P1', lon: 1, lat: 1 },
-      RED,
-    );
-    const phase = store.createChild('phases', study.id, { name: 'Prep', start_offset: 0 }, RED);
-    const analysis = store.createChild(
-      'analyses',
-      study.id,
-      { kind: 'mobility', params: {}, summary: {} },
-      RED,
-    );
-    store.releaseStudy(study.id, ['blue'], RED);
-    return { study, coa, threat, event, layer, point, phase, analysis };
+  /** Asserts the store calls `access.visible('study', { alias: 's' })` (the
+   * exact contract `server/dispatch.js` relies on) and threads its SQL
+   * fragment into the query untouched. */
+  function access(sql, params = []) {
+    return {
+      visible: (kind, options) => {
+        expect(kind).toBe('study');
+        expect(options).toEqual({ alias: 's' });
+        return { sql, params };
+      },
+    };
   }
 
-  test('Blue gets 403 (not 404) on every mutation of a Red study released to Blue', () => {
-    const { study, coa, threat, event, layer, point, phase, analysis } = redStudyReleasedToBlue();
+  test('applies the capability\'s visibility condition and keeps newest-updated-first ordering', () => {
+    store.createStudy({ name: 'Blue A' }, { owner_cell: 'blue', releasable_to: [] });
+    const redStudy = store.createStudy({ name: 'Red A' }, { owner_cell: 'red', releasable_to: [] });
+    store.createStudy({ name: 'White A' }, { owner_cell: 'white', releasable_to: [] });
 
-    expectStatus(() => store.updateStudy(study.id, { name: 'y' }, BLUE), 403);
-    expectStatus(() => store.deleteStudy(study.id, BLUE), 403);
-    expectStatus(
-      () => store.createChild('coas', study.id, { name: 'x', kind: 'most-likely' }, BLUE),
-      403,
-    );
-    expectStatus(
-      () =>
-        store.bulkCreateFeatures(
-          study.id,
-          [{ layer: 'note', kind: 'point', geometry: POINT }],
-          BLUE,
-        ),
-      403,
-    );
-    for (const [kind, id] of [
-      ['coas', coa.id],
-      ['threats', threat.id],
-      ['events', event.id],
-      ['layers', layer.id],
-      ['points', point.id],
-      ['phases', phase.id],
-      ['analyses', analysis.id],
-    ]) {
-      expectStatus(() => store.updateChild(kind, id, { name: 'y' }, BLUE), 403);
-      expectStatus(() => store.deleteChild(kind, id, BLUE), 403);
-    }
-    expectStatus(() => store.reorderChild('threats', threat.id, 'up', BLUE), 403);
-  });
+    expect(store.listStudies(access('s.owner_cell = ?', ['blue'])).items.map((s) => s.name)).toEqual([
+      'Blue A',
+    ]);
+    expect(store.listStudies(access('1=1')).items.map((s) => s.name)).toEqual([
+      'White A',
+      'Red A',
+      'Blue A',
+    ]);
 
-  test('Blue still gets 404 (not 403) when the study is not released at all', () => {
-    const study = store.createStudy({ name: 'Red study' }, RED);
-    const coa = store.createChild('coas', study.id, { name: 'MLCOA', kind: 'most-likely' }, RED);
-    expectStatus(() => store.updateStudy(study.id, { name: 'y' }, BLUE), 404);
-    expectStatus(() => store.updateChild('coas', coa.id, { name: 'y' }, BLUE), 404);
-  });
-
-  test('the owner cell can still fully edit its own study once released elsewhere', () => {
-    const { study } = redStudyReleasedToBlue();
-    const updated = store.updateStudy(study.id, { name: 'Renamed by owner' }, RED);
-    expect(updated.name).toBe('Renamed by owner');
-  });
-
-  test('White can edit any released study, same as the owner', () => {
-    const { study } = redStudyReleasedToBlue();
-    const updated = store.updateStudy(study.id, { name: 'Renamed by White' }, WHITE);
-    expect(updated.name).toBe('Renamed by White');
-  });
-
-  test('reads (GET, export) still work for the released cell: release is read access', () => {
-    const { study } = redStudyReleasedToBlue();
-    expect(store.readStudy(study.id, BLUE).study.id).toBe(study.id);
-    expect(() => store.exportGeoJson(study.id, BLUE)).not.toThrow();
-    expect(() => store.exportKml(study.id, BLUE)).not.toThrow();
+    store.updateStudy(redStudy.id, { name: 'Red A (renamed)' });
+    expect(store.listStudies(access('1=1')).items.map((s) => s.name)).toContain('Red A (renamed)');
   });
 });

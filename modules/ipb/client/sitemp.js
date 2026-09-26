@@ -106,7 +106,7 @@ async function renameUnit(feature) {
   const designation = await askText('Designation shown on the map', current, 'Save');
   if (designation === null || designation === current) return;
   try {
-    const updated = await requestJson(`${API}/features/${feature.id}`, {
+    const updated = await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, {
       method: 'PATCH',
       body: {
         label: designation || 'Unit',

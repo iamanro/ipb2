@@ -569,7 +569,9 @@ export function createReportsController(ctx) {
         remove.title = 'Remove evidence link';
         remove.setAttribute('aria-label', 'Remove evidence link');
         remove.addEventListener('click', async () => {
-          await requestJson(`${api}/links/${link.id}`, { method: 'DELETE' });
+          // Evidence links are parts of the requirement they support
+          // (CONTEXT.md), addressed flat under it.
+          await requestJson(`${api}/requirements/${link.requirement_id}/evidence/${link.id}`, { method: 'DELETE' });
           await load();
           render();
         });
@@ -601,10 +603,17 @@ export function createReportsController(ctx) {
       linkButton.type = 'button';
       linkButton.addEventListener('click', async () => {
         const [kind, id] = targetSelect.value.split(':');
+        const targetOption = editableTargets.find(
+          (option) => option.kind === kind && String(option.id) === id,
+        );
         try {
-          await requestJson(`${api}/reports/${report.id}/links`, {
+          // Evidence links are parts of the requirement they support
+          // (CONTEXT.md): `:item` is that requirement, whether the link is
+          // blanket (`target_kind: 'requirement'`) or against one of its SIRs.
+          await requestJson(`${api}/requirements/${targetOption.requirement_id}/evidence`, {
             method: 'POST',
             body: {
+              report_id: report.id,
               target_kind: kind,
               target_id: Number.parseInt(id, 10),
               relation: relationSelect.value,
@@ -729,7 +738,7 @@ export function createReportsController(ctx) {
   }
 
   async function reassignReportOwner(report, ownerCell) {
-    await requestJson(`${api}/reports/${report.id}`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/reports/${report.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
     await load();
     render();
   }

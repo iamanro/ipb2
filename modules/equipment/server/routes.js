@@ -3,8 +3,7 @@ import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { HttpError, integerParameter, readJson, sendJson } from '../../../server/http.js';
-import { LIVE_ALL } from '../../../server/policy.js';
+import { HttpError, integerParameter, sendJson } from '../../../server/http.js';
 import { referenceFile } from '../../../server/reference.js';
 import { dataDirectory, stateDirectory } from '../../../server/state.js';
 import { openBookmarks } from './bookmarks.js';
@@ -164,11 +163,10 @@ function apiTaxonomy(database, query) {
   return taxonomy(database, kind, usedOnly);
 }
 
-async function serveImage(database, response, encodedPath) {
-  const parts = encodedPath.split('/');
-  const ordinal = Number.parseInt(parts[1], 10);
-  if (parts.length !== 2 || Number.isNaN(ordinal)) throw new HttpError(400, 'Bad image path.');
-  const localPath = imagePath(database, decodeURIComponent(parts[0]), ordinal);
+async function serveImage(database, response, identifier, ordinalText) {
+  const ordinal = Number.parseInt(ordinalText, 10);
+  if (Number.isNaN(ordinal)) throw new HttpError(400, 'Bad image path.');
+  const localPath = imagePath(database, identifier, ordinal);
   if (!localPath) throw new HttpError(404, 'Image not found.');
   const absolute = path.resolve(DATA_ROOT, localPath);
   if (!absolute.startsWith(DATA_ROOT + path.sep)) throw new HttpError(400, 'Bad image path.');
@@ -209,85 +207,137 @@ function enrichBookmark(database, bookmark) {
   };
 }
 
-let bookmarkStore;
-
-async function handleBookmarks(database, { route, request, response }) {
-  bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
-  const enrich = (bookmark) => enrichBookmark(database, bookmark);
-  const idMatch = /^bookmarks\/(\d+)$/.exec(route);
-
-  if (route === 'bookmarks') {
-    if (request.method === 'GET') {
-      sendJson(response, { items: bookmarkStore.list().map(enrich) });
-      return;
-    }
-    if (request.method === 'POST') {
-      const body = await readJson(request);
-      request.liveCells = LIVE_ALL; // bookmarks are shared by every cell
-      sendJson(response, enrich(bookmarkStore.create(body)), 201);
-      return;
-    }
-    throw new HttpError(405, 'Method not allowed.');
-  }
-
-  if (idMatch) {
-    const id = Number(idMatch[1]);
-    if (request.method === 'PATCH') {
-      const body = await readJson(request);
-      request.liveCells = LIVE_ALL;
-      sendJson(response, enrich(bookmarkStore.update(id, body)));
-      return;
-    }
-    if (request.method === 'DELETE') {
-      bookmarkStore.remove(id);
-      request.liveCells = LIVE_ALL;
-      sendJson(response, { deleted: true });
-      return;
-    }
-    throw new HttpError(405, 'Method not allowed.');
-  }
-
-  throw new HttpError(404, 'Unknown API route.');
+function bookmarkId(text) {
+  if (!/^\d+$/.test(text ?? '')) throw new HttpError(404, 'Unknown API route.');
+  return Number(text);
 }
+
+let bookmarkStore;
 
 const reference = referenceFile(DATABASE, openDatabase);
 
+/** Every route needs the reference data built; checked once, here. */
+function referenceDatabase() {
+  const database = reference.get();
+  if (!database) {
+    throw new HttpError(
+      503,
+      'No equipment data. Build it with modules/equipment/tools/import_odin.py.',
+    );
+  }
+  return database;
+}
+
+const BOOKMARKS_ROLE = 'analyst';
+
 export default {
   id: ID,
-  async handle({ route, url, request, response }) {
-    const database = reference.get();
-    if (!database) {
-      throw new HttpError(
-        503,
-        'No equipment data. Build it with modules/equipment/tools/import_odin.py.',
-      );
-    }
-    const rangesMatch = /^cards\/(.+)\/ranges$/.exec(route);
-    if (route === 'stats') sendJson(response, stats(database));
-    else if (route === 'cards') {
-      const params =
-        request.method === 'POST'
-          ? cardsParams(await readJson(request))
-          : cardsParamsFromQuery(url.searchParams);
-      sendJson(response, apiCards(database, params));
-    } else if (rangesMatch) {
-      if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
-      sendJson(response, apiCardRanges(database, decodeURIComponent(rangesMatch[1])));
-    } else if (route === 'ranges') {
-      if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
-      sendJson(response, apiBatchRanges(database, await readJson(request)));
-    } else if (route.startsWith('cards/')) {
-      sendJson(response, apiCard(database, decodeURIComponent(route.slice('cards/'.length))));
-    } else if (route === 'taxonomy') sendJson(response, apiTaxonomy(database, url.searchParams));
-    else if (route.startsWith('images/')) {
-      await serveImage(database, response, route.slice('images/'.length));
-    } else if (route === 'bookmarks' || route.startsWith('bookmarks/')) {
-      await handleBookmarks(database, { route, request, response });
-    } else throw new HttpError(404, 'Unknown API route.');
-  },
   close() {
     reference.close();
     bookmarkStore?.close();
     bookmarkStore = undefined;
   },
+  routes: [
+    {
+      method: 'GET',
+      path: 'stats',
+      verb: 'none',
+      handler: () => stats(referenceDatabase()),
+    },
+    {
+      method: 'GET',
+      path: 'cards',
+      verb: 'none',
+      handler: ({ query }) => apiCards(referenceDatabase(), cardsParamsFromQuery(query)),
+    },
+    {
+      method: 'POST',
+      path: 'cards',
+      verb: 'none',
+      role: 'observer',
+      changes: false,
+      handler: ({ body }) => apiCards(referenceDatabase(), cardsParams(body)),
+    },
+    {
+      method: 'GET',
+      path: 'cards/:identifier/ranges',
+      verb: 'none',
+      handler: ({ params }) => apiCardRanges(referenceDatabase(), params.identifier),
+    },
+    {
+      method: 'GET',
+      path: 'cards/:identifier',
+      verb: 'none',
+      handler: ({ params }) => apiCard(referenceDatabase(), params.identifier),
+    },
+    {
+      method: 'POST',
+      path: 'ranges',
+      verb: 'none',
+      role: 'observer',
+      changes: false,
+      handler: ({ body }) => apiBatchRanges(referenceDatabase(), body),
+    },
+    {
+      method: 'GET',
+      path: 'taxonomy',
+      verb: 'none',
+      handler: ({ query }) => apiTaxonomy(referenceDatabase(), query),
+    },
+    {
+      method: 'GET',
+      path: 'images/:identifier/:ordinal',
+      verb: 'none',
+      handler: async ({ params, response }) => {
+        await serveImage(referenceDatabase(), response, params.identifier, params.ordinal);
+      },
+    },
+    {
+      method: 'GET',
+      path: 'bookmarks',
+      verb: 'none',
+      handler: () => {
+        const database = referenceDatabase();
+        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        return { items: bookmarkStore.list().map((bookmark) => enrichBookmark(database, bookmark)) };
+      },
+    },
+    {
+      method: 'POST',
+      path: 'bookmarks',
+      verb: 'none',
+      role: BOOKMARKS_ROLE,
+      reach: 'everyone',
+      handler: ({ body, response }) => {
+        const database = referenceDatabase();
+        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        sendJson(response, enrichBookmark(database, bookmarkStore.create(body)), 201);
+      },
+    },
+    {
+      method: 'PATCH',
+      path: 'bookmarks/:bookmark',
+      verb: 'none',
+      role: BOOKMARKS_ROLE,
+      reach: 'everyone',
+      handler: ({ params, body }) => {
+        const database = referenceDatabase();
+        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        return enrichBookmark(database, bookmarkStore.update(bookmarkId(params.bookmark), body));
+      },
+    },
+    {
+      method: 'DELETE',
+      path: 'bookmarks/:bookmark',
+      verb: 'none',
+      role: BOOKMARKS_ROLE,
+      reach: 'everyone',
+      handler: ({ params }) => {
+        referenceDatabase();
+        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        bookmarkStore.remove(bookmarkId(params.bookmark));
+        return { deleted: true };
+      },
+    },
+  ],
 };

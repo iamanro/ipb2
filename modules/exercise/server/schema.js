@@ -349,4 +349,69 @@ export const MIGRATIONS = [
   ALTER TABLE activity ADD COLUMN owner_cell TEXT;
   ALTER TABLE activity ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
   `,
+  // Item-scoped requests (docs/adr/0002-item-scoped-requests.md): an
+  // evidence link is a part of the *requirement* it supports, not of the
+  // report it cites (CONTEXT.md), so it needs the same `requirement_id`
+  // parent column every other part of a requirement carries (sirs,
+  // indicators). Backfilled from `target_id` directly for a
+  // `target_kind = 'requirement'` link, or via the cited SIR's own
+  // `requirement_id` for a `target_kind = 'sir'` one. A handful of rows
+  // whose `target_id` no longer names a live requirement/SIR (possible
+  // before this migration, since `target_id` was never foreign-keyed) have
+  // no parent left to attach to and are dropped — they were already
+  // unreachable through any route.
+  //
+  // `report_id` deliberately loses its `ON DELETE CASCADE`: deleting a
+  // report used to delete every link that cited it; now the link survives
+  // as a dangling `report_id` and the report shows as "withdrawn" (never
+  // counted toward fulfillment) instead of disappearing. The link's own
+  // lifecycle now cascades from `requirement_id` instead. This needs a
+  // rebuild (SQLite can't drop a column's `REFERENCES` in place).
+  {
+    rebuild: true,
+    sql: `
+    DELETE FROM evidence_links WHERE
+      (target_kind = 'requirement' AND target_id NOT IN (SELECT id FROM requirements))
+      OR (target_kind = 'sir' AND target_id NOT IN (SELECT id FROM sirs));
+
+    CREATE TABLE evidence_links_new (
+      id INTEGER PRIMARY KEY,
+      report_id INTEGER NOT NULL,
+      requirement_id INTEGER NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+      target_kind TEXT NOT NULL CHECK (target_kind IN ('requirement', 'sir')),
+      target_id INTEGER NOT NULL,
+      relation TEXT NOT NULL CHECK (relation IN ('confirms', 'denies', 'partial', 'context')),
+      note TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    INSERT INTO evidence_links_new (id, report_id, requirement_id, target_kind, target_id, relation, note, created_at)
+    SELECT
+      el.id,
+      el.report_id,
+      CASE WHEN el.target_kind = 'requirement' THEN el.target_id
+           ELSE (SELECT s.requirement_id FROM sirs s WHERE s.id = el.target_id) END,
+      el.target_kind,
+      el.target_id,
+      el.relation,
+      el.note,
+      el.created_at
+    FROM evidence_links el;
+
+    DROP TABLE evidence_links;
+    ALTER TABLE evidence_links_new RENAME TO evidence_links;
+
+    CREATE INDEX evidence_links_report ON evidence_links(report_id);
+    CREATE INDEX evidence_links_target ON evidence_links(target_kind, target_id);
+    CREATE INDEX evidence_links_requirement ON evidence_links(requirement_id);
+    `,
+  },
+  // Same parent column for indicators, backfilled through the SIR they
+  // already belong to — a plain `ADD COLUMN` suffices here (no existing
+  // constraint to drop), so this stays an ordinary migration.
+  `
+  ALTER TABLE indicators ADD COLUMN requirement_id INTEGER REFERENCES requirements(id) ON DELETE CASCADE;
+  UPDATE indicators SET requirement_id = (SELECT s.requirement_id FROM sirs s WHERE s.id = indicators.sir_id);
+  CREATE INDEX indicators_requirement ON indicators(requirement_id);
+  `,
 ];

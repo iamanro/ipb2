@@ -2410,7 +2410,7 @@ async function handleFeatureModified(id, geometry) {
   const feature = state.study.features.find((entry) => String(entry.id) === String(id));
   if (!feature) return;
   try {
-    const updated = await requestJson(`${API}/features/${id}`, {
+    const updated = await requestJson(`${API}/studies/${feature.study_id}/features/${id}`, {
       method: 'PATCH',
       body: { geometry },
     });
@@ -2468,7 +2468,7 @@ async function renameFeature(feature) {
   const label = await askText('Rename', feature.label);
   if (!label || label === feature.label) return;
   try {
-    const updated = await requestJson(`${API}/features/${feature.id}`, {
+    const updated = await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, {
       method: 'PATCH',
       body: { label },
     });
@@ -2487,7 +2487,7 @@ async function deleteFeature(feature) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete "${feature.label}"?`))) return;
   try {
-    await requestJson(`${API}/features/${feature.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, { method: 'DELETE' });
     state.study.features = state.study.features.filter(
       (entry) => String(entry.id) !== String(feature.id),
     );
@@ -4249,10 +4249,10 @@ function bindDebouncedCommit(element, key, commit) {
 // --- Step 3: evaluate the threat ------------------------------------------
 
 /** Shared by the order-of-battle table and the COA cards: both sort by ordinal. */
-async function reorderChild(kind, id, direction, worksheetElement, rerender) {
+async function reorderChild(kind, item, direction, worksheetElement, rerender) {
   if (!(can('analyst') && canEditStudy())) return;
   try {
-    const result = await requestJson(`${API}/${kind}/${id}/reorder`, {
+    const result = await requestJson(`${API}/studies/${item.study_id}/${kind}/${item.id}/reorder`, {
       method: 'POST',
       body: { direction },
     });
@@ -4270,13 +4270,13 @@ function renderReorderButtons(kind, item, index, total, worksheetElement, rerend
   up.type = 'button';
   up.title = 'Move up';
   up.disabled = index === 0;
-  up.addEventListener('click', () => reorderChild(kind, item.id, 'up', worksheetElement, rerender));
+  up.addEventListener('click', () => reorderChild(kind, item, 'up', worksheetElement, rerender));
   const down = createElement('button', 'icon-button', '↓');
   down.type = 'button';
   down.title = 'Move down';
   down.disabled = index === total - 1;
   down.addEventListener('click', () =>
-    reorderChild(kind, item.id, 'down', worksheetElement, rerender),
+    reorderChild(kind, item, 'down', worksheetElement, rerender),
   );
   wrap.append(up, down);
   return wrap;
@@ -4284,7 +4284,10 @@ function renderReorderButtons(kind, item, index, total, worksheetElement, rerend
 
 async function patchThreat(threat, body) {
   try {
-    const updated = await requestJson(`${API}/threats/${threat.id}`, { method: 'PATCH', body });
+    const updated = await requestJson(`${API}/studies/${threat.study_id}/threats/${threat.id}`, {
+      method: 'PATCH',
+      body,
+    });
     Object.assign(threat, updated);
   } catch (error) {
     showError(elements.worksheet3, error.message);
@@ -4295,7 +4298,7 @@ async function deleteThreat(threat) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete "${threat.name}"?`))) return;
   try {
-    await requestJson(`${API}/threats/${threat.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${threat.study_id}/threats/${threat.id}`, { method: 'DELETE' });
     state.study.threats = state.study.threats.filter(
       (entry) => String(entry.id) !== String(threat.id),
     );
@@ -4707,7 +4710,10 @@ function renderStep3Worksheet() {
 
 async function patchCoa(coa, body) {
   try {
-    const updated = await requestJson(`${API}/coas/${coa.id}`, { method: 'PATCH', body });
+    const updated = await requestJson(`${API}/studies/${coa.study_id}/coas/${coa.id}`, {
+      method: 'PATCH',
+      body,
+    });
     Object.assign(coa, updated);
   } catch (error) {
     showError(elements.worksheet4, error.message);
@@ -4744,7 +4750,7 @@ async function deleteCoa(coa) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete COA "${coa.name}"? Its events are removed too.`))) return;
   try {
-    await requestJson(`${API}/coas/${coa.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${coa.study_id}/coas/${coa.id}`, { method: 'DELETE' });
     state.study.coas = state.study.coas.filter((entry) => String(entry.id) !== String(coa.id));
     state.study.events = state.study.events.filter(
       (event) => String(event.coa_id) !== String(coa.id),
@@ -4862,7 +4868,7 @@ async function cycleEventStatus(group, coa, event) {
       state.study.events.push(created);
     } else {
       const nextIndex = (EVENT_STATUSES.indexOf(event.observed_status) + 1) % EVENT_STATUSES.length;
-      const updated = await requestJson(`${API}/events/${event.id}`, {
+      const updated = await requestJson(`${API}/studies/${event.study_id}/events/${event.id}`, {
         method: 'PATCH',
         body: { observed_status: EVENT_STATUSES[nextIndex] },
       });
@@ -4905,7 +4911,9 @@ async function deleteEventGroup(group) {
   const events = [...group.events.values()];
   try {
     await Promise.all(
-      events.map((event) => requestJson(`${API}/events/${event.id}`, { method: 'DELETE' })),
+      events.map((event) =>
+        requestJson(`${API}/studies/${event.study_id}/events/${event.id}`, { method: 'DELETE' }),
+      ),
     );
     const ids = new Set(events.map((event) => String(event.id)));
     state.study.events = state.study.events.filter((event) => !ids.has(String(event.id)));
@@ -5262,7 +5270,10 @@ async function updateLayer(layer, patch) {
   try {
     Object.assign(
       layer,
-      await requestJson(`${API}/layers/${layer.id}`, { method: 'PATCH', body: patch }),
+      await requestJson(`${API}/studies/${layer.study_id}/layers/${layer.id}`, {
+        method: 'PATCH',
+        body: patch,
+      }),
     );
     refreshCustomLayers();
   } catch (error) {
@@ -5283,7 +5294,7 @@ async function deleteLayer(layer) {
     : `Delete layer "${layer.name}"?`;
   if (!(await askConfirm(message))) return;
   try {
-    await requestJson(`${API}/layers/${layer.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${layer.study_id}/layers/${layer.id}`, { method: 'DELETE' });
     state.study.layers = state.study.layers.filter((entry) => entry.id !== layer.id);
     state.study.points = state.study.points.filter((point) => point.layer_id !== layer.id);
     if (state.activeLayerId === layer.id) state.activeLayerId = null;
@@ -5360,7 +5371,10 @@ async function updatePoint(point, patch) {
   try {
     Object.assign(
       point,
-      await requestJson(`${API}/points/${point.id}`, { method: 'PATCH', body: patch }),
+      await requestJson(`${API}/studies/${point.study_id}/points/${point.id}`, {
+        method: 'PATCH',
+        body: patch,
+      }),
     );
     refreshCustomLayers();
   } catch (error) {
@@ -5377,7 +5391,7 @@ async function deletePoint(point) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete point "${point.name}"?`))) return;
   try {
-    await requestJson(`${API}/points/${point.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${point.study_id}/points/${point.id}`, { method: 'DELETE' });
     state.study.points = state.study.points.filter((entry) => entry.id !== point.id);
     refreshCustomLayers();
   } catch (error) {

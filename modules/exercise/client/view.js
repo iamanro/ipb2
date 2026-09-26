@@ -1374,19 +1374,19 @@ async function addSir(requirementId, text, container) {
   }
 }
 
-async function deleteSir(id) {
+async function deleteSir(requirementId, id) {
   if (!(await askConfirm('Delete this SIR and its indicators?'))) return;
-  await requestJson(`${API}/sirs/${id}`, { method: 'DELETE' });
+  await requestJson(`${API}/requirements/${requirementId}/sirs/${id}`, { method: 'DELETE' });
   await loadAll();
   renderPanel();
 }
 
-async function addIndicator(sirId, description, container) {
+async function addIndicator(requirementId, sirId, description, container) {
   if (!description.trim()) return;
   try {
-    await requestJson(`${API}/sirs/${sirId}/indicators`, {
+    await requestJson(`${API}/requirements/${requirementId}/indicators`, {
       method: 'POST',
-      body: { description: description.trim() },
+      body: { sir_id: sirId, description: description.trim() },
     });
     await loadAll();
     renderPanel();
@@ -1395,8 +1395,8 @@ async function addIndicator(sirId, description, container) {
   }
 }
 
-async function toggleIndicator(indicator) {
-  await requestJson(`${API}/indicators/${indicator.id}`, {
+async function toggleIndicator(requirementId, indicator) {
+  await requestJson(`${API}/requirements/${requirementId}/indicators/${indicator.id}`, {
     method: 'PATCH',
     body: { observed: !indicator.observed },
   });
@@ -1404,10 +1404,50 @@ async function toggleIndicator(indicator) {
   renderPanel();
 }
 
-async function deleteIndicator(id) {
-  await requestJson(`${API}/indicators/${id}`, { method: 'DELETE' });
+async function deleteIndicator(requirementId, id) {
+  await requestJson(`${API}/requirements/${requirementId}/indicators/${id}`, { method: 'DELETE' });
   await loadAll();
   renderPanel();
+}
+
+/** A relation badge plus the cited report (or "Report withdrawn" once the
+ * report that supported it has been deleted — the link itself outlives the
+ * report it cites, docs/adr/0002 + CONTEXT.md). Shown under the requirement
+ * (blanket links) and each of its SIRs (`links` from the server shape). */
+function renderEvidenceLinks(container, requirement, links) {
+  if (!links.length) return;
+  const list = createElement('ul', 'evidence-list');
+  links.forEach((link) => {
+    const item = createElement('li', 'evidence-item');
+    item.append(createElement('span', `relation-badge relation-${link.relation}`, link.relation));
+    if (link.withdrawn) {
+      item.append(createElement('span', 'panel-note', 'Report withdrawn'));
+    } else if (link.report) {
+      item.append(
+        createElement(
+          'span',
+          null,
+          `${link.report.text} (Admiralty ${link.report.reliability}${link.report.credibility})`,
+        ),
+      );
+    } else {
+      item.append(createElement('span', 'panel-note', 'Report not visible'));
+    }
+    if (can('analyst') && canEditClient(requirement)) {
+      const remove = createElement('button', 'icon-button danger', '×');
+      remove.type = 'button';
+      remove.title = 'Remove evidence link';
+      remove.setAttribute('aria-label', 'Remove evidence link');
+      remove.addEventListener('click', async () => {
+        await requestJson(`${API}/requirements/${link.requirement_id}/evidence/${link.id}`, { method: 'DELETE' });
+        await loadAll();
+        renderPanel();
+      });
+      item.append(remove);
+    }
+    list.append(item);
+  });
+  container.append(list);
 }
 
 function renderSirRow(sir, requirement) {
@@ -1421,7 +1461,7 @@ function renderSirRow(sir, requirement) {
   if (editable) {
     const deleteButton = createElement('button', 'icon-button danger', 'Delete');
     deleteButton.type = 'button';
-    deleteButton.addEventListener('click', () => deleteSir(sir.id));
+    deleteButton.addEventListener('click', () => deleteSir(requirement.id, sir.id));
     header.append(deleteButton);
   }
   row.append(header, fulfillmentBar(sir.fulfillment));
@@ -1433,7 +1473,7 @@ function renderSirRow(sir, requirement) {
     checkbox.type = 'checkbox';
     checkbox.checked = indicator.observed;
     checkbox.disabled = !editable;
-    checkbox.addEventListener('change', () => toggleIndicator(indicator));
+    checkbox.addEventListener('change', () => toggleIndicator(requirement.id, indicator));
     const label = createElement('span', null, indicator.description);
     item.append(checkbox, label);
     if (editable) {
@@ -1441,12 +1481,13 @@ function renderSirRow(sir, requirement) {
       remove.type = 'button';
       remove.title = 'Delete indicator';
       remove.setAttribute('aria-label', `Delete indicator ${indicator.description}`);
-      remove.addEventListener('click', () => deleteIndicator(indicator.id));
+      remove.addEventListener('click', () => deleteIndicator(requirement.id, indicator.id));
       item.append(remove);
     }
     indicatorList.append(item);
   });
   row.append(indicatorList);
+  renderEvidenceLinks(row, requirement, sir.links);
 
   if (editable) {
     const indicatorForm = createElement('div', 'inline-form');
@@ -1458,7 +1499,7 @@ function renderSirRow(sir, requirement) {
     indicatorAdd.addEventListener('click', () => {
       const value = indicatorInput.value;
       indicatorInput.value = '';
-      addIndicator(sir.id, value, row);
+      addIndicator(requirement.id, sir.id, value, row);
     });
     indicatorForm.append(indicatorInput, indicatorAdd);
     row.append(indicatorForm);
@@ -1507,6 +1548,7 @@ function renderRequirementCard(requirement) {
   meta.textContent = `Decision point: ${requirement.decision_point || '—'} · LTIOV: ${formatDate(requirement.ltiov)}`;
   card.append(meta);
   card.append(fulfillmentBar(requirement.fulfillment));
+  renderEvidenceLinks(card, requirement, requirement.links);
 
   const sirList = createElement('div', 'sir-list');
   requirement.sirs.forEach((sir) => sirList.append(renderSirRow(sir, requirement)));
@@ -1532,7 +1574,7 @@ function renderRequirementCard(requirement) {
 }
 
 async function reassignRequirementOwner(id, ownerCell) {
-  await requestJson(`${API}/requirements/${id}`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+  await requestJson(`${API}/requirements/${id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
   await loadAll();
   renderPanel();
 }
@@ -1740,6 +1782,10 @@ function evidenceTargets() {
     options.push({
       kind: 'requirement',
       id: requirement.id,
+      // Evidence links are parts of the requirement they support
+      // (CONTEXT.md): this is the `:item` reportForm.js posts/deletes
+      // under, for both a blanket link and one against a SIR.
+      requirement_id: requirement.id,
       label: `${requirement.kind} • ${requirement.text}`,
       // C2b: a SIR has no owner_cell of its own — it inherits the parent
       // requirement's, for reportForm.js's canEditClient gating (linking
@@ -1750,6 +1796,7 @@ function evidenceTargets() {
       options.push({
         kind: 'sir',
         id: sir.id,
+        requirement_id: requirement.id,
         label: `↳ SIR • ${sir.text}`,
         owner_cell: requirement.owner_cell,
       });
@@ -1812,7 +1859,7 @@ async function releaseRfi(id, cells) {
 }
 
 async function reassignRfiOwner(id, ownerCell) {
-  await requestJson(`${API}/rfis/${id}`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+  await requestJson(`${API}/rfis/${id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
   await loadAll();
   renderPanel();
 }
@@ -2072,7 +2119,17 @@ function renderScenarioPanel() {
   const tickButton = createElement('button', 'chip-button', 'Fire due events now');
   tickButton.type = 'button';
   tickButton.addEventListener('click', async () => {
-    await requestJson(`${API}/scenario-tick`, { method: 'POST' });
+    // No bulk tick route (docs/adr/0002-item-scoped-requests.md): each due
+    // event is announced only to its own inject's cells, so it's fired one
+    // request at a time — exactly what the server's own 5-second ticker
+    // does internally, just triggered now instead of waited for.
+    const nowMs = scenarioNow();
+    const due = state.scenarioEvents.filter(
+      (event) => event.state === 'pending' && new Date(event.trigger_at).getTime() <= nowMs,
+    );
+    for (const event of due) {
+      await requestJson(`${API}/scenario-events/${event.id}/fire`, { method: 'POST' });
+    }
     await loadAll();
     renderPanel();
   });
@@ -2378,10 +2435,12 @@ export function mount({ root, status }) {
       elements.panel.replaceChildren(createElement('p', 'inline-error', error.message));
     });
 
-  // The server fires due injects on scenario time (see routes.js `tick`);
-  // refresh the inject list and masthead when it announces that it did.
+  // The server fires due injects on scenario time (see routes.js `connect`);
+  // refresh the inject list and masthead when it announces that it did —
+  // one live event per fired inject now (docs/adr/0002-item-scoped-requests.md:
+  // each is announced only to its own cells), not one flat tick.
   state.unsubscribeTick = subscribe(
-    (event) => event.module === 'exercise' && event.route === 'scenario-tick',
+    (event) => event.module === 'exercise' && /^scenario-events\/\d+\/fire$/.test(event.route),
     async () => {
       try {
         await loadAll();

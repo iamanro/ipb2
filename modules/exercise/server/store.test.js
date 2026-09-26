@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { HttpError } from '../../../server/http.js';
 import { formatMgrs } from '../../../src/geo.js';
 import { openStore } from './store.js';
 
@@ -22,13 +23,42 @@ function expectStatus(fn, status) {
   expect(fn).toThrow(expect.objectContaining({ status }));
 }
 
-// White sees and may create/release/reassign anything, cell-blind — the
-// default actor for every pre-existing test in this file, which predates
-// cells and never cared about them.
-const WHITE = { name: 'white-op', admin: true, cell: 'white', role: 'game-master' };
+// Every store function now takes the resolved item/part (or a dispatcher
+// `owner`), never a user (docs/adr/0002-item-scoped-requests.md): cell
+// visibility/edit gating (404/403 per route) is `server/dispatch.js`'s job
+// alone, already covered by `dispatch.test.js` and `routes.sweep.test.js`.
+// These tests are about domain behaviour, so a trivial White-sees-and-can-
+// resolve-everything `access` stub — mirroring `accessFor` in dispatch.js,
+// just without the cell math White never needs — is all they need; `row()`
+// fetches the raw row a route would already have resolved before calling
+// in.
+const WHITE_OWNER = { owner_cell: 'white', releasable_to: [] };
+const TABLE_BY_KIND = {
+  nai: 'nais',
+  track: 'tracks',
+  report: 'reports',
+  collector: 'collectors',
+  sir: 'sirs',
+  requirement: 'requirements',
+};
 
 let file;
 let store;
+
+function row(table, id) {
+  return store.database.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id);
+}
+
+const WHITE_ACCESS = {
+  white: true,
+  see(kind, id) {
+    const found = row(TABLE_BY_KIND[kind], id);
+    if (!found) throw new HttpError(404, `${kind} ${id} not found.`);
+    return found;
+  },
+  canEdit: () => true,
+  visible: () => ({ sql: '1=1', params: [] }),
+};
 
 beforeEach(() => {
   file = tempFile();
@@ -40,53 +70,54 @@ afterEach(() => {
   removeDatabaseFiles(file);
 });
 
-// Roster is superseded by exercise memberships (server/auth.js); see
-// docs/phase1-access.md — no store-level roster surface remains to test.
 describe('requirements tree', () => {
   test('a PIR aggregates its SIRs and indicators, in creation order', () => {
-    const pir = store.createRequirement(WHITE, {
-      kind: 'PIR',
-      text: 'Will the enemy attack?',
-      priority: 5,
-    });
-    const sir = store.createSir(WHITE, pir.id, { text: 'Are engineers massing forward?' });
-    store.createIndicator(WHITE, sir.id, { description: 'Bridging equipment observed' });
-    const [tree] = store.listRequirements(WHITE);
+    const pir = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'Will the enemy attack?', priority: 5 }, WHITE_ACCESS);
+    const sir = store.createSir(row('requirements', pir.id), { text: 'Are engineers massing forward?' }, WHITE_ACCESS);
+    store.createIndicator(row('requirements', pir.id), { sir_id: sir.id, description: 'Bridging equipment observed' });
+    const [tree] = store.listRequirements(WHITE_ACCESS);
     expect(tree.sirs).toHaveLength(1);
     expect(tree.sirs[0].indicators).toHaveLength(1);
     expect(tree.sirs[0].indicators[0].observed).toBe(false);
   });
 
-  test('an SIR requires a real parent requirement', () => {
-    expectStatus(() => store.createSir(WHITE, 999, { text: 'x' }), 404);
-  });
-
   test('deleting a requirement cascades through its SIRs and indicators', () => {
-    const pir = store.createRequirement(WHITE, { kind: 'PIR', text: 'x' });
-    const sir = store.createSir(WHITE, pir.id, { text: 'y' });
-    const indicator = store.createIndicator(WHITE, sir.id, { description: 'z' });
-    store.deleteRequirement(WHITE, pir.id);
-    expect(store.listRequirements(WHITE)).toHaveLength(0);
-    expectStatus(() => store.updateSir(WHITE, sir.id, { text: 'still there?' }), 404);
-    expectStatus(() => store.updateIndicator(WHITE, indicator.id, { observed: true }), 404);
+    const pir = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'x' }, WHITE_ACCESS);
+    const sir = store.createSir(row('requirements', pir.id), { text: 'y' }, WHITE_ACCESS);
+    const indicator = store.createIndicator(row('requirements', pir.id), { sir_id: sir.id, description: 'z' });
+    store.deleteRequirement(row('requirements', pir.id));
+    expect(store.listRequirements(WHITE_ACCESS)).toHaveLength(0);
+    expect(row('sirs', sir.id)).toBeUndefined();
+    expect(row('indicators', indicator.id)).toBeUndefined();
   });
 
   test('a blank requirement text is rejected', () => {
-    expectStatus(() => store.createRequirement(WHITE, { kind: 'PIR', text: '   ' }), 400);
+    expectStatus(() => store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: '   ' }, WHITE_ACCESS), 400);
+  });
+
+  test('an indicator must name a SIR that belongs to this requirement', () => {
+    const pir = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'x' }, WHITE_ACCESS);
+    const other = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'y' }, WHITE_ACCESS);
+    const otherSir = store.createSir(row('requirements', other.id), { text: 'other sir' }, WHITE_ACCESS);
+    expectStatus(
+      () => store.createIndicator(row('requirements', pir.id), { sir_id: otherSir.id, description: 'z' }),
+      400,
+    );
+    expectStatus(() => store.createIndicator(row('requirements', pir.id), { sir_id: 999, description: 'z' }), 400);
   });
 });
 
 describe('fulfillment, computed through real evidence joins', () => {
   function seed() {
-    const pir = store.createRequirement(WHITE, { kind: 'PIR', text: 'Will the enemy attack?' });
-    const sirA = store.createSir(WHITE, pir.id, { text: 'SIR A' });
-    const sirB = store.createSir(WHITE, pir.id, { text: 'SIR B' });
+    const pir = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'Will the enemy attack?' }, WHITE_ACCESS);
+    const sirA = store.createSir(row('requirements', pir.id), { text: 'SIR A' }, WHITE_ACCESS);
+    const sirB = store.createSir(row('requirements', pir.id), { text: 'SIR B' }, WHITE_ACCESS);
     return { pir, sirA, sirB };
   }
 
   test('starts open with no evidence', () => {
     const { pir } = seed();
-    expect(store.listRequirements(WHITE)[0].fulfillment).toMatchObject({
+    expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment).toMatchObject({
       covered: 0,
       total: 2,
       percent: 0,
@@ -96,46 +127,39 @@ describe('fulfillment, computed through real evidence joins', () => {
   });
 
   test('a credible confirming report against one SIR moves it to partial', () => {
-    const { sirA } = seed();
-    const report = store.createReport(WHITE, {
-      text: 'Convoy observed',
-      reliability: 'B',
-      credibility: 2,
-    });
-    store.createEvidenceLink(WHITE, report.id, {
-      target_kind: 'sir',
-      target_id: sirA.id,
-      relation: 'confirms',
-    });
-    const [tree] = store.listRequirements(WHITE);
+    const { pir, sirA } = seed();
+    const report = store.createReport(WHITE_OWNER, { text: 'Convoy observed', reliability: 'B', credibility: 2 }, WHITE_ACCESS);
+    store.createEvidenceLink(
+      row('requirements', pir.id),
+      { report_id: report.id, target_kind: 'sir', target_id: sirA.id, relation: 'confirms' },
+      WHITE_ACCESS,
+    );
+    const [tree] = store.listRequirements(WHITE_ACCESS);
     expect(tree.fulfillment).toMatchObject({ covered: 1, total: 2, percent: 50, state: 'partial' });
-    expect(tree.sirs.find((s) => s.id === sirA.id).fulfillment).toMatchObject({
-      covered: 1,
-      total: 1,
-    });
+    expect(tree.sirs.find((s) => s.id === sirA.id).fulfillment).toMatchObject({ covered: 1, total: 1 });
   });
 
   test('a low-credibility report does not count', () => {
-    const { sirA } = seed();
-    const report = store.createReport(WHITE, { text: 'Rumour', reliability: 'F', credibility: 5 });
-    store.createEvidenceLink(WHITE, report.id, {
-      target_kind: 'sir',
-      target_id: sirA.id,
-      relation: 'confirms',
-    });
-    expect(store.listRequirements(WHITE)[0].fulfillment).toMatchObject({ covered: 0, state: 'open' });
+    const { pir, sirA } = seed();
+    const report = store.createReport(WHITE_OWNER, { text: 'Rumour', reliability: 'F', credibility: 5 }, WHITE_ACCESS);
+    store.createEvidenceLink(
+      row('requirements', pir.id),
+      { report_id: report.id, target_kind: 'sir', target_id: sirA.id, relation: 'confirms' },
+      WHITE_ACCESS,
+    );
+    expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment).toMatchObject({ covered: 0, state: 'open' });
   });
 
   test('a link against the requirement itself covers every SIR under it', () => {
     seed();
-    const [{ id: requirementId }] = store.listRequirements(WHITE);
-    const report = store.createReport(WHITE, { text: 'HUMINT summary', reliability: 'A', credibility: 1 });
-    store.createEvidenceLink(WHITE, report.id, {
-      target_kind: 'requirement',
-      target_id: requirementId,
-      relation: 'confirms',
-    });
-    expect(store.listRequirements(WHITE)[0].fulfillment).toMatchObject({
+    const [{ id: requirementId }] = store.listRequirements(WHITE_ACCESS);
+    const report = store.createReport(WHITE_OWNER, { text: 'HUMINT summary', reliability: 'A', credibility: 1 }, WHITE_ACCESS);
+    store.createEvidenceLink(
+      row('requirements', requirementId),
+      { report_id: report.id, target_kind: 'requirement', target_id: requirementId, relation: 'confirms' },
+      WHITE_ACCESS,
+    );
+    expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment).toMatchObject({
       covered: 2,
       total: 2,
       percent: 100,
@@ -144,27 +168,28 @@ describe('fulfillment, computed through real evidence joins', () => {
   });
 
   test('removing the qualifying evidence link reverts fulfillment', () => {
-    const { sirA } = seed();
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'B', credibility: 1 });
-    const link = store.createEvidenceLink(WHITE, report.id, {
-      target_kind: 'sir',
-      target_id: sirA.id,
-      relation: 'confirms',
-    });
-    expect(store.listRequirements(WHITE)[0].fulfillment.covered).toBe(1);
-    store.deleteEvidenceLink(WHITE, link.id);
-    expect(store.listRequirements(WHITE)[0].fulfillment.covered).toBe(0);
+    const { pir, sirA } = seed();
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'B', credibility: 1 }, WHITE_ACCESS);
+    const link = store.createEvidenceLink(
+      row('requirements', pir.id),
+      { report_id: report.id, target_kind: 'sir', target_id: sirA.id, relation: 'confirms' },
+      WHITE_ACCESS,
+    );
+    expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment.covered).toBe(1);
+    store.deleteEvidenceLink(row('requirements', pir.id), row('evidence_links', link.id));
+    expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment.covered).toBe(0);
   });
 
   test('an evidence link against an unknown target is a 400', () => {
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'B', credibility: 1 });
+    const pir = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'x' }, WHITE_ACCESS);
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'B', credibility: 1 }, WHITE_ACCESS);
     expectStatus(
       () =>
-        store.createEvidenceLink(WHITE, report.id, {
-          target_kind: 'sir',
-          target_id: 999,
-          relation: 'confirms',
-        }),
+        store.createEvidenceLink(
+          row('requirements', pir.id),
+          { report_id: report.id, target_kind: 'sir', target_id: 999, relation: 'confirms' },
+          WHITE_ACCESS,
+        ),
       400,
     );
   });
@@ -172,47 +197,43 @@ describe('fulfillment, computed through real evidence joins', () => {
 
 describe('RFI state machine, wired to the store', () => {
   test('a fresh RFI starts in draft and can only move forward one step at a time', () => {
-    const rfi = store.createRfi(WHITE, { question: 'Confirm bridge status?' });
+    const rfi = store.createRfi(WHITE_OWNER, { question: 'Confirm bridge status?' }, WHITE_ACCESS);
     expect(rfi.state).toBe('draft');
-    expectStatus(() => store.transitionRfi(WHITE, rfi.id, 'answered', {}), 409);
+    expectStatus(() => store.transitionRfi(row('rfis', rfi.id), { state: 'answered' }, WHITE_ACCESS), 409);
   });
 
   test('answering requires a real report id', () => {
-    const rfi = store.createRfi(WHITE, { question: 'x' });
-    store.transitionRfi(WHITE, rfi.id, 'submitted');
-    store.transitionRfi(WHITE, rfi.id, 'assigned');
-    store.transitionRfi(WHITE, rfi.id, 'in_collection');
-    expectStatus(() => store.transitionRfi(WHITE, rfi.id, 'answered', {}), 400);
+    const rfi = store.createRfi(WHITE_OWNER, { question: 'x' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'submitted' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'assigned' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'in_collection' }, WHITE_ACCESS);
+    expectStatus(() => store.transitionRfi(row('rfis', rfi.id), { state: 'answered' }, WHITE_ACCESS), 400);
   });
 
   test('answering against a requirement creates the evidence link that closes the loop', () => {
-    const pir = store.createRequirement(WHITE, { kind: 'PIR', text: 'x' });
-    const rfi = store.createRfi(WHITE, { question: 'x', requirement_id: pir.id });
-    store.transitionRfi(WHITE, rfi.id, 'submitted');
-    store.transitionRfi(WHITE, rfi.id, 'assigned');
-    store.transitionRfi(WHITE, rfi.id, 'in_collection');
-    const report = store.createReport(WHITE, { text: 'Answer', reliability: 'A', credibility: 1 });
-    const answered = store.transitionRfi(WHITE, rfi.id, 'answered', { answer_report_id: report.id });
+    const pir = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'x' }, WHITE_ACCESS);
+    const rfi = store.createRfi(WHITE_OWNER, { question: 'x', requirement_id: pir.id }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'submitted' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'assigned' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'in_collection' }, WHITE_ACCESS);
+    const report = store.createReport(WHITE_OWNER, { text: 'Answer', reliability: 'A', credibility: 1 }, WHITE_ACCESS);
+    const answered = store.transitionRfi(row('rfis', rfi.id), { state: 'answered', answer_report_id: report.id }, WHITE_ACCESS);
     expect(answered.state).toBe('answered');
     expect(answered.answer_report_id).toBe(report.id);
-    const full = store.listReports(WHITE).find((r) => r.id === report.id);
+    const full = store.listReports(WHITE_ACCESS).find((r) => r.id === report.id);
     expect(full.links).toHaveLength(1);
-    expect(full.links[0]).toMatchObject({
-      target_kind: 'requirement',
-      target_id: pir.id,
-      relation: 'confirms',
-    });
+    expect(full.links[0]).toMatchObject({ target_kind: 'requirement', target_id: pir.id, relation: 'confirms', requirement_id: pir.id });
   });
 
   test('closed is terminal', () => {
-    const rfi = store.createRfi(WHITE, { question: 'x' });
-    store.transitionRfi(WHITE, rfi.id, 'submitted');
-    store.transitionRfi(WHITE, rfi.id, 'assigned');
-    store.transitionRfi(WHITE, rfi.id, 'in_collection');
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1 });
-    store.transitionRfi(WHITE, rfi.id, 'answered', { answer_report_id: report.id });
-    store.transitionRfi(WHITE, rfi.id, 'closed');
-    expectStatus(() => store.transitionRfi(WHITE, rfi.id, 'reopened'), 409);
+    const rfi = store.createRfi(WHITE_OWNER, { question: 'x' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'submitted' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'assigned' }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'in_collection' }, WHITE_ACCESS);
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1 }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'answered', answer_report_id: report.id }, WHITE_ACCESS);
+    store.transitionRfi(row('rfis', rfi.id), { state: 'closed' }, WHITE_ACCESS);
+    expectStatus(() => store.transitionRfi(row('rfis', rfi.id), { state: 'reopened' }, WHITE_ACCESS), 409);
   });
 });
 
@@ -238,31 +259,20 @@ describe('scenario clock and events', () => {
 
   test('a message event fires and moves to state fired', () => {
     const past = new Date(Date.now() - 60_000).toISOString();
-    const event = store.createScenarioEvent({
-      trigger_at: past,
-      kind: 'message',
-      payload: { text: 'Contact!' },
-    });
-    const fired = store.fireScenarioEvent(event.id);
-    expect(fired.state).toBe('fired');
-    expectStatus(() => store.fireScenarioEvent(event.id), 409);
+    const event = store.createScenarioEvent({ trigger_at: past, kind: 'message', payload: { text: 'Contact!' } });
+    const fired = store.fireScenarioEvent(event.id, WHITE_ACCESS);
+    expect(fired.event.state).toBe('fired');
+    expect(fired.cells).toEqual(['white', 'blue']);
+    expectStatus(() => store.fireScenarioEvent(event.id, WHITE_ACCESS), 409);
   });
 
   test('a malformed report inject is rejected at schedule time, not fire time', () => {
     const future = new Date(Date.now() + 3_600_000).toISOString();
     expectStatus(
-      () =>
-        store.createScenarioEvent({
-          trigger_at: future,
-          kind: 'report',
-          payload: { reliability: 'Z' },
-        }),
+      () => store.createScenarioEvent({ trigger_at: future, kind: 'report', payload: { reliability: 'Z' } }),
       400,
     );
-    expectStatus(
-      () => store.createScenarioEvent({ trigger_at: future, kind: 'report', payload: {} }),
-      400,
-    );
+    expectStatus(() => store.createScenarioEvent({ trigger_at: future, kind: 'report', payload: {} }), 400);
   });
 
   test('a report event materialises a real report when fired', () => {
@@ -272,39 +282,31 @@ describe('scenario clock and events', () => {
       kind: 'report',
       payload: { text: 'Convoy sighted', reliability: 'B', credibility: 2 },
     });
-    store.fireScenarioEvent(event.id);
-    const reports = store.listReports(WHITE);
+    store.fireScenarioEvent(event.id, WHITE_ACCESS);
+    const reports = store.listReports(WHITE_ACCESS);
     expect(reports.some((r) => r.text === 'Convoy sighted' && r.credibility === 2)).toBe(true);
   });
 
-  test('tickScenario fires every due pending event exactly once', () => {
+  test('every due pending event fires exactly once', () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     const future = new Date(Date.now() + 3_600_000).toISOString();
     store.createScenarioEvent({ trigger_at: past, kind: 'message', payload: { text: 'Due now' } });
-    store.createScenarioEvent({
-      trigger_at: future,
-      kind: 'message',
-      payload: { text: 'Not yet' },
-    });
-    const first = store.tickScenario();
-    expect(first.fired).toHaveLength(1);
-    const second = store.tickScenario();
-    expect(second.fired).toHaveLength(0);
+    store.createScenarioEvent({ trigger_at: future, kind: 'message', payload: { text: 'Not yet' } });
+    const firstDue = store.dueScenarioEventIds();
+    expect(firstDue).toHaveLength(1);
+    firstDue.forEach((id) => store.fireScenarioEvent(id, WHITE_ACCESS));
+    expect(store.dueScenarioEventIds()).toHaveLength(0);
   });
 
   test('cancelling a pending event stops it from ever firing', () => {
     const past = new Date(Date.now() - 60_000).toISOString();
-    const event = store.createScenarioEvent({
-      trigger_at: past,
-      kind: 'message',
-      payload: { text: 'x' },
-    });
+    const event = store.createScenarioEvent({ trigger_at: past, kind: 'message', payload: { text: 'x' } });
     store.cancelScenarioEvent(event.id);
-    const result = store.tickScenario();
-    expect(result.fired).toHaveLength(0);
-    expectStatus(() => store.fireScenarioEvent(event.id), 409);
+    expect(store.dueScenarioEventIds()).toHaveLength(0);
+    expectStatus(() => store.fireScenarioEvent(event.id, WHITE_ACCESS), 409);
   });
 });
+
 describe('IPB event-matrix import', () => {
   function study(id = 1, overrides = {}) {
     return {
@@ -318,38 +320,10 @@ describe('IPB event-matrix import', () => {
         { id: 101, label: 'Ridge' },
       ],
       events: [
-        {
-          id: 1,
-          coa_id: 10,
-          nai_feature_id: 100,
-          indicator: 'Bridging assets',
-          expected_time: 'H+4',
-          observed_status: 'expected',
-        },
-        {
-          id: 2,
-          coa_id: 10,
-          nai_feature_id: 100,
-          indicator: 'Recon patrols',
-          expected_time: null,
-          observed_status: 'observed',
-        },
-        {
-          id: 3,
-          coa_id: 10,
-          nai_feature_id: null,
-          indicator: 'Radio silence',
-          expected_time: null,
-          observed_status: 'expected',
-        },
-        {
-          id: 4,
-          coa_id: 11,
-          nai_feature_id: 101,
-          indicator: 'Artillery displaces',
-          expected_time: 'H+1',
-          observed_status: 'expected',
-        },
+        { id: 1, coa_id: 10, nai_feature_id: 100, indicator: 'Bridging assets', expected_time: 'H+4', observed_status: 'expected' },
+        { id: 2, coa_id: 10, nai_feature_id: 100, indicator: 'Recon patrols', expected_time: null, observed_status: 'observed' },
+        { id: 3, coa_id: 10, nai_feature_id: null, indicator: 'Radio silence', expected_time: null, observed_status: 'expected' },
+        { id: 4, coa_id: 11, nai_feature_id: 101, indicator: 'Artillery displaces', expected_time: 'H+1', observed_status: 'expected' },
       ],
       ...overrides,
     };
@@ -359,18 +333,16 @@ describe('IPB event-matrix import', () => {
     Object.fromEntries(
       requirements.map((r) => [
         r.text,
-        Object.fromEntries(
-          r.sirs.map((s) => [s.text, s.indicators.map((i) => [i.description, i.observed])]),
-        ),
+        Object.fromEntries(r.sirs.map((s) => [s.text, s.indicators.map((i) => [i.description, i.observed])])),
       ]),
     );
 
   test('maps each COA to a PIR, each COA×NAI to a SIR, each event to an indicator', () => {
-    const summary = store.importIpbStudy(WHITE, study());
+    const summary = store.importIpbStudy(WHITE_OWNER, study());
     expect(summary.requirements.created).toBe(2);
     expect(summary.sirs.created).toBe(3);
     expect(summary.indicators.created).toBe(4);
-    expect(byText(store.listRequirements(WHITE))).toEqual({
+    expect(byText(store.listRequirements(WHITE_ACCESS))).toEqual({
       'Libavá: is the enemy executing Attack north (most likely COA)?': {
         'NAI River crossing: indicators of Attack north': [
           ['Bridging assets (expected H+4)', false],
@@ -385,61 +357,48 @@ describe('IPB event-matrix import', () => {
   });
 
   test('re-importing the same study changes nothing and duplicates nothing', () => {
-    store.importIpbStudy(WHITE, study());
-    const before = store.listRequirements(WHITE);
-    const summary = store.importIpbStudy(WHITE, study());
-    // importIpbStudy's return now also carries a top-level `liveCells` array
-    // (spliced onto every cell-owned mutation result); toEqual on the full
-    // object would fail on that extra key, so this became toMatchObject.
-    expect(summary).toMatchObject({
+    store.importIpbStudy(WHITE_OWNER, study());
+    const before = store.listRequirements(WHITE_ACCESS);
+    const summary = store.importIpbStudy(WHITE_OWNER, study());
+    expect(summary).toEqual({
       requirements: { created: 0, updated: 0, unchanged: 2, stale: [] },
       sirs: { created: 0, updated: 0, unchanged: 3, stale: [] },
       indicators: { created: 0, updated: 0, unchanged: 4, stale: [] },
       nais: { created: 0, updated: 0, unchanged: 2, stale: [] },
     });
-    expect(store.listRequirements(WHITE)).toEqual(before);
+    expect(store.listRequirements(WHITE_ACCESS)).toEqual(before);
   });
 
   test('re-import follows IPB edits but keeps exercise-owned state and never deletes', () => {
-    store.importIpbStudy(WHITE, study());
-    const attackNorth = store.listRequirements(WHITE).find((r) => r.text.includes('Attack north'));
+    store.importIpbStudy(WHITE_OWNER, study());
+    const attackNorth = store.listRequirements(WHITE_ACCESS).find((r) => r.text.includes('Attack north'));
     const riverSir = attackNorth.sirs.find((s) => s.text.startsWith('NAI River'));
     const bridging = riverSir.indicators.find((i) => i.description.startsWith('Bridging'));
-    store.updateIndicator(WHITE, bridging.id, { observed: true });
-    const report = store.createReport(WHITE, {
-      text: 'Bridge layer seen',
-      reliability: 'A',
-      credibility: 1,
-    });
-    store.createEvidenceLink(WHITE, report.id, {
-      target_kind: 'sir',
-      target_id: riverSir.id,
-      relation: 'confirms',
-    });
+    store.updateIndicator(row('requirements', attackNorth.id), row('indicators', bridging.id), { observed: true });
+    const report = store.createReport(WHITE_OWNER, { text: 'Bridge layer seen', reliability: 'A', credibility: 1 }, WHITE_ACCESS);
+    store.createEvidenceLink(
+      row('requirements', attackNorth.id),
+      { report_id: report.id, target_kind: 'sir', target_id: riverSir.id, relation: 'confirms' },
+      WHITE_ACCESS,
+    );
 
     const edited = study();
     edited.coas[0].name = 'Attack north-east';
     edited.events[0].nai_feature_id = 101; // bridging moves to the ridge NAI
     edited.events = edited.events.filter((e) => e.id !== 3); // radio silence removed in IPB
-    const summary = store.importIpbStudy(WHITE, edited);
+    const summary = store.importIpbStudy(WHITE_OWNER, edited);
 
     expect(summary.requirements).toMatchObject({ updated: 1, unchanged: 1 });
     expect(summary.indicators).toMatchObject({ updated: 1, stale: ['Radio silence'] });
-    // Ridge SIR is new for this COA; the no-NAI SIR lost its only event.
-    expect(summary.sirs).toMatchObject({
-      created: 1,
-      stale: ['No NAI assigned: indicators of Attack north'],
-    });
+    expect(summary.sirs).toMatchObject({ created: 1, stale: ['No NAI assigned: indicators of Attack north'] });
 
-    const after = store.listRequirements(WHITE);
+    const after = store.listRequirements(WHITE_ACCESS);
     const renamed = after.find((r) => r.id === attackNorth.id);
     expect(renamed.text).toContain('Attack north-east');
     const river = renamed.sirs.find((s) => s.id === riverSir.id);
     expect(river.fulfillment.percent).toBe(100);
     const ridge = renamed.sirs.find((s) => s.text.startsWith('NAI Ridge'));
-    expect(ridge.indicators).toEqual([
-      expect.objectContaining({ id: bridging.id, observed: true }),
-    ]);
+    expect(ridge.indicators).toEqual([expect.objectContaining({ id: bridging.id, observed: true })]);
     const orphan = renamed.sirs.find((s) => s.text.startsWith('No NAI'));
     expect(orphan.indicators.map((i) => i.description)).toEqual(['Radio silence']);
   });
@@ -451,44 +410,26 @@ describe('IPB event-matrix import', () => {
       indicators: expect.objectContaining({ stale: [] }),
       nais: expect.objectContaining({ stale: [] }),
     };
-    store.importIpbStudy(WHITE, study(1));
-    // Full importIpbStudy result now also carries a top-level `liveCells`
-    // array; toEqual against a plain object literal (even one built from
-    // objectContaining sub-fields) would fail on that extra key, so these
-    // became toMatchObject.
-    expect(store.importIpbStudy(WHITE, study(10))).toMatchObject(noneStale);
-    expect(store.listRequirements(WHITE)).toHaveLength(4);
-    expect(store.importIpbStudy(WHITE, study(1))).toMatchObject(noneStale);
+    store.importIpbStudy(WHITE_OWNER, study(1));
+    expect(store.importIpbStudy(WHITE_OWNER, study(10))).toMatchObject(noneStale);
+    expect(store.listRequirements(WHITE_ACCESS)).toHaveLength(4);
+    expect(store.importIpbStudy(WHITE_OWNER, study(1))).toMatchObject(noneStale);
   });
 
   test('an event pointing at an unknown COA is a 400 and writes nothing', () => {
     const bad = study();
-    bad.events.push({
-      id: 9,
-      coa_id: 99,
-      nai_feature_id: null,
-      indicator: 'x',
-      observed_status: 'expected',
-    });
-    const activity = store.listActivity(WHITE).length;
-    expectStatus(() => store.importIpbStudy(WHITE, bad), 400);
-    expect(store.listRequirements(WHITE)).toEqual([]);
-    expect(store.listActivity(WHITE)).toHaveLength(activity);
+    bad.events.push({ id: 9, coa_id: 99, nai_feature_id: null, indicator: 'x', observed_status: 'expected' });
+    const activity = store.listActivity(WHITE_ACCESS).length;
+    expectStatus(() => store.importIpbStudy(WHITE_OWNER, bad), 400);
+    expect(store.listRequirements(WHITE_ACCESS)).toEqual([]);
+    expect(store.listActivity(WHITE_ACCESS)).toHaveLength(activity);
   });
 });
 
 describe('IPB import: NAI/TAI geometry upsert and SIR linking', () => {
   const naiGeometry = {
     type: 'Polygon',
-    coordinates: [
-      [
-        [17, 49],
-        [17.2, 49],
-        [17.2, 49.2],
-        [17, 49.2],
-        [17, 49],
-      ],
-    ],
+    coordinates: [[[17, 49], [17.2, 49], [17.2, 49.2], [17, 49.2], [17, 49]]],
   };
 
   function studyWithGeometry() {
@@ -497,26 +438,16 @@ describe('IPB import: NAI/TAI geometry upsert and SIR linking', () => {
       coas: [{ id: 50, name: 'Push east', kind: 'most-likely' }],
       nais: [
         { id: 500, label: 'River Line', kind: 'nai', geometry: naiGeometry },
-        { id: 501, label: 'Bridge TAI', kind: 'tai' }, // no geometry: still accepted
+        { id: 501, label: 'Bridge TAI', kind: 'tai' },
       ],
-      events: [
-        {
-          id: 1,
-          coa_id: 50,
-          nai_feature_id: 500,
-          indicator: 'Bridging',
-          observed_status: 'expected',
-        },
-      ],
+      events: [{ id: 1, coa_id: 50, nai_feature_id: 500, indicator: 'Bridging', observed_status: 'expected' }],
     };
   }
 
   test('upserts NAIs/TAIs by source, storing geometry when given and NULL when not', () => {
-    const summary = store.importIpbStudy(WHITE, studyWithGeometry());
-    // summary.nais is a sub-property of the mutation result (liveCells sits
-    // at the top level only), so this toEqual is unaffected.
+    const summary = store.importIpbStudy(WHITE_OWNER, studyWithGeometry());
     expect(summary.nais).toEqual({ created: 2, updated: 0, unchanged: 0, stale: [] });
-    const nais = store.listNais(WHITE);
+    const nais = store.listNais(WHITE_ACCESS);
     const river = nais.find((n) => n.label === 'River Line');
     const bridge = nais.find((n) => n.label === 'Bridge TAI');
     expect(river).toMatchObject({ source: 'ipb:5:nai:500', kind: 'nai', geometry: naiGeometry });
@@ -524,40 +455,38 @@ describe('IPB import: NAI/TAI geometry upsert and SIR linking', () => {
   });
 
   test('links the SIR generated for a COA x NAI pair to the real nais row', () => {
-    store.importIpbStudy(WHITE, studyWithGeometry());
-    const river = store.listNais(WHITE).find((n) => n.label === 'River Line');
-    const requirement = store.listRequirements(WHITE)[0];
+    store.importIpbStudy(WHITE_OWNER, studyWithGeometry());
+    const river = store.listNais(WHITE_ACCESS).find((n) => n.label === 'River Line');
+    const requirement = store.listRequirements(WHITE_ACCESS)[0];
     const sir = requirement.sirs[0];
     expect(sir.nai_id).toBe(river.id);
   });
 
   test('re-importing with a changed geometry updates the NAI, not duplicates it', () => {
-    store.importIpbStudy(WHITE, studyWithGeometry());
-    const before = store.listNais(WHITE).find((n) => n.label === 'River Line');
+    store.importIpbStudy(WHITE_OWNER, studyWithGeometry());
+    const before = store.listNais(WHITE_ACCESS).find((n) => n.label === 'River Line');
     const edited = studyWithGeometry();
     edited.nais[0].geometry = { type: 'Point', coordinates: [17.1, 49.1] };
-    const summary = store.importIpbStudy(WHITE, edited);
+    const summary = store.importIpbStudy(WHITE_OWNER, edited);
     expect(summary.nais).toMatchObject({ updated: 1, unchanged: 1 });
-    const after = store.listNais(WHITE).find((n) => n.id === before.id);
+    const after = store.listNais(WHITE_ACCESS).find((n) => n.id === before.id);
     expect(after.geometry).toEqual({ type: 'Point', coordinates: [17.1, 49.1] });
   });
 
   test('older payloads without kind/geometry still create a usable NAI (backwards compatible)', () => {
-    const summary = store.importIpbStudy(WHITE, {
+    const summary = store.importIpbStudy(WHITE_OWNER, {
       study: { id: 6, name: 'Legacy Study' },
       coas: [{ id: 60, name: 'Hold', kind: 'most-likely' }],
       nais: [{ id: 600, label: 'Legacy NAI' }],
-      events: [
-        { id: 1, coa_id: 60, nai_feature_id: 600, indicator: 'Watch', observed_status: 'expected' },
-      ],
+      events: [{ id: 1, coa_id: 60, nai_feature_id: 600, indicator: 'Watch', observed_status: 'expected' }],
     });
     expect(summary.nais.created).toBe(1);
-    const nai = store.listNais(WHITE).find((n) => n.label === 'Legacy NAI');
+    const nai = store.listNais(WHITE_ACCESS).find((n) => n.label === 'Legacy NAI');
     expect(nai).toMatchObject({ kind: 'nai', geometry: null });
   });
 
   test('SIR text names the area once, as NAI or TAI', () => {
-    store.importIpbStudy(WHITE, {
+    store.importIpbStudy(WHITE_OWNER, {
       study: { id: 7, name: 'Naming' },
       coas: [{ id: 70, name: 'Push', kind: 'most-likely' }],
       nais: [
@@ -569,176 +498,130 @@ describe('IPB import: NAI/TAI geometry upsert and SIR linking', () => {
         { id: 2, coa_id: 70, nai_feature_id: 701, indicator: 'b', observed_status: 'expected' },
       ],
     });
-    const texts = store.listRequirements(WHITE).flatMap((r) => r.sirs.map((s) => s.text));
-    expect(texts).toEqual(
-      expect.arrayContaining(['NAI 1: indicators of Push', 'TAI Ford: indicators of Push']),
-    );
+    const texts = store.listRequirements(WHITE_ACCESS).flatMap((r) => r.sirs.map((s) => s.text));
+    expect(texts).toEqual(expect.arrayContaining(['NAI 1: indicators of Push', 'TAI Ford: indicators of Push']));
   });
 });
+
 describe('reports: location, type, structured fields, SIDC, auto-NAI', () => {
   const naiPolygon = {
     type: 'Polygon',
-    coordinates: [
-      [
-        [17, 49],
-        [17.2, 49],
-        [17.2, 49.2],
-        [17, 49.2],
-        [17, 49],
-      ],
-    ],
+    coordinates: [[[17, 49], [17.2, 49], [17.2, 49.2], [17, 49.2], [17, 49]]],
   };
   const validSidc = '10031000141211000000';
 
   function seedNai() {
-    store.importIpbStudy(WHITE, {
+    store.importIpbStudy(WHITE_OWNER, {
       study: { id: 1, name: 'S' },
       coas: [{ id: 1, name: 'C', kind: 'most-likely' }],
       nais: [{ id: 1, label: 'Alpha', kind: 'nai', geometry: naiPolygon }],
       events: [{ id: 1, coa_id: 1, nai_feature_id: 1, indicator: 'i', observed_status: 'expected' }],
     });
-    return store.listNais(WHITE)[0];
+    return store.listNais(WHITE_ACCESS)[0];
   }
 
   test('a plain report with no location is unchanged from before', () => {
-    const report = store.createReport(WHITE, { text: 'Free text', reliability: 'C', credibility: 3 });
-    expect(report).toMatchObject({
-      lon: null,
-      lat: null,
-      report_type: 'free',
-      fields: {},
-      sidc: null,
-      nai_id: null,
-      track_id: null,
-    });
+    const report = store.createReport(WHITE_OWNER, { text: 'Free text', reliability: 'C', credibility: 3 }, WHITE_ACCESS);
+    expect(report).toMatchObject({ lon: null, lat: null, report_type: 'free', fields: {}, sidc: null, nai_id: null, track_id: null });
   });
 
   test('lon without lat (or vice versa) is rejected', () => {
-    expectStatus(() => store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lon: 17 }), 400);
-    expectStatus(() => store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lat: 49 }), 400);
+    expectStatus(() => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lon: 17 }, WHITE_ACCESS), 400);
+    expectStatus(() => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lat: 49 }, WHITE_ACCESS), 400);
   });
 
   test('lon/lat out of range is rejected', () => {
-    expectStatus(
-      () => store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lon: 200, lat: 49 }),
-      400,
-    );
-    expectStatus(
-      () => store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lon: 17, lat: 95 }),
-      400,
-    );
+    expectStatus(() => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lon: 200, lat: 49 }, WHITE_ACCESS), 400);
+    expectStatus(() => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lon: 17, lat: 95 }, WHITE_ACCESS), 400);
   });
 
   test('report_type must be one of the enum values', () => {
-    expectStatus(
-      () => store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, report_type: 'rumour' }),
-      400,
-    );
+    expectStatus(() => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, report_type: 'rumour' }, WHITE_ACCESS), 400);
   });
 
   test('salute fields are restricted to size/activity/location/unit/time/equipment', () => {
-    const report = store.createReport(WHITE, {
-      text: 'SALUTE',
-      reliability: 'B',
-      credibility: 2,
-      report_type: 'salute',
-      fields: { size: '~squad', activity: 'digging in' },
-    });
+    const report = store.createReport(
+      WHITE_OWNER,
+      { text: 'SALUTE', reliability: 'B', credibility: 2, report_type: 'salute', fields: { size: '~squad', activity: 'digging in' } },
+      WHITE_ACCESS,
+    );
     expect(report.fields).toEqual({ size: '~squad', activity: 'digging in' });
     expectStatus(
       () =>
-        store.createReport(WHITE, {
-          text: 'x',
-          reliability: 'A',
-          credibility: 1,
-          report_type: 'salute',
-          fields: { remarks: 'not a salute field' },
-        }),
+        store.createReport(
+          WHITE_OWNER,
+          { text: 'x', reliability: 'A', credibility: 1, report_type: 'salute', fields: { remarks: 'not a salute field' } },
+          WHITE_ACCESS,
+        ),
       400,
     );
   });
 
   test('spotrep fields additionally allow remarks', () => {
-    const report = store.createReport(WHITE, {
-      text: 'SPOTREP',
-      reliability: 'B',
-      credibility: 2,
-      report_type: 'spotrep',
-      fields: { remarks: 'urgent' },
-    });
+    const report = store.createReport(
+      WHITE_OWNER,
+      { text: 'SPOTREP', reliability: 'B', credibility: 2, report_type: 'spotrep', fields: { remarks: 'urgent' } },
+      WHITE_ACCESS,
+    );
     expect(report.fields).toEqual({ remarks: 'urgent' });
   });
 
   test('a field value over 500 characters is rejected', () => {
     expectStatus(
       () =>
-        store.createReport(WHITE, {
-          text: 'x',
-          reliability: 'A',
-          credibility: 1,
-          report_type: 'salute',
-          fields: { size: 'a'.repeat(501) },
-        }),
+        store.createReport(
+          WHITE_OWNER,
+          { text: 'x', reliability: 'A', credibility: 1, report_type: 'salute', fields: { size: 'a'.repeat(501) } },
+          WHITE_ACCESS,
+        ),
       400,
     );
   });
 
   test('sidc must be exactly 20 digits', () => {
+    expectStatus(() => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, sidc: '123' }, WHITE_ACCESS), 400);
     expectStatus(
-      () => store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, sidc: '123' }),
+      () => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, sidc: '1003100014121100000A' }, WHITE_ACCESS),
       400,
     );
-    expectStatus(
-      () =>
-        store.createReport(WHITE, {
-          text: 'x',
-          reliability: 'A',
-          credibility: 1,
-          sidc: '1003100014121100000A',
-        }),
-      400,
-    );
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, sidc: validSidc });
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, sidc: validSidc }, WHITE_ACCESS);
     expect(report.sidc).toBe(validSidc);
   });
 
   test('a SIDC copied in groups (spaces/dashes) is accepted and stored canonically', () => {
     const grouped = '1003 1000-1412 1100 0000';
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, sidc: grouped });
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, sidc: grouped }, WHITE_ACCESS);
     expect(report.sidc).toBe(validSidc);
   });
 
   test('a report inside an NAI polygon auto-links to it on create', () => {
     const nai = seedNai();
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lon: 17.1, lat: 49.1 });
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lon: 17.1, lat: 49.1 }, WHITE_ACCESS);
     expect(report.nai_id).toBe(nai.id);
   });
 
   test('a report outside every NAI gets no auto-link', () => {
     seedNai();
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lon: 30, lat: 10 });
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lon: 30, lat: 10 }, WHITE_ACCESS);
     expect(report.nai_id).toBeNull();
   });
 
   test('an explicit nai_id is respected over auto-matching', () => {
     seedNai();
-    const other = store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lon: 17.1, lat: 49.1, nai_id: null });
+    const other = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lon: 17.1, lat: 49.1, nai_id: null }, WHITE_ACCESS);
     expect(other.nai_id).toBeNull();
   });
 
   test('moving a report into an NAI on update re-runs the auto-match', () => {
     const nai = seedNai();
-    const report = store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, lon: 30, lat: 10 });
+    const report = store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, lon: 30, lat: 10 }, WHITE_ACCESS);
     expect(report.nai_id).toBeNull();
-    const moved = store.updateReport(WHITE, report.id, { lon: 17.1, lat: 49.1 });
+    const moved = store.updateReport(row('reports', report.id), { lon: 17.1, lat: 49.1 }, WHITE_ACCESS);
     expect(moved.nai_id).toBe(nai.id);
   });
 
   test('track_id must reference an existing track', () => {
-    expectStatus(
-      () => store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1, track_id: 999 }),
-      404,
-    );
+    expectStatus(() => store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1, track_id: 999 }, WHITE_ACCESS), 404);
   });
 });
 
@@ -746,107 +629,71 @@ describe('tracks: the current situation', () => {
   const sidc = '10031000141211000000';
 
   test('creating a track also creates its first position', () => {
-    const track = store.createTrack(WHITE, {
-      sidc,
-      designation: 'HOSTILE-1',
-      lon: 17,
-      lat: 49,
-      observed_at: '2026-09-20T10:00:00.000Z',
-    });
+    const track = store.createTrack(WHITE_OWNER, { sidc, designation: 'HOSTILE-1', lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
     expect(track.history).toHaveLength(1);
     expect(track.history[0]).toMatchObject({ lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
   });
 
   test('a newer position moves the head', () => {
-    const track = store.createTrack(WHITE, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
-    const moved = store.addTrackPosition(WHITE, track.id, {
-      lon: 17.5,
-      lat: 49.5,
-      observed_at: '2026-09-20T11:00:00.000Z',
-    });
+    const track = store.createTrack(WHITE_OWNER, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
+    const moved = store.addTrackPosition(row('tracks', track.id), { lon: 17.5, lat: 49.5, observed_at: '2026-09-20T11:00:00.000Z' }, WHITE_ACCESS);
     expect(moved).toMatchObject({ lon: 17.5, lat: 49.5, observed_at: '2026-09-20T11:00:00.000Z' });
     expect(moved.history).toHaveLength(2);
   });
 
   test('an out-of-order (older) position is recorded in history but never moves the head back', () => {
-    const track = store.createTrack(WHITE, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T12:00:00.000Z' });
-    const result = store.addTrackPosition(WHITE, track.id, {
-      lon: 99,
-      lat: 1,
-      observed_at: '2026-09-20T09:00:00.000Z', // earlier than the head
-    });
+    const track = store.createTrack(WHITE_OWNER, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T12:00:00.000Z' });
+    const result = store.addTrackPosition(row('tracks', track.id), { lon: 99, lat: 1, observed_at: '2026-09-20T09:00:00.000Z' }, WHITE_ACCESS);
     expect(result).toMatchObject({ lon: 17, lat: 49, observed_at: '2026-09-20T12:00:00.000Z' });
     expect(result.history).toHaveLength(2);
-    expect(result.history.map((p) => p.observed_at)).toEqual([
-      '2026-09-20T09:00:00.000Z',
-      '2026-09-20T12:00:00.000Z',
-    ]);
+    expect(result.history.map((p) => p.observed_at)).toEqual(['2026-09-20T09:00:00.000Z', '2026-09-20T12:00:00.000Z']);
   });
 
   test('a position exactly equal to the current head still counts as "moving" it', () => {
-    const track = store.createTrack(WHITE, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T12:00:00.000Z' });
-    const result = store.addTrackPosition(WHITE, track.id, {
-      lon: 20,
-      lat: 50,
-      observed_at: '2026-09-20T12:00:00.000Z',
-    });
+    const track = store.createTrack(WHITE_OWNER, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T12:00:00.000Z' });
+    const result = store.addTrackPosition(row('tracks', track.id), { lon: 20, lat: 50, observed_at: '2026-09-20T12:00:00.000Z' }, WHITE_ACCESS);
     expect(result).toMatchObject({ lon: 20, lat: 50 });
   });
 
   test('linking a report_id to a position also links the report back to the track', () => {
-    const track = store.createTrack(WHITE, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
-    const report = store.createReport(WHITE, { text: 'seen again', reliability: 'A', credibility: 1 });
-    store.addTrackPosition(WHITE, track.id, {
-      lon: 17.2,
-      lat: 49.2,
-      observed_at: '2026-09-20T11:00:00.000Z',
-      report_id: report.id,
-    });
-    const updatedReport = store.listReports(WHITE).find((r) => r.id === report.id);
+    const track = store.createTrack(WHITE_OWNER, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
+    const report = store.createReport(WHITE_OWNER, { text: 'seen again', reliability: 'A', credibility: 1 }, WHITE_ACCESS);
+    store.addTrackPosition(row('tracks', track.id), { lon: 17.2, lat: 49.2, observed_at: '2026-09-20T11:00:00.000Z', report_id: report.id }, WHITE_ACCESS);
+    const updatedReport = store.listReports(WHITE_ACCESS).find((r) => r.id === report.id);
     expect(updatedReport.track_id).toBe(track.id);
   });
 
   test('GET tracks includes full history sorted by time', () => {
-    const track = store.createTrack(WHITE, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
-    store.addTrackPosition(WHITE, track.id, { lon: 17.1, lat: 49.1, observed_at: '2026-09-20T12:00:00.000Z' });
-    store.addTrackPosition(WHITE, track.id, { lon: 17.05, lat: 49.05, observed_at: '2026-09-20T11:00:00.000Z' });
-    const [listed] = store.listTracks(WHITE);
-    expect(listed.history.map((p) => p.observed_at)).toEqual([
-      '2026-09-20T10:00:00.000Z',
-      '2026-09-20T11:00:00.000Z',
-      '2026-09-20T12:00:00.000Z',
-    ]);
+    const track = store.createTrack(WHITE_OWNER, { sidc, lon: 17, lat: 49, observed_at: '2026-09-20T10:00:00.000Z' });
+    store.addTrackPosition(row('tracks', track.id), { lon: 17.1, lat: 49.1, observed_at: '2026-09-20T12:00:00.000Z' }, WHITE_ACCESS);
+    store.addTrackPosition(row('tracks', track.id), { lon: 17.05, lat: 49.05, observed_at: '2026-09-20T11:00:00.000Z' }, WHITE_ACCESS);
+    const [listed] = store.listTracks(WHITE_ACCESS);
+    expect(listed.history.map((p) => p.observed_at)).toEqual(['2026-09-20T10:00:00.000Z', '2026-09-20T11:00:00.000Z', '2026-09-20T12:00:00.000Z']);
   });
 
   test('sidc must be a 20-digit code and status must be a known value', () => {
-    expectStatus(
-      () => store.createTrack(WHITE, { sidc: '123', lon: 0, lat: 0, observed_at: '2026-09-20T10:00:00.000Z' }),
-      400,
-    );
-    expectStatus(
-      () => store.createTrack(WHITE, { sidc, status: 'lost-in-space', lon: 0, lat: 0, observed_at: '2026-09-20T10:00:00.000Z' }),
-      400,
-    );
+    expectStatus(() => store.createTrack(WHITE_OWNER, { sidc: '123', lon: 0, lat: 0, observed_at: '2026-09-20T10:00:00.000Z' }), 400);
+    expectStatus(() => store.createTrack(WHITE_OWNER, { sidc, status: 'lost-in-space', lon: 0, lat: 0, observed_at: '2026-09-20T10:00:00.000Z' }), 400);
   });
 });
 
 describe('collection plan: collectors, taskings, SOR, conflicts', () => {
   function seedRequirementAndSir() {
-    const requirement = store.createRequirement(WHITE, { kind: 'PIR', text: 'Where is the enemy reserve?' });
-    const sir = store.createSir(WHITE, requirement.id, { text: 'NAI Alpha: movement' });
+    const requirement = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'Where is the enemy reserve?' }, WHITE_ACCESS);
+    const sir = store.createSir(row('requirements', requirement.id), { text: 'NAI Alpha: movement' }, WHITE_ACCESS);
     return { requirement, sir };
   }
 
   test('a collector requires a valid discipline', () => {
-    expectStatus(() => store.createCollector(WHITE, { name: 'X', discipline: 'BOGUS' }), 400);
-    const collector = store.createCollector(WHITE, { name: 'UAS-1', discipline: 'UAS' });
+    expectStatus(() => store.createCollector(WHITE_OWNER, { name: 'X', discipline: 'BOGUS' }), 400);
+    const collector = store.createCollector(WHITE_OWNER, { name: 'UAS-1', discipline: 'UAS' });
     expect(collector).toMatchObject({ name: 'UAS-1', discipline: 'UAS' });
   });
 
   test('available_from must be before available_to', () => {
     expectStatus(
       () =>
-        store.createCollector(WHITE, {
+        store.createCollector(WHITE_OWNER, {
           name: 'X',
           discipline: 'HUMINT',
           available_from: '2026-09-20T12:00:00.000Z',
@@ -860,49 +707,41 @@ describe('collection plan: collectors, taskings, SOR, conflicts', () => {
     const { sir } = seedRequirementAndSir();
     expectStatus(
       () =>
-        store.createTasking(WHITE, {
-          collector_id: 999,
-          sir_id: sir.id,
-          start_at: '2026-09-20T10:00:00.000Z',
-          end_at: '2026-09-20T11:00:00.000Z',
-        }),
+        store.createTasking(
+          WHITE_OWNER,
+          { collector_id: 999, sir_id: sir.id, start_at: '2026-09-20T10:00:00.000Z', end_at: '2026-09-20T11:00:00.000Z' },
+          WHITE_ACCESS,
+        ),
       404,
     );
-    const collector = store.createCollector(WHITE, { name: 'HUMINT-1', discipline: 'HUMINT' });
+    const collector = store.createCollector(WHITE_OWNER, { name: 'HUMINT-1', discipline: 'HUMINT' });
     expectStatus(
       () =>
-        store.createTasking(WHITE, {
-          collector_id: collector.id,
-          sir_id: sir.id,
-          start_at: '2026-09-20T12:00:00.000Z',
-          end_at: '2026-09-20T10:00:00.000Z',
-        }),
+        store.createTasking(
+          WHITE_OWNER,
+          { collector_id: collector.id, sir_id: sir.id, start_at: '2026-09-20T12:00:00.000Z', end_at: '2026-09-20T10:00:00.000Z' },
+          WHITE_ACCESS,
+        ),
       400,
     );
   });
 
   test('SOR text names the collector, SIR, NAI and DTG window, with LTIOV', () => {
-    const requirement = store.createRequirement(WHITE, {
-      kind: 'PIR',
-      text: 'Is the bridge intact?',
-      ltiov: '2026-09-21T06:00:00.000Z',
-    });
-    store.importIpbStudy(WHITE, {
+    const requirement = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'Is the bridge intact?', ltiov: '2026-09-21T06:00:00.000Z' }, WHITE_ACCESS);
+    store.importIpbStudy(WHITE_OWNER, {
       study: { id: 9, name: 'SOR Study' },
       coas: [{ id: 90, name: 'C', kind: 'most-likely' }],
       nais: [{ id: 900, label: 'Crossing Site', kind: 'nai' }],
       events: [{ id: 1, coa_id: 90, nai_feature_id: 900, indicator: 'i', observed_status: 'expected' }],
     });
-    const nai = store.listNais(WHITE).find((n) => n.label === 'Crossing Site');
-    const sir = store.createSir(WHITE, requirement.id, { text: 'Watch the crossing site', nai_id: nai.id });
-    const collector = store.createCollector(WHITE, { name: 'RECCE-2', discipline: 'RECCE' });
-    const tasking = store.createTasking(WHITE, {
-      collector_id: collector.id,
-      sir_id: sir.id,
-      nai_id: sir.nai_id,
-      start_at: '2026-09-20T05:00:00.000Z',
-      end_at: '2026-09-20T09:00:00.000Z',
-    });
+    const nai = store.listNais(WHITE_ACCESS).find((n) => n.label === 'Crossing Site');
+    const sir = store.createSir(row('requirements', requirement.id), { text: 'Watch the crossing site', nai_id: nai.id }, WHITE_ACCESS);
+    const collector = store.createCollector(WHITE_OWNER, { name: 'RECCE-2', discipline: 'RECCE' });
+    const tasking = store.createTasking(
+      WHITE_OWNER,
+      { collector_id: collector.id, sir_id: sir.id, nai_id: sir.nai_id, start_at: '2026-09-20T05:00:00.000Z', end_at: '2026-09-20T09:00:00.000Z' },
+      WHITE_ACCESS,
+    );
     expect(tasking.sor).toContain('RECCE-2');
     expect(tasking.sor).toContain(sir.text);
     expect(tasking.sor).toContain('Crossing Site');
@@ -913,64 +752,32 @@ describe('collection plan: collectors, taskings, SOR, conflicts', () => {
 
   test('GET collection/conflicts finds overlapping taskings of the same collector and out-of-window taskings', () => {
     const { sir } = seedRequirementAndSir();
-    const collector = store.createCollector(WHITE, {
+    const collector = store.createCollector(WHITE_OWNER, {
       name: 'IMINT-1',
       discipline: 'IMINT',
       available_from: '2026-09-20T08:00:00.000Z',
       available_to: '2026-09-20T18:00:00.000Z',
     });
-    const a = store.createTasking(WHITE, {
-      collector_id: collector.id,
-      sir_id: sir.id,
-      start_at: '2026-09-20T09:00:00.000Z',
-      end_at: '2026-09-20T11:00:00.000Z',
-    });
-    const b = store.createTasking(WHITE, {
-      collector_id: collector.id,
-      sir_id: sir.id,
-      start_at: '2026-09-20T10:00:00.000Z', // overlaps a
-      end_at: '2026-09-20T12:00:00.000Z',
-    });
-    const c = store.createTasking(WHITE, {
-      collector_id: collector.id,
-      sir_id: sir.id,
-      start_at: '2026-09-20T19:00:00.000Z', // outside availability
-      end_at: '2026-09-20T20:00:00.000Z',
-    });
-    const conflicts = store.listCollectionConflicts(WHITE);
-    expect(conflicts.overlaps).toEqual([
-      { kind: 'overlap', collector_id: collector.id, tasking_ids: [a.id, b.id] },
-    ]);
-    expect(conflicts.outside).toEqual([
-      { kind: 'unavailable', collector_id: collector.id, tasking_id: c.id },
-    ]);
+    const a = store.createTasking(WHITE_OWNER, { collector_id: collector.id, sir_id: sir.id, start_at: '2026-09-20T09:00:00.000Z', end_at: '2026-09-20T11:00:00.000Z' }, WHITE_ACCESS);
+    const b = store.createTasking(WHITE_OWNER, { collector_id: collector.id, sir_id: sir.id, start_at: '2026-09-20T10:00:00.000Z', end_at: '2026-09-20T12:00:00.000Z' }, WHITE_ACCESS);
+    const c = store.createTasking(WHITE_OWNER, { collector_id: collector.id, sir_id: sir.id, start_at: '2026-09-20T19:00:00.000Z', end_at: '2026-09-20T20:00:00.000Z' }, WHITE_ACCESS);
+    const conflicts = store.listCollectionConflicts(WHITE_ACCESS);
+    expect(conflicts.overlaps).toEqual([{ kind: 'overlap', collector_id: collector.id, tasking_ids: [a.id, b.id] }]);
+    expect(conflicts.outside).toEqual([{ kind: 'unavailable', collector_id: collector.id, tasking_id: c.id }]);
   });
 });
+
 function tempJsonFile() {
-  return path.join(
-    os.tmpdir(),
-    `exercise-regions-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`,
-  );
+  return path.join(os.tmpdir(), `exercise-regions-test-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
 }
 
 // The 14 official kraj names the EXAMPLE scenario matches against (see
 // scenarioGeography.js); geometries are tiny non-overlapping unit squares —
 // good enough to exercise the union without shipping real Czech borders.
 const OFFICIAL_KRAJE = [
-  'Hlavní město Praha',
-  'Středočeský kraj',
-  'Jihočeský kraj',
-  'Plzeňský kraj',
-  'Karlovarský kraj',
-  'Ústecký kraj',
-  'Liberecký kraj',
-  'Královéhradecký kraj',
-  'Pardubický kraj',
-  'Kraj Vysočina',
-  'Jihomoravský kraj',
-  'Olomoucký kraj',
-  'Zlínský kraj',
-  'Moravskoslezský kraj',
+  'Hlavní město Praha', 'Středočeský kraj', 'Jihočeský kraj', 'Plzeňský kraj', 'Karlovarský kraj',
+  'Ústecký kraj', 'Liberecký kraj', 'Královéhradecký kraj', 'Pardubický kraj', 'Kraj Vysočina',
+  'Jihomoravský kraj', 'Olomoucký kraj', 'Zlínský kraj', 'Moravskoslezský kraj',
 ];
 
 function fixtureRegions() {
@@ -981,15 +788,7 @@ function fixtureRegions() {
       properties: { id: `kraj:K${index}`, level: 'kraj', name },
       geometry: {
         type: 'Polygon',
-        coordinates: [
-          [
-            [index, index],
-            [index + 1, index],
-            [index + 1, index + 1],
-            [index, index + 1],
-            [index, index],
-          ],
-        ],
+        coordinates: [[[index, index], [index + 1, index], [index + 1, index + 1], [index, index + 1], [index, index]]],
       },
     })),
   };
@@ -997,7 +796,7 @@ function fixtureRegions() {
 
 describe('products: INTSUM draft and CRUD', () => {
   test('the draft summarises tracks, in-window reports, and PIR fulfillment; assessment/outlook stay empty', () => {
-    store.createTrack(WHITE, {
+    store.createTrack(WHITE_OWNER, {
       sidc: '10031000141211000000',
       designation: 'HOSTILE-1',
       status: 'confirmed',
@@ -1005,75 +804,49 @@ describe('products: INTSUM draft and CRUD', () => {
       lat: 49.5,
       observed_at: '2026-09-20T10:00:00.000Z',
     });
-    const inWindow = store.createReport(WHITE, {
-      text: 'Column moving south',
-      reliability: 'B',
-      credibility: 2,
-      occurred_at: '2026-09-20T09:00:00.000Z',
-      lon: 17.5,
-      lat: 49.5,
-      report_type: 'spotrep',
-    });
-    store.createReport(WHITE, {
-      text: 'Outside the window',
-      reliability: 'C',
-      credibility: 3,
-      occurred_at: '2026-09-22T09:00:00.000Z',
-    });
-    const requirement = store.createRequirement(WHITE, { kind: 'PIR', text: 'Is the enemy withdrawing?' });
-    const sir = store.createSir(WHITE, requirement.id, { text: 'Watch route 1' });
-    store.createEvidenceLink(WHITE, inWindow.id, { target_kind: 'sir', target_id: sir.id, relation: 'confirms' });
+    const inWindow = store.createReport(
+      WHITE_OWNER,
+      { text: 'Column moving south', reliability: 'B', credibility: 2, occurred_at: '2026-09-20T09:00:00.000Z', lon: 17.5, lat: 49.5, report_type: 'spotrep' },
+      WHITE_ACCESS,
+    );
+    store.createReport(WHITE_OWNER, { text: 'Outside the window', reliability: 'C', credibility: 3, occurred_at: '2026-09-22T09:00:00.000Z' }, WHITE_ACCESS);
+    const requirement = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'Is the enemy withdrawing?' }, WHITE_ACCESS);
+    const sir = store.createSir(row('requirements', requirement.id), { text: 'Watch route 1' }, WHITE_ACCESS);
+    store.createEvidenceLink(
+      row('requirements', requirement.id),
+      { report_id: inWindow.id, target_kind: 'sir', target_id: sir.id, relation: 'confirms' },
+      WHITE_ACCESS,
+    );
 
-    const draft = store.draftIntsum(WHITE, '2026-09-20T00:00:00.000Z', '2026-09-20T23:59:59.000Z');
-    expect(draft.sections.situation).toEqual([
-      `HOSTILE-1: CONFIRMED at ${formatMgrs(17.5, 49.5)}, last seen 201000ZSEP26`,
-    ]);
+    const draft = store.draftIntsum(WHITE_ACCESS, '2026-09-20T00:00:00.000Z', '2026-09-20T23:59:59.000Z');
+    expect(draft.sections.situation).toEqual([`HOSTILE-1: CONFIRMED at ${formatMgrs(17.5, 49.5)}, last seen 201000ZSEP26`]);
     expect(draft.sections.significant_activity).toEqual([
       `200900ZSEP26 \u2013 SPOTREP \u2013 ${formatMgrs(17.5, 49.5)} \u2013 Column moving south (Admiralty B2)`,
     ]);
-    expect(draft.sections.pir_status).toEqual([
-      expect.objectContaining({ requirement_id: requirement.id, percent: 100, state: 'fulfilled' }),
-    ]);
+    expect(draft.sections.pir_status).toEqual([expect.objectContaining({ requirement_id: requirement.id, percent: 100, state: 'fulfilled' })]);
     expect(draft.sections.assessment).toBe('');
     expect(draft.sections.outlook).toBe('');
   });
 
   test('from must not be after to', () => {
-    expectStatus(() => store.draftIntsum(WHITE, '2026-09-21T00:00:00.000Z', '2026-09-20T00:00:00.000Z'), 400);
+    expectStatus(() => store.draftIntsum(WHITE_ACCESS, '2026-09-21T00:00:00.000Z', '2026-09-20T00:00:00.000Z'), 400);
   });
 
   test('CRUD: create fills unspecified sections with empty strings; update merges only the given keys', () => {
-    const intsum = store.createIntsum(WHITE, {
+    const intsum = store.createIntsum(WHITE_OWNER, {
       period_start: '2026-09-20T00:00:00.000Z',
       period_end: '2026-09-21T00:00:00.000Z',
       author: 'S2',
       sections: { situation: ['line 1'] },
     });
-    expect(intsum.sections).toEqual({
-      situation: ['line 1'],
-      significant_activity: '',
-      pir_status: '',
-      assessment: '',
-      outlook: '',
-    });
-    const updated = store.updateIntsum(WHITE, intsum.id, { sections: { assessment: 'Enemy likely to reinforce.' } });
-    expect(updated.sections).toEqual({
-      situation: ['line 1'],
-      significant_activity: '',
-      pir_status: '',
-      assessment: 'Enemy likely to reinforce.',
-      outlook: '',
-    });
+    expect(intsum.sections).toEqual({ situation: ['line 1'], significant_activity: '', pir_status: '', assessment: '', outlook: '' });
+    const updated = store.updateIntsum(row('intsums', intsum.id), { sections: { assessment: 'Enemy likely to reinforce.' } });
+    expect(updated.sections).toEqual({ situation: ['line 1'], significant_activity: '', pir_status: '', assessment: 'Enemy likely to reinforce.', outlook: '' });
   });
 
   test('an unknown section key is rejected', () => {
     expectStatus(
-      () =>
-        store.createIntsum(WHITE, {
-          period_start: '2026-09-20T00:00:00.000Z',
-          period_end: '2026-09-21T00:00:00.000Z',
-          sections: { conclusion: 'nope' },
-        }),
+      () => store.createIntsum(WHITE_OWNER, { period_start: '2026-09-20T00:00:00.000Z', period_end: '2026-09-21T00:00:00.000Z', sections: { conclusion: 'nope' } }),
       400,
     );
   });
@@ -1081,31 +854,13 @@ describe('products: INTSUM draft and CRUD', () => {
 
 describe('scenario injects: a located report payload', () => {
   test('firing a report-kind inject creates a report with the same location/type/fields/sidc and auto-NAI', () => {
-    store.importIpbStudy(WHITE, {
+    store.importIpbStudy(WHITE_OWNER, {
       study: { id: 1, name: 'S' },
       coas: [{ id: 1, name: 'C', kind: 'most-likely' }],
-      nais: [
-        {
-          id: 1,
-          label: 'Alpha',
-          kind: 'nai',
-          geometry: {
-            type: 'Polygon',
-            coordinates: [
-              [
-                [17, 49],
-                [17.2, 49],
-                [17.2, 49.2],
-                [17, 49.2],
-                [17, 49],
-              ],
-            ],
-          },
-        },
-      ],
+      nais: [{ id: 1, label: 'Alpha', kind: 'nai', geometry: { type: 'Polygon', coordinates: [[[17, 49], [17.2, 49], [17.2, 49.2], [17, 49.2], [17, 49]]] } }],
       events: [{ id: 1, coa_id: 1, nai_feature_id: 1, indicator: 'i', observed_status: 'expected' }],
     });
-    const nai = store.listNais(WHITE)[0];
+    const nai = store.listNais(WHITE_ACCESS)[0];
     const event = store.createScenarioEvent({
       trigger_at: '2026-09-20T00:00:00.000Z',
       kind: 'report',
@@ -1120,9 +875,9 @@ describe('scenario injects: a located report payload', () => {
         sidc: '10031000141211000000',
       },
     });
-    const fired = store.fireScenarioEvent(event.id);
-    expect(fired.state).toBe('fired');
-    const report = store.listReports(WHITE)[0];
+    const fired = store.fireScenarioEvent(event.id, WHITE_ACCESS);
+    expect(fired.event.state).toBe('fired');
+    const report = store.listReports(WHITE_ACCESS)[0];
     expect(report).toMatchObject({
       text: 'Injected SALUTE',
       lon: 17.1,
@@ -1136,12 +891,7 @@ describe('scenario injects: a located report payload', () => {
 
   test('an inject with a malformed SIDC is rejected at schedule time, not fire time', () => {
     expectStatus(
-      () =>
-        store.createScenarioEvent({
-          trigger_at: '2026-09-20T00:00:00.000Z',
-          kind: 'report',
-          payload: { text: 'x', sidc: 'not-20-digits' },
-        }),
+      () => store.createScenarioEvent({ trigger_at: '2026-09-20T00:00:00.000Z', kind: 'report', payload: { text: 'x', sidc: 'not-20-digits' } }),
       400,
     );
     expect(store.listScenarioEvents()).toEqual([]);
@@ -1150,23 +900,26 @@ describe('scenario injects: a located report payload', () => {
 
 describe('activity log', () => {
   test('grows by exactly one row per successful mutation', () => {
-    const before = store.listActivity(WHITE).length;
-    store.createReport(WHITE, { text: 'x', reliability: 'A', credibility: 1 });
-    store.createRequirement(WHITE, { kind: 'PIR', text: 'x' });
-    expect(store.listActivity(WHITE)).toHaveLength(before + 2);
+    const before = store.listActivity(WHITE_ACCESS).length;
+    store.createReport(WHITE_OWNER, { text: 'x', reliability: 'A', credibility: 1 }, WHITE_ACCESS);
+    store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'x' }, WHITE_ACCESS);
+    expect(store.listActivity(WHITE_ACCESS)).toHaveLength(before + 2);
   });
 
   test('a rejected mutation does not append an activity row', () => {
-    const before = store.listActivity(WHITE).length;
+    const before = store.listActivity(WHITE_ACCESS).length;
     try {
-      store.createRequirement(WHITE, { kind: 'PIR', text: '' });
+      store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: '' }, WHITE_ACCESS);
     } catch {
       // expected 400
     }
-    expect(store.listActivity(WHITE)).toHaveLength(before);
+    expect(store.listActivity(WHITE_ACCESS)).toHaveLength(before);
   });
 });
 
+// Scenario/country/place management has never taken a user (it isn't
+// cell-owned — every route here is `verb: 'none'`), so this whole section
+// is unchanged by docs/adr/0002.
 describe('exercise scenarios: kraje-composed countries, renamed places, one active scenario', () => {
   let regionsFile;
   let scenarioFile;
@@ -1195,10 +948,6 @@ describe('exercise scenarios: kraje-composed countries, renamed places, one acti
   });
 
   test('getRegions and createExampleScenario are a 503 without a regions file', () => {
-    // `openStore` keeps one module-scope database/regions handle, like the
-    // rest of this store, so exercise the no-regions-file case with its own
-    // store, fully closed before and reopened after, rather than alongside
-    // `scenarioStore` (which would otherwise clobber its regions handle).
     scenarioStore.close();
     const bareFile = tempFile();
     const bareStore = openStore(bareFile);
@@ -1212,31 +961,22 @@ describe('exercise scenarios: kraje-composed countries, renamed places, one acti
   test('listing auto-seeds the EXAMPLE scenario exactly once, even across a reopen, but POST scenarios/example always works', () => {
     const items = scenarioStore.listScenarios();
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({
-      example: true,
-      active: false,
-      country_count: 3,
-      place_count: 13,
-    });
+    expect(items[0]).toMatchObject({ example: true, active: false, country_count: 3, place_count: 13 });
     const full = scenarioStore.getScenario(items[0].id);
     expect(full.countries.map((c) => c.name)).toEqual(['Arnland', 'Framland', 'Donovia']);
     expect(full.countries.map((c) => c.affiliation)).toEqual(['friendly', 'neutral', 'hostile']);
     expect(full.countries.every((c) => c.geometry?.type === 'MultiPolygon')).toBe(true);
     expect(full.places).toHaveLength(13);
 
-    // Listing again does not create a second one.
     expect(scenarioStore.listScenarios()).toHaveLength(1);
 
     scenarioStore.deleteScenario(items[0].id);
     expect(scenarioStore.listScenarios()).toHaveLength(0);
 
-    // The "seeded" flag is on disk, not just in memory: reopening the same
-    // database must not bring the example back either.
     scenarioStore.close();
     scenarioStore = openStore(scenarioFile, { regionsFile });
     expect(scenarioStore.listScenarios()).toHaveLength(0);
 
-    // The user can still recreate it on demand.
     const recreated = scenarioStore.createExampleScenario();
     expect(recreated.example).toBe(true);
     expect(recreated.countries).toHaveLength(3);
@@ -1261,17 +1001,8 @@ describe('exercise scenarios: kraje-composed countries, renamed places, one acti
 
   test('deleting a scenario cascades to its countries and places', () => {
     const scenario = scenarioStore.createScenario({ name: 'Cascade test' });
-    const country = scenarioStore.createCountry(scenario.id, {
-      name: 'Redland',
-      affiliation: 'hostile',
-    });
-    const place = scenarioStore.createPlace(scenario.id, {
-      real_name: 'Brno',
-      kind: 'city',
-      lon: 16.6,
-      lat: 49.2,
-      name: 'Brunograd',
-    });
+    const country = scenarioStore.createCountry(scenario.id, { name: 'Redland', affiliation: 'hostile' });
+    const place = scenarioStore.createPlace(scenario.id, { real_name: 'Brno', kind: 'city', lon: 16.6, lat: 49.2, name: 'Brunograd' });
     scenarioStore.deleteScenario(scenario.id);
     expectStatus(() => scenarioStore.updateCountry(country.id, { name: 'x' }), 404);
     expectStatus(() => scenarioStore.updatePlace(place.id, { name: 'x' }), 404);
@@ -1279,87 +1010,26 @@ describe('exercise scenarios: kraje-composed countries, renamed places, one acti
 
   test('a country normalizes Polygon geometry to MultiPolygon, defaults its color by affiliation, and validates regions', () => {
     const scenario = scenarioStore.createScenario({ name: 'Geo test' });
-    const square = [
-      [
-        [0, 0],
-        [1, 0],
-        [1, 1],
-        [0, 1],
-        [0, 0],
-      ],
-    ];
-    const country = scenarioStore.createCountry(scenario.id, {
-      name: 'Redland',
-      affiliation: 'hostile',
-      regions: ['kraj:K0', 'kraj:K1'],
-      geometry: { type: 'Polygon', coordinates: square },
-    });
+    const square = [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]];
+    const country = scenarioStore.createCountry(scenario.id, { name: 'Redland', affiliation: 'hostile', regions: ['kraj:K0', 'kraj:K1'], geometry: { type: 'Polygon', coordinates: square } });
     expect(country.color).toBe('#ff4d4d');
     expect(country.geometry).toEqual({ type: 'MultiPolygon', coordinates: [square] });
     expect(country.regions).toEqual(['kraj:K0', 'kraj:K1']);
 
+    expectStatus(() => scenarioStore.createCountry(scenario.id, { name: 'Bad', affiliation: 'hostile', regions: ['not-a-region'] }), 400);
+    expectStatus(() => scenarioStore.createCountry(scenario.id, { name: 'Bad', affiliation: 'hostile', regions: ['kraj:K0', 'kraj:K0'] }), 400);
+    expectStatus(() => scenarioStore.createCountry(scenario.id, { name: 'Bad', affiliation: 'hostile', color: 'red' }), 400);
     expectStatus(
-      () =>
-        scenarioStore.createCountry(scenario.id, {
-          name: 'Bad',
-          affiliation: 'hostile',
-          regions: ['not-a-region'],
-        }),
-      400,
-    );
-    expectStatus(
-      () =>
-        scenarioStore.createCountry(scenario.id, {
-          name: 'Bad',
-          affiliation: 'hostile',
-          regions: ['kraj:K0', 'kraj:K0'],
-        }),
-      400,
-    );
-    expectStatus(
-      () =>
-        scenarioStore.createCountry(scenario.id, {
-          name: 'Bad',
-          affiliation: 'hostile',
-          color: 'red',
-        }),
-      400,
-    );
-    expectStatus(
-      () =>
-        scenarioStore.createCountry(scenario.id, {
-          name: 'Bad',
-          affiliation: 'hostile',
-          geometry: {
-            type: 'Polygon',
-            coordinates: [
-              [
-                [0, 0],
-                [1, 0],
-              ],
-            ],
-          },
-        }),
+      () => scenarioStore.createCountry(scenario.id, { name: 'Bad', affiliation: 'hostile', geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0]]] } }),
       400,
     );
   });
 
   test('geometry over the 2 MB limit is a 413', () => {
     const scenario = scenarioStore.createScenario({ name: 'Huge geo test' });
-    const hugeRing = Array.from({ length: 250000 }, (_, i) => [
-      (i % 3600) / 10 - 180,
-      (i % 1800) / 10 - 90,
-    ]);
+    const hugeRing = Array.from({ length: 250000 }, (_, i) => [(i % 3600) / 10 - 180, (i % 1800) / 10 - 90]);
     hugeRing.push(hugeRing[0]);
-    expectStatus(
-      () =>
-        scenarioStore.createCountry(scenario.id, {
-          name: 'Huge',
-          affiliation: 'hostile',
-          geometry: { type: 'Polygon', coordinates: [hugeRing] },
-        }),
-      413,
-    );
+    expectStatus(() => scenarioStore.createCountry(scenario.id, { name: 'Huge', affiliation: 'hostile', geometry: { type: 'Polygon', coordinates: [hugeRing] } }), 413);
   });
 
   test('countries are ordered by position, and PATCH can reorder them', () => {
@@ -1381,46 +1051,10 @@ describe('exercise scenarios: kraje-composed countries, renamed places, one acti
 
   test('a place validates its kind and its coordinates', () => {
     const scenario = scenarioStore.createScenario({ name: 'Place test' });
-    expectStatus(
-      () =>
-        scenarioStore.createPlace(scenario.id, {
-          real_name: 'Brno',
-          kind: 'CITY',
-          lon: 16.6,
-          lat: 49.2,
-          name: 'X',
-        }),
-      400,
-    );
-    expectStatus(
-      () =>
-        scenarioStore.createPlace(scenario.id, {
-          real_name: 'Brno',
-          kind: 'city',
-          lon: 200,
-          lat: 49.2,
-          name: 'X',
-        }),
-      400,
-    );
-    expectStatus(
-      () =>
-        scenarioStore.createPlace(scenario.id, {
-          real_name: 'Brno',
-          kind: 'city',
-          lon: 16.6,
-          lat: 200,
-          name: 'X',
-        }),
-      400,
-    );
-    const place = scenarioStore.createPlace(scenario.id, {
-      real_name: 'Brno',
-      kind: 'city',
-      lon: 16.6,
-      lat: 49.2,
-      name: 'Brunograd',
-    });
+    expectStatus(() => scenarioStore.createPlace(scenario.id, { real_name: 'Brno', kind: 'CITY', lon: 16.6, lat: 49.2, name: 'X' }), 400);
+    expectStatus(() => scenarioStore.createPlace(scenario.id, { real_name: 'Brno', kind: 'city', lon: 200, lat: 49.2, name: 'X' }), 400);
+    expectStatus(() => scenarioStore.createPlace(scenario.id, { real_name: 'Brno', kind: 'city', lon: 16.6, lat: 200, name: 'X' }), 400);
+    const place = scenarioStore.createPlace(scenario.id, { real_name: 'Brno', kind: 'city', lon: 16.6, lat: 49.2, name: 'Brunograd' });
     const renamed = scenarioStore.updatePlace(place.id, { name: 'New name' });
     expect(renamed.name).toBe('New name');
   });
@@ -1428,17 +1062,8 @@ describe('exercise scenarios: kraje-composed countries, renamed places, one acti
   test('duplicating a scenario copies its countries and places, inactive and independent of the original', () => {
     const scenario = scenarioStore.createScenario({ name: 'Original' });
     scenarioStore.updateScenario(scenario.id, { active: true });
-    const country = scenarioStore.createCountry(scenario.id, {
-      name: 'Redland',
-      affiliation: 'hostile',
-    });
-    scenarioStore.createPlace(scenario.id, {
-      real_name: 'Brno',
-      kind: 'city',
-      lon: 16.6,
-      lat: 49.2,
-      name: 'Brunograd',
-    });
+    const country = scenarioStore.createCountry(scenario.id, { name: 'Redland', affiliation: 'hostile' });
+    scenarioStore.createPlace(scenario.id, { real_name: 'Brno', kind: 'city', lon: 16.6, lat: 49.2, name: 'Brunograd' });
 
     const copy = scenarioStore.duplicateScenario(scenario.id);
     expect(copy.name).toBe('Original (copy)');

@@ -112,7 +112,7 @@ export function createCollectionController(ctx) {
   }
 
   async function reassignCollectorOwner(collector, ownerCell) {
-    await requestJson(`${api}/collectors/${collector.id}`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/collectors/${collector.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
     await load();
     render();
   }

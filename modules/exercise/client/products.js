@@ -165,7 +165,7 @@ export function createProductsController(ctx) {
   }
 
   async function reassignIntsumOwner(intsum, ownerCell) {
-    await requestJson(`${api}/intsums/${intsum.id}`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/intsums/${intsum.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
     await load();
     render();
   }
