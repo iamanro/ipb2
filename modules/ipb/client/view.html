@@ -1,31 +1,38 @@
-<div class="workspace">
-  <aside class="control-panel" aria-label="IPB controls">
-    <div class="panel-heading">
-      <div>
-        <p class="eyebrow">Analyst workbench</p>
-        <h1 id="step-title">Define the environment</h1>
-      </div>
-      <button class="text-button" id="print-worksheet" type="button">Print worksheet</button>
+<div class="workspace" id="workspace" data-tools="open" data-worksheet="open">
+  <!-- Print-only classification marking, repeated on every printed page. -->
+  <div class="classification-banner classification-banner-top" id="classification-banner-top" aria-hidden="true"></div>
+  <div class="classification-banner classification-banner-bottom" id="classification-banner-bottom" aria-hidden="true"></div>
+  <!-- Relocated into #masthead-status on mount (buildMastheadStatus): the study
+       switcher and the active-scenario chip live in the masthead, next to the
+       source status, not floating over the map or duplicated in the panel. -->
+  <div class="masthead-study" id="masthead-study">
+    <button
+      class="study-toggle"
+      id="study-toggle"
+      type="button"
+      aria-haspopup="true"
+      aria-expanded="false"
+      aria-keyshortcuts="/"
+      title="Switch study (/)"
+    >
+      <span class="eyebrow">Study</span>
+      <strong id="study-name">No study selected</strong>
+    </button>
+    <div class="study-menu" id="study-menu" hidden>
+      <label class="search-field" for="study-search">
+        <span>Find or create <kbd>/</kbd></span>
+        <div class="search-control">
+          <span aria-hidden="true">⌕</span>
+          <input id="study-search" type="search" autocomplete="off" placeholder="Study name…" />
+        </div>
+      </label>
+      <div id="study-list" class="study-list"></div>
+      <button class="text-button" id="create-study" type="button">+ Create study</button>
     </div>
+  </div>
+  <div class="scenario-chip" id="scenario-chip" hidden></div>
 
-    <div class="study-bar">
-      <button class="study-toggle" id="study-toggle" type="button" aria-expanded="false">
-        <span class="eyebrow">Study</span>
-        <strong id="study-name">No study selected</strong>
-      </button>
-      <div class="study-menu" id="study-menu" hidden>
-        <label class="search-field" for="study-search">
-          <span>Find or create <kbd>/</kbd></span>
-          <div class="search-control">
-            <span aria-hidden="true">⌕</span>
-            <input id="study-search" type="search" autocomplete="off" placeholder="Study name…" />
-          </div>
-        </label>
-        <div id="study-list" class="study-list"></div>
-        <button class="text-button" id="create-study" type="button">+ Create study</button>
-      </div>
-    </div>
-
+  <aside class="control-panel" id="control-panel" aria-label="IPB controls">
     <nav class="step-nav" id="step-nav" aria-label="IPB steps">
       <button class="step-tab" data-step="1" type="button"><span>1</span>Environment</button>
       <button class="step-tab" data-step="2" type="button" disabled><span>2</span>Effects</button>
@@ -40,24 +47,88 @@
 
   <section class="map-panel" aria-label="Map">
     <div id="map-target" class="map-target"></div>
-    <div class="map-controls">
-      <div class="basemap-switch" id="basemap-switch" role="radiogroup" aria-label="Basemap"></div>
-      <details class="overlay-panel">
-        <summary>Layers</summary>
-        <div class="overlay-list" id="overlay-list"></div>
-      </details>
+    <div class="map-menu">
+      <button
+        class="map-menu-toggle"
+        id="map-menu-toggle"
+        type="button"
+        aria-haspopup="true"
+        aria-expanded="false"
+      >
+        Map · <span id="map-menu-label">Roads</span> <span aria-hidden="true">▾</span>
+      </button>
+      <div class="map-popover" id="map-popover" role="region" aria-label="Map layers" hidden>
+        <section class="map-popover-section">
+          <h3>Basemap</h3>
+          <div class="basemap-switch" id="basemap-switch" role="radiogroup" aria-label="Basemap"></div>
+        </section>
+        <section class="map-popover-section">
+          <h3>Overlays</h3>
+          <button class="grid-switch" id="grid-toggle" type="button" aria-pressed="true">MGRS grid</button>
+          <div class="overlay-list" id="overlay-list"></div>
+        </section>
+        <p class="map-popover-scenario" id="map-popover-scenario" hidden></p>
+      </div>
     </div>
-    <div class="map-overlay">
-      <div class="map-readout" id="map-readout">
-        <span class="readout-label">MGRS</span>
-        <span id="pointer-mgrs">—</span>
-        <button class="readout-toggle" id="grid-toggle" type="button" aria-pressed="true">
-          Grid
+    <div class="map-hint" id="map-hint" hidden></div>
+    <div class="map-click-info" id="map-click-info" hidden></div>
+
+    <!-- Bottom status bar: pointer position/elevation/scale, the map-tools
+         toolbar (measure/graphics/range rings), the sheet toggles, zoom and
+         the info/attribution popover. Replaces the previously scattered
+         bottom widgets. -->
+    <div class="status-bar" id="status-bar">
+      <div class="status-left">
+        <span class="status-item status-mgrs">
+          <span class="visually-hidden">Pointer MGRS</span>
+          <span id="pointer-mgrs">—</span>
+        </span>
+        <span class="status-item status-elevation">
+          <span class="visually-hidden">Elevation at pointer</span>
+          <span id="pointer-elevation">—</span>
+        </span>
+      </div>
+      <!-- Measure / tactical graphics / range rings; keyboard accessible, one active tool at a time. -->
+      <div id="map-tools" class="map-tools-toolbar status-center"></div>
+      <div class="status-right">
+        <button
+          class="sheet-toggle sheet-toggle-tools"
+          id="tools-toggle"
+          type="button"
+          aria-controls="control-panel"
+          aria-expanded="true"
+          title="Show or hide the tools ([)"
+          aria-keyshortcuts="["
+        >
+          <svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M6 2.5v11"/></svg><span class="visually-hidden">Tools</span>
+        </button>
+        <button
+          class="sheet-toggle sheet-toggle-worksheet"
+          id="worksheet-toggle"
+          type="button"
+          aria-controls="detail-panel"
+          aria-expanded="true"
+          title="Show or hide the worksheet (])"
+          aria-keyshortcuts="]"
+        >
+          <svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M10 2.5v11"/></svg><span class="visually-hidden">Worksheet</span>
+        </button>
+        <button class="zoom-button" id="zoom-out" type="button" aria-label="Zoom out">−</button>
+        <button class="zoom-button" id="zoom-in" type="button" aria-label="Zoom in">+</button>
+        <button
+          class="info-toggle"
+          id="info-toggle"
+          type="button"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-label="Map information and attribution"
+        >
+          ⓘ
         </button>
       </div>
-      <div class="map-hint" id="map-hint" hidden></div>
-      <div class="map-click-info" id="map-click-info" hidden></div>
+      <div class="info-popover" id="info-popover" role="region" aria-label="Map information" hidden></div>
     </div>
+
     <div class="map-empty" id="map-empty">
       <p class="eyebrow">No study open</p>
       <h2>Create or select a study</h2>
@@ -68,8 +139,12 @@
 
   <article class="detail-panel" id="detail-panel" aria-label="Worksheet">
     <header class="worksheet-heading">
-      <p class="eyebrow">IPB worksheet</p>
-      <h2 id="worksheet-study-name">No study open</h2>
+      <div>
+        <p class="eyebrow">IPB worksheet</p>
+        <h2 id="worksheet-study-name">No study open</h2>
+        <div class="worksheet-study-release" id="worksheet-study-release"></div>
+      </div>
+      <button class="text-button" id="print-worksheet" type="button">Print worksheet</button>
     </header>
     <!-- Filled from the live map just before printing; hidden on screen. -->
     <figure class="print-map" id="print-map"></figure>

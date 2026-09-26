@@ -1,7 +1,27 @@
+import {
+  DEFAULT_SIDC,
+  defaultThreatSidc,
+  formatSidc,
+  parseSidc,
+  withAffiliation,
+} from '../../../src/symbols/sidc.js';
 import { HttpError } from '../../../server/http.js';
+import {
+  assertCanEdit,
+  canRelease,
+  canSee,
+  isWhite,
+  liveCellsFor,
+  normalizeRelease,
+  ownerCellForCreate,
+  visibilitySql,
+} from '../../../server/policy.js';
 import { openState, transact } from '../../../server/state.js';
+import { sanitizeFilename, toGeoJson, toKml } from './export.js';
 import { MIGRATIONS } from './schema.js';
 
+// 'threat' is gone: the migration folds any existing rows into 'unit', and
+// threats are no longer drawn from a feature layer at all.
 const LAYERS = [
   'aoi',
   'mcoo',
@@ -11,15 +31,63 @@ const LAYERS = [
   'nai',
   'tai',
   'coa',
-  'threat',
   'note',
+  'unit',
+  'graphic',
+  'range-ring',
 ];
-const FEATURE_KINDS = ['point', 'line', 'polygon', 'symbol'];
+const FEATURE_KINDS = ['point', 'line', 'polygon', 'symbol', 'graphic', 'range-ring'];
 const COA_KINDS = ['most-likely', 'most-dangerous'];
 const OBSERVED_STATUSES = ['expected', 'observed', 'not-observed'];
 const ANALYSIS_KINDS = ['mobility', 'viewshed', 'line-of-sight'];
 const NOTE_STEPS = ['step1', 'step2', 'step3', 'step4'];
-const STUDY_PATCH_FIELDS = ['name', 'bounds', 'aoi', 'notes', 'weather_point'];
+const STUDY_PATCH_FIELDS = [
+  'name',
+  'bounds',
+  'aoi',
+  'notes',
+  'weather_point',
+  'h_hour',
+  'classification',
+  'weather_thresholds',
+];
+
+/** `properties.graphic` → the geometry GeoJSON must have (C5's TACTICAL_GRAPHICS,
+ * duplicated here as a server-side constant so this module never imports
+ * `src/tactical.js`, which pulls in OpenLayers). */
+const GRAPHIC_GEOMETRY = {
+  'phase-line': 'line',
+  boundary: 'line',
+  'axis-of-advance': 'line',
+  'direction-of-attack': 'line',
+  objective: 'polygon',
+  'assembly-area': 'polygon',
+  'battle-position': 'polygon',
+  'engagement-area': 'polygon',
+  minefield: 'polygon',
+  'obstacle-line': 'line',
+  block: 'line',
+  fix: 'line',
+  turn: 'line',
+  disrupt: 'line',
+};
+const GRAPHIC_KEYS = Object.keys(GRAPHIC_GEOMETRY);
+
+const ASCOPE_VALUES = ['areas', 'structures', 'capabilities', 'organizations', 'people', 'events'];
+const PMESII_VALUES = [
+  'political',
+  'military',
+  'economic',
+  'social',
+  'information',
+  'infrastructure',
+  'physical-environment',
+  'time',
+];
+
+const MAX_BULK_FEATURES = 2000;
+const MAX_RANGE_RING_RADII = 8;
+const MAX_RANGE_RING_METRES = 100_000;
 
 /**
  * One entry per child resource. This table is the whole point of the module:
@@ -46,6 +114,14 @@ const CHILDREN = {
       role: { type: 'string', required: false, nullable: true },
       equipment_identifier: { type: 'string', required: false, nullable: true },
       hvt: { type: 'boolean', required: false, default: false, storage: 'bool' },
+      sidc: {
+        type: 'sidc',
+        required: false,
+        nullable: true,
+        computeDefault: (values) => defaultThreatSidcFor(values.echelon),
+      },
+      orbat_unit_id: { type: 'loose-ref', required: false, nullable: true },
+      hpt: { type: 'boolean', required: false, default: false, storage: 'bool' },
       notes: { type: 'string', required: false, nullable: true },
     },
   },
@@ -64,8 +140,17 @@ const CHILDREN = {
     columns: {
       coa_id: { type: 'reference', table: 'coas', required: true },
       nai_feature_id: { type: 'reference', table: 'features', required: false, nullable: true },
+      tai_feature_id: { type: 'reference', table: 'features', required: false, nullable: true },
+      decision_point_id: {
+        type: 'reference',
+        table: 'decision_points',
+        required: false,
+        nullable: true,
+      },
       indicator: { type: 'string', required: true },
-      expected_time: { type: 'string', required: false, nullable: true },
+      // At most one of these is set; validated in `validateEventTimePair`.
+      expected_at: { type: 'datetime', required: false, nullable: true },
+      expected_offset: { type: 'integer', required: false, nullable: true },
       observed_status: {
         type: 'enum',
         values: OBSERVED_STATUSES,
@@ -106,9 +191,61 @@ const CHILDREN = {
       lat: { type: 'number', required: true, min: -90, max: 90 },
     },
   },
+  phases: {
+    table: 'phases',
+    ordinal: true,
+    columns: {
+      name: { type: 'string', required: true, nonEmpty: true },
+      start_offset: { type: 'integer', required: true },
+      end_offset: { type: 'integer', required: false, nullable: true },
+    },
+  },
+  /** kind key uses the endpoint's spelling; the table is `decision_points`. */
+  'decision-points': {
+    table: 'decision_points',
+    ordinal: true,
+    columns: {
+      name: { type: 'string', required: true, nonEmpty: true },
+      description: { type: 'string', required: false, nullable: true },
+      coa_id: { type: 'reference', table: 'coas', required: false, nullable: true },
+      nai_feature_id: { type: 'reference', table: 'features', required: false, nullable: true },
+      tai_feature_id: { type: 'reference', table: 'features', required: false, nullable: true },
+      // At most one of each pair is set; validated in `validateDecisionPointTimes`.
+      earliest_at: { type: 'datetime', required: false, nullable: true },
+      earliest_offset: { type: 'integer', required: false, nullable: true },
+      latest_at: { type: 'datetime', required: false, nullable: true },
+      latest_offset: { type: 'integer', required: false, nullable: true },
+      decision: { type: 'string', required: false, nullable: true },
+    },
+  },
+  /** One upserted cell per (ascope, pmesii); see `createChild`'s special case. */
+  'civil-considerations': {
+    table: 'civil_considerations',
+    ordinal: false,
+    columns: {
+      ascope: { type: 'enum', values: ASCOPE_VALUES, required: true },
+      pmesii: { type: 'enum', values: PMESII_VALUES, required: true },
+      text: { type: 'string', required: false, default: '' },
+    },
+  },
 };
 
 let database;
+
+/** C4: a mutation attaches the cells a live event about it should reach as a
+ * Symbol-keyed property (never enumerated by `JSON.stringify`, so it rides
+ * along on the return value without leaking into the HTTP response body);
+ * `routes.js` reads it via `readLiveCells` and sets `request.liveCells`. */
+export const LIVE_CELLS = Symbol('liveCells');
+
+function withLiveCells(result, cells) {
+  Object.defineProperty(result, LIVE_CELLS, { value: cells, enumerable: false });
+  return result;
+}
+
+export function readLiveCells(result) {
+  return result?.[LIVE_CELLS];
+}
 
 // -- lifecycle --------------------------------------------------------------
 
@@ -124,6 +261,11 @@ export function openStore(file) {
     updateChild,
     deleteChild,
     reorderChild,
+    bulkCreateFeatures,
+    exportGeoJson,
+    exportKml,
+    releaseStudy,
+    reassignStudy,
     close,
   };
 }
@@ -237,9 +379,51 @@ function validateFieldValue(name, value, spec) {
     case 'reference':
       if (!Number.isInteger(value)) throw new HttpError(400, `${name} must be an integer id.`);
       return value;
+    case 'sidc': {
+      const normalized = normalizeSidc(value);
+      if (!normalized) throw new HttpError(400, `${name} must be a 20-digit SIDC.`);
+      return normalized;
+    }
+    case 'loose-ref':
+      // An id from another module's own database: stored, never dereferenced.
+      if (typeof value === 'number' && Number.isInteger(value)) return String(value);
+      if (typeof value === 'string' && value.trim()) return value;
+      throw new HttpError(400, `${name} must be a non-empty string or integer id.`);
+    case 'datetime':
+      if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+        throw new HttpError(400, `${name} must be an ISO 8601 date-time string.`);
+      }
+      return value;
+    case 'integer':
+      if (!Number.isInteger(value)) throw new HttpError(400, `${name} must be an integer.`);
+      if (spec.min !== undefined && value < spec.min) {
+        throw new HttpError(400, `${name} must be at least ${spec.min}.`);
+      }
+      if (spec.max !== undefined && value > spec.max) {
+        throw new HttpError(400, `${name} must be at most ${spec.max}.`);
+      }
+      return value;
     default:
       return value;
   }
+}
+
+/** `text` (with optional space/dash separators) as a canonical 20-digit SIDC, or null. */
+function normalizeSidc(value) {
+  const parts = parseSidc(value);
+  return parts ? formatSidc(parts) : null;
+}
+
+/** A threat's default SIDC: hostile, at `echelon` when that's a known IPB echelon name. */
+function defaultThreatSidcFor(echelon) {
+  if (typeof echelon === 'string' && echelon) {
+    try {
+      return defaultThreatSidc(echelon);
+    } catch {
+      // Not one of the amplifier-code echelon names: fall through.
+    }
+  }
+  return withAffiliation(DEFAULT_SIDC, 'hostile');
 }
 
 /** Validate a child body against its kind's column table. `partial` skips required checks. */
@@ -259,6 +443,7 @@ function validateBody(kind, body, partial) {
       if (name in values) continue;
       if (spec.required) throw new HttpError(400, `${name} is required.`);
       if ('default' in spec) values[name] = spec.default;
+      else if (spec.computeDefault) values[name] = spec.computeDefault(values);
     }
   }
   return values;
@@ -292,10 +477,140 @@ function nextOrdinal(table, studyId) {
     .get(studyId).next;
 }
 
-function assertStudyExists(id) {
-  if (!database.prepare('SELECT 1 FROM studies WHERE id = ?').get(id)) {
+/** `{ owner_cell, releasable_to: array }` from a raw studies row, for `canSee`/`canRelease`/`liveCellsFor`. */
+function studyPolicyItem(row) {
+  return { owner_cell: row.owner_cell, releasable_to: JSON.parse(row.releasable_to) };
+}
+
+/**
+ * The raw study row if it exists AND `user` can see it; otherwise a 404 —
+ * never a 403, so a study a user can't see is indistinguishable from one
+ * that doesn't exist (C2's "ids don't leak").
+ */
+function assertStudyVisible(id, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  const row = database.prepare('SELECT * FROM studies WHERE id = ?').get(id);
+  if (!row || !canSee(user, studyPolicyItem(row))) {
     throw new HttpError(404, `Study ${id} not found.`);
   }
+  return row;
+}
+
+// -- kind-specific validation ------------------------------------------------
+//
+// The column table in `CHILDREN` covers uniform per-field checks; a few
+// resources also need cross-field or nested-JSON rules. `runPostValidate`
+// runs last, against the *effective* row (existing values merged with the
+// patch, for updates) so a PATCH that only touches one side of an invariant
+// is still checked against the whole row.
+//
+// The legacy free-text `expected_time` input (parsed into `expected_at`/
+// `expected_offset` server-side) has been removed: wave 2 clients send
+// `expected_at`/`expected_offset` directly, and `expected_time` is now an
+// unknown field like any other (rejected by `validateBody`).
+
+function matchesGeometryKind(geometry, expectedKind) {
+  if (!geometry || typeof geometry.type !== 'string') return false;
+  if (expectedKind === 'line')
+    return geometry.type === 'LineString' || geometry.type === 'MultiLineString';
+  return geometry.type === 'Polygon' || geometry.type === 'MultiPolygon';
+}
+
+function validateRadii(radii) {
+  if (!Array.isArray(radii) || radii.length < 1 || radii.length > MAX_RANGE_RING_RADII) {
+    throw new HttpError(
+      400,
+      `properties.radii must be an array of 1 to ${MAX_RANGE_RING_RADII} numbers.`,
+    );
+  }
+  let previous = 0;
+  for (const radius of radii) {
+    if (!Number.isFinite(radius) || radius <= previous || radius > MAX_RANGE_RING_METRES) {
+      throw new HttpError(
+        400,
+        `properties.radii must be ascending positive metres, each at most ${MAX_RANGE_RING_METRES}.`,
+      );
+    }
+    previous = radius;
+  }
+}
+
+/**
+ * `unit`/`graphic`/`range-ring` layers each need their `properties` and
+ * geometry to match their kind; any feature's `properties.coa_id` (the
+ * SITEMP layering) must name a COA in the same study.
+ */
+function validateFeatureSemantics(studyId, effective) {
+  const { layer, kind, geometry, properties } = effective;
+  const props = properties && typeof properties === 'object' ? properties : {};
+  if (layer === 'unit') {
+    if (kind !== 'symbol') throw new HttpError(400, 'A unit feature must have kind "symbol".');
+    const canonicalSidc = typeof props.sidc === 'string' ? normalizeSidc(props.sidc) : null;
+    if (!canonicalSidc) {
+      throw new HttpError(400, 'A unit feature requires a valid properties.sidc.');
+    }
+    // Canonicalize (e.g. a grouped/dashed SIDC copied from elsewhere) so
+    // every reader — the map, exports, other clients — sees one dense
+    // 20-digit form regardless of how it was typed.
+    props.sidc = canonicalSidc;
+  } else if (layer === 'graphic') {
+    if (kind !== 'graphic') {
+      throw new HttpError(400, 'A graphic feature must have kind "graphic".');
+    }
+    const geometryKind = GRAPHIC_GEOMETRY[props.graphic];
+    if (!geometryKind) {
+      throw new HttpError(400, `properties.graphic must be one of: ${GRAPHIC_KEYS.join(', ')}.`);
+    }
+    if (!matchesGeometryKind(geometry, geometryKind)) {
+      throw new HttpError(400, `A "${props.graphic}" graphic must be a ${geometryKind}.`);
+    }
+  } else if (layer === 'range-ring') {
+    if (kind !== 'range-ring') {
+      throw new HttpError(400, 'A range-ring feature must have kind "range-ring".');
+    }
+    if (!geometry || geometry.type !== 'Point') {
+      throw new HttpError(400, 'A range-ring feature must be a Point.');
+    }
+    validateRadii(props.radii);
+  }
+  if (props.coa_id !== undefined && props.coa_id !== null) {
+    if (!Number.isInteger(props.coa_id)) {
+      throw new HttpError(400, 'properties.coa_id must be an integer id.');
+    }
+    assertReference({ table: 'coas' }, props.coa_id, studyId);
+  }
+}
+
+// A field absent from a create body (no default, unset) and one explicitly
+// patched to null both mean "unset": loose equality treats undefined the same.
+function validateEventTimePair(effective) {
+  if (effective.expected_at != null && effective.expected_offset != null) {
+    throw new HttpError(400, 'An event may have expected_at or expected_offset, not both.');
+  }
+}
+
+function validateDecisionPointTimes(effective) {
+  if (effective.earliest_at != null && effective.earliest_offset != null) {
+    throw new HttpError(400, 'A decision point may have earliest_at or earliest_offset, not both.');
+  }
+  if (effective.latest_at != null && effective.latest_offset != null) {
+    throw new HttpError(400, 'A decision point may have latest_at or latest_offset, not both.');
+  }
+}
+
+function runPostValidate(kind, effective, studyId) {
+  if (kind === 'features') validateFeatureSemantics(studyId, effective);
+  else if (kind === 'events') validateEventTimePair(effective);
+  else if (kind === 'decision-points') validateDecisionPointTimes(effective);
+}
+
+/** The full row a PATCH would produce: `row`'s decoded columns, overwritten by `values`. */
+function mergeEffective(kind, row, values) {
+  const config = CHILDREN[kind];
+  const effective = {};
+  for (const [name, spec] of Object.entries(config.columns)) {
+    effective[name] = name in values ? values[name] : readValue(spec, row[name]);
+  }
+  return effective;
 }
 
 // -- the single write path ---------------------------------------------------
@@ -333,58 +648,71 @@ function readStudyRow(id) {
     aoi: row.aoi ? JSON.parse(row.aoi) : null,
     notes: JSON.parse(row.notes),
     weather_point: row.weather_point ? JSON.parse(row.weather_point) : null,
+    h_hour: row.h_hour ?? null,
+    classification: row.classification,
+    weather_thresholds: row.weather_thresholds ? JSON.parse(row.weather_thresholds) : null,
+    owner_cell: row.owner_cell,
+    releasable_to: JSON.parse(row.releasable_to),
     revision: row.revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-function listStudies() {
+function listStudies(user = { admin: true, cell: 'white', role: 'game-master' }) {
+  const { sql, params } = visibilitySql(user, { alias: 's' });
   const rows = database
     .prepare(
-      `SELECT s.id, s.name, s.bounds, s.updated_at,
+      `SELECT s.id, s.name, s.bounds, s.updated_at, s.owner_cell, s.releasable_to,
               (SELECT count(*) FROM features WHERE study_id = s.id) AS feature_count,
               (SELECT count(*) FROM coas WHERE study_id = s.id) AS coa_count
        FROM studies AS s
+       WHERE ${sql}
        ORDER BY s.updated_at DESC, s.id DESC`,
     )
-    .all();
+    .all(...params);
   return {
     items: rows.map((row) => ({
       id: row.id,
       name: row.name,
       bounds: row.bounds ? JSON.parse(row.bounds) : null,
       updated_at: row.updated_at,
+      owner_cell: row.owner_cell,
+      releasable_to: JSON.parse(row.releasable_to),
       feature_count: row.feature_count,
       coa_count: row.coa_count,
     })),
   };
 }
 
-function createStudy(body) {
+function createStudy(body, user = { admin: true, cell: 'white', role: 'game-master' }) {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     throw new HttpError(400, 'A JSON object body is required.');
   }
   for (const key of Object.keys(body)) {
-    if (!['name', 'bounds'].includes(key)) throw new HttpError(400, `Unknown field: ${key}.`);
+    if (!['name', 'bounds', 'owner_cell'].includes(key)) {
+      throw new HttpError(400, `Unknown field: ${key}.`);
+    }
   }
   if (typeof body.name !== 'string' || !body.name.trim()) {
     throw new HttpError(400, 'name is required.');
   }
   const bounds = validateBounds(body.bounds ?? null);
+  const ownerCell = ownerCellForCreate(user, body.owner_cell);
   return transact(database, () => {
     const timestamp = new Date().toISOString();
     const info = database
       .prepare(
-        `INSERT INTO studies (name, bounds, aoi, notes, revision, created_at, updated_at)
-         VALUES (?, ?, NULL, '{}', 1, ?, ?)`,
+        `INSERT INTO studies
+           (name, bounds, aoi, notes, revision, created_at, updated_at, owner_cell, releasable_to)
+         VALUES (?, ?, NULL, '{}', 1, ?, ?, ?, '[]')`,
       )
-      .run(body.name, bounds ? JSON.stringify(bounds) : null, timestamp, timestamp);
+      .run(body.name, bounds ? JSON.stringify(bounds) : null, timestamp, timestamp, ownerCell);
     const id = info.lastInsertRowid;
     database
       .prepare('INSERT INTO activity (study_id, at, action, target, detail) VALUES (?, ?, ?, ?, ?)')
       .run(id, timestamp, 'create', `study:${id}`, null);
-    return readStudyRow(id);
+    return withLiveCells(readStudyRow(id), [ownerCell]);
   });
 }
 
@@ -411,6 +739,19 @@ function validateStudyPatch(patch) {
       fields.notes = validateNotes(value);
     } else if (key === 'weather_point') {
       fields.weather_point = validateWeatherPoint(value);
+    } else if (key === 'h_hour') {
+      if (value !== null && (typeof value !== 'string' || Number.isNaN(Date.parse(value)))) {
+        throw new HttpError(400, 'h_hour must be an ISO 8601 date-time string, or null.');
+      }
+      fields.h_hour = value;
+    } else if (key === 'classification') {
+      if (typeof value !== 'string') throw new HttpError(400, 'classification must be a string.');
+      fields.classification = value;
+    } else if (key === 'weather_thresholds') {
+      if (value !== null && (typeof value !== 'object' || Array.isArray(value))) {
+        throw new HttpError(400, 'weather_thresholds must be a JSON object, or null.');
+      }
+      fields.weather_thresholds = value;
     }
   }
   return fields;
@@ -439,34 +780,101 @@ function applyStudyPatch(id, fields) {
     assignments.push('weather_point = ?');
     params.push(fields.weather_point ? JSON.stringify(fields.weather_point) : null);
   }
+  if ('h_hour' in fields) {
+    assignments.push('h_hour = ?');
+    params.push(fields.h_hour);
+  }
+  if ('classification' in fields) {
+    assignments.push('classification = ?');
+    params.push(fields.classification);
+  }
+  if ('weather_thresholds' in fields) {
+    assignments.push('weather_thresholds = ?');
+    params.push(fields.weather_thresholds ? JSON.stringify(fields.weather_thresholds) : null);
+  }
   if (!assignments.length) return;
   database.prepare(`UPDATE studies SET ${assignments.join(', ')} WHERE id = ?`).run(...params, id);
 }
 
-function updateStudy(id, patch) {
+function updateStudy(id, patch, user = { admin: true, cell: 'white', role: 'game-master' }) {
   const fields = validateStudyPatch(patch);
   return mutate(
     id,
     'update',
     `study:${id}`,
     () => {
-      assertStudyExists(id);
+      const row = assertStudyVisible(id, user);
+      assertCanEdit(user, studyPolicyItem(row));
       applyStudyPatch(id, fields);
     },
     () => readStudyRow(id),
   );
 }
 
-function deleteStudy(id) {
+function deleteStudy(id, user = { admin: true, cell: 'white', role: 'game-master' }) {
   return mutate(
     id,
     'delete',
     `study:${id}`,
     () => {
-      assertStudyExists(id);
+      const row = assertStudyVisible(id, user);
+      assertCanEdit(user, studyPolicyItem(row));
       database.prepare('DELETE FROM studies WHERE id = ?').run(id);
     },
     () => ({ deleted: true }),
+  );
+}
+
+/** `POST studies/:id/release {cells}`: replaces `releasable_to`. C3: White, or an
+ * analyst-or-above member of the owning cell. */
+function releaseStudy(id, cells, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  const row = assertStudyVisible(id, user);
+  if (!canRelease(user, studyPolicyItem(row))) {
+    throw new HttpError(403, 'You may not release this study.');
+  }
+  const before = liveCellsFor(studyPolicyItem(row));
+  const normalized = normalizeRelease(cells, row.owner_cell);
+  return mutate(
+    id,
+    'release',
+    `study:${id}`,
+    () => {
+      database
+        .prepare('UPDATE studies SET releasable_to = ? WHERE id = ?')
+        .run(JSON.stringify(normalized), id);
+    },
+    () => {
+      const study = readStudyRow(id);
+      const cellsAfter = liveCellsFor(study);
+      return withLiveCells(study, [...new Set([...before, ...cellsAfter])]);
+    },
+  );
+}
+
+/** `PATCH studies/:id/owner {owner_cell}`: White-only reassignment. */
+function reassignStudy(id, ownerCell, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  const row = assertStudyVisible(id, user);
+  if (!isWhite(user)) throw new HttpError(403, 'Only White may reassign a study.');
+  if (!['white', 'blue', 'red'].includes(ownerCell)) {
+    throw new HttpError(400, `Unknown cell: ${ownerCell}`);
+  }
+  const before = liveCellsFor(studyPolicyItem(row));
+  const existingReleasable = JSON.parse(row.releasable_to);
+  const normalizedReleasable = normalizeRelease(existingReleasable, ownerCell);
+  return mutate(
+    id,
+    'reassign',
+    `study:${id}`,
+    () => {
+      database
+        .prepare('UPDATE studies SET owner_cell = ?, releasable_to = ? WHERE id = ?')
+        .run(ownerCell, JSON.stringify(normalizedReleasable), id);
+    },
+    () => {
+      const study = readStudyRow(id);
+      const cellsAfter = liveCellsFor(study);
+      return withLiveCells(study, [...new Set([...before, ...cellsAfter])]);
+    },
   );
 }
 
@@ -493,9 +901,9 @@ function listChildren(kind, studyId) {
   return rows.map((row) => shapeChildRow(kind, row));
 }
 
-function readStudy(id) {
+function readStudy(id, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  assertStudyVisible(id, user);
   const study = readStudyRow(id);
-  if (!study) throw new HttpError(404, `Study ${id} not found.`);
   return {
     study,
     features: listChildren('features', id),
@@ -505,6 +913,9 @@ function readStudy(id) {
     analyses: listChildren('analyses', id),
     layers: listChildren('layers', id),
     points: listChildren('points', id),
+    phases: listChildren('phases', id),
+    decision_points: listChildren('decision-points', id),
+    civil_considerations: listChildren('civil-considerations', id),
   };
 }
 
@@ -516,59 +927,118 @@ function readChildRow(kind, id) {
 
 // -- children -------------------------------------------------------------------
 
-function createChild(kind, studyId, body) {
-  const config = childConfig(kind);
+/**
+ * Insert one already-validated row: reference and kind-specific semantic
+ * checks, then the INSERT. Shared by `createChild` and the bulk feature
+ * import, so a bulk request validates and inserts each feature exactly the
+ * way a single `POST` would.
+ */
+function insertChildRow(kind, studyId, values) {
+  const config = CHILDREN[kind];
+  for (const [name, spec] of Object.entries(config.columns)) {
+    if (spec.type === 'reference' && values[name] !== null && values[name] !== undefined) {
+      assertReference(spec, values[name], studyId);
+    }
+  }
+  runPostValidate(kind, values, studyId);
+  const columnNames = Object.keys(config.columns);
+  const timestamp = new Date().toISOString();
+  const insertColumns = [
+    'study_id',
+    ...columnNames,
+    ...(config.ordinal ? ['ordinal'] : []),
+    'created_at',
+    ...(config.hasUpdatedAt !== false ? ['updated_at'] : []),
+  ];
+  const params = [
+    studyId,
+    ...columnNames.map((name) => storeValue(config.columns[name], values[name])),
+    ...(config.ordinal ? [nextOrdinal(config.table, studyId)] : []),
+    timestamp,
+    ...(config.hasUpdatedAt !== false ? [timestamp] : []),
+  ];
+  const info = database
+    .prepare(
+      `INSERT INTO ${config.table} (${insertColumns.join(', ')})
+       VALUES (${insertColumns.map(() => '?').join(', ')})`,
+    )
+    .run(...params);
+  return info.lastInsertRowid;
+}
+
+/** civil-considerations has no independent id namespace worth exposing: `POST` upserts the cell. */
+function upsertCivilConsiderationRow(studyId, values) {
+  const config = CHILDREN['civil-considerations'];
+  const existing = database
+    .prepare(`SELECT id FROM ${config.table} WHERE study_id = ? AND ascope = ? AND pmesii = ?`)
+    .get(studyId, values.ascope, values.pmesii);
+  const timestamp = new Date().toISOString();
+  if (existing) {
+    database
+      .prepare(`UPDATE ${config.table} SET text = ?, updated_at = ? WHERE id = ?`)
+      .run(values.text, timestamp, existing.id);
+    return existing.id;
+  }
+  const info = database
+    .prepare(
+      `INSERT INTO ${config.table} (study_id, ascope, pmesii, text, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(studyId, values.ascope, values.pmesii, values.text, timestamp, timestamp);
+  return info.lastInsertRowid;
+}
+
+function createChild(kind, studyId, body, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  childConfig(kind);
+  const study = assertStudyVisible(studyId, user);
+  assertCanEdit(user, studyPolicyItem(study));
   const values = validateBody(kind, body, false);
-  let insertedId;
+  let resultId;
   return mutate(
     studyId,
     'create',
-    () => `${kind}:${insertedId}`,
+    () => `${kind}:${resultId}`,
     () => {
-      assertStudyExists(studyId);
-      for (const [name, spec] of Object.entries(config.columns)) {
-        if (spec.type === 'reference' && values[name] !== null && values[name] !== undefined) {
-          assertReference(spec, values[name], studyId);
-        }
-      }
-      const columnNames = Object.keys(config.columns);
-      const timestamp = new Date().toISOString();
-      const insertColumns = [
-        'study_id',
-        ...columnNames,
-        ...(config.ordinal ? ['ordinal'] : []),
-        'created_at',
-        ...(config.hasUpdatedAt !== false ? ['updated_at'] : []),
-      ];
-      const params = [
-        studyId,
-        ...columnNames.map((name) => storeValue(config.columns[name], values[name])),
-        ...(config.ordinal ? [nextOrdinal(config.table, studyId)] : []),
-        timestamp,
-        ...(config.hasUpdatedAt !== false ? [timestamp] : []),
-      ];
-      const info = database
-        .prepare(
-          `INSERT INTO ${config.table} (${insertColumns.join(', ')})
-           VALUES (${insertColumns.map(() => '?').join(', ')})`,
-        )
-        .run(...params);
-      insertedId = info.lastInsertRowid;
+      resultId =
+        kind === 'civil-considerations'
+          ? upsertCivilConsiderationRow(studyId, values)
+          : insertChildRow(kind, studyId, values);
     },
-    () => readChildRow(kind, insertedId),
+    () => withLiveCells(readChildRow(kind, resultId), liveCellsFor(studyPolicyItem(study))),
   );
 }
 
-function updateChild(kind, id, patch) {
+/** The parent study row for a child, visibility-checked; a child whose study
+ * isn't visible reads exactly like an unknown child id (no id leak). */
+function assertChildVisible(kind, id, user = { admin: true, cell: 'white', role: 'game-master' }) {
   const config = childConfig(kind);
   const row = database.prepare(`SELECT * FROM ${config.table} WHERE id = ?`).get(id);
   if (!row) throw new HttpError(404, `Unknown ${kind} id ${id}.`);
+  const study = database.prepare('SELECT * FROM studies WHERE id = ?').get(row.study_id);
+  if (!study || !canSee(user, studyPolicyItem(study))) {
+    throw new HttpError(404, `Unknown ${kind} id ${id}.`);
+  }
+  return { row, study };
+}
+
+/** `assertChildVisible` plus C2b: 403 (release is read-only) when the
+ * child's study is visible but not owned by (or White for) `user`. */
+function assertChildEditable(kind, id, user) {
+  const { row, study } = assertChildVisible(kind, id, user);
+  assertCanEdit(user, studyPolicyItem(study));
+  return { row, study };
+}
+
+function updateChild(kind, id, patch, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  const config = childConfig(kind);
+  const { row, study } = assertChildEditable(kind, id, user);
   const values = validateBody(kind, patch, true);
   for (const [name, spec] of Object.entries(config.columns)) {
     if (spec.type === 'reference' && name in values && values[name] !== null) {
       assertReference(spec, values[name], row.study_id);
     }
   }
+  runPostValidate(kind, mergeEffective(kind, row, values), row.study_id);
   return mutate(
     row.study_id,
     'update',
@@ -586,8 +1056,53 @@ function updateChild(kind, id, patch) {
         .prepare(`UPDATE ${config.table} SET ${assignments.join(', ')} WHERE id = ?`)
         .run(...params, id);
     },
-    () => readChildRow(kind, id),
+    () => withLiveCells(readChildRow(kind, id), liveCellsFor(studyPolicyItem(study))),
   );
+}
+
+/** `POST studies/:id/features/bulk`: validated like single creates, all or nothing. */
+function bulkCreateFeatures(studyId, items, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  const study = assertStudyVisible(studyId, user);
+  assertCanEdit(user, studyPolicyItem(study));
+  if (!Array.isArray(items)) throw new HttpError(400, 'features must be an array.');
+  if (!items.length) throw new HttpError(400, 'features must not be empty.');
+  if (items.length > MAX_BULK_FEATURES) {
+    throw new HttpError(400, `features must not exceed ${MAX_BULK_FEATURES} items.`);
+  }
+  const prepared = items.map((body) => validateBody('features', body, false));
+  const insertedIds = [];
+  return mutate(
+    studyId,
+    'create',
+    () => `features:bulk:${insertedIds.length}`,
+    () => {
+      for (const values of prepared) {
+        insertedIds.push(insertChildRow('features', studyId, values));
+      }
+    },
+    () =>
+      withLiveCells(
+        { items: insertedIds.map((id) => readChildRow('features', id)) },
+        liveCellsFor(studyPolicyItem(study)),
+      ),
+  );
+}
+
+function exportGeoJson(studyId, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  assertStudyVisible(studyId, user);
+  const study = readStudyRow(studyId);
+  const features = listChildren('features', studyId);
+  return {
+    body: JSON.stringify(toGeoJson(study, features), null, 2),
+    filename: `${sanitizeFilename(study.name)}.geojson`,
+  };
+}
+
+function exportKml(studyId, user = { admin: true, cell: 'white', role: 'game-master' }) {
+  assertStudyVisible(studyId, user);
+  const study = readStudyRow(studyId);
+  const features = listChildren('features', studyId);
+  return { body: toKml(study, features), filename: `${sanitizeFilename(study.name)}.kml` };
 }
 
 /**
@@ -595,14 +1110,13 @@ function updateChild(kind, id, patch) {
  * constraint on `ordinal`, so a plain two-row swap is safe: nothing else
  * reads ordinals except `ORDER BY ordinal, id`.
  */
-function reorderChild(kind, id, direction) {
+function reorderChild(kind, id, direction, user = { admin: true, cell: 'white', role: 'game-master' }) {
   const config = childConfig(kind);
   if (!config.ordinal) throw new HttpError(400, `${kind} does not support reordering.`);
   if (direction !== 'up' && direction !== 'down') {
     throw new HttpError(400, 'direction must be "up" or "down".');
   }
-  const row = database.prepare(`SELECT * FROM ${config.table} WHERE id = ?`).get(id);
-  if (!row) throw new HttpError(404, `Unknown ${kind} id ${id}.`);
+  const { row, study } = assertChildEditable(kind, id, user);
 
   const comparator = direction === 'up' ? '<' : '>';
   const order = direction === 'up' ? 'DESC' : 'ASC';
@@ -614,7 +1128,12 @@ function reorderChild(kind, id, direction) {
     )
     .get(row.study_id, row.ordinal);
   // Already first or last: a no-op, not an error.
-  if (!neighbor) return { items: listChildren(kind, row.study_id) };
+  if (!neighbor) {
+    return withLiveCells(
+      { items: listChildren(kind, row.study_id) },
+      liveCellsFor(studyPolicyItem(study)),
+    );
+  }
 
   return mutate(
     row.study_id,
@@ -628,14 +1147,17 @@ function reorderChild(kind, id, direction) {
         .prepare(`UPDATE ${config.table} SET ordinal = ? WHERE id = ?`)
         .run(row.ordinal, neighbor.id);
     },
-    () => ({ items: listChildren(kind, row.study_id) }),
+    () =>
+      withLiveCells(
+        { items: listChildren(kind, row.study_id) },
+        liveCellsFor(studyPolicyItem(study)),
+      ),
   );
 }
 
-function deleteChild(kind, id) {
+function deleteChild(kind, id, user = { admin: true, cell: 'white', role: 'game-master' }) {
   const config = childConfig(kind);
-  const row = database.prepare(`SELECT study_id FROM ${config.table} WHERE id = ?`).get(id);
-  if (!row) throw new HttpError(404, `Unknown ${kind} id ${id}.`);
+  const { row, study } = assertChildEditable(kind, id, user);
   return mutate(
     row.study_id,
     'delete',
@@ -643,6 +1165,6 @@ function deleteChild(kind, id) {
     () => {
       database.prepare(`DELETE FROM ${config.table} WHERE id = ?`).run(id);
     },
-    () => ({ deleted: true }),
+    () => withLiveCells({ deleted: true }, liveCellsFor(studyPolicyItem(study))),
   );
 }

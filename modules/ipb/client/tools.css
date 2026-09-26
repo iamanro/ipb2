@@ -1,0 +1,480 @@
+/* Styles for the IpbClientA-owned features: civil considerations matrix,
+ * weather effects matrix, map tools toolbar (measure / graphics / range
+ * rings), import-export, and the classification banner. Same layer and
+ * `[data-module='ipb']` scope as styles.css, same design tokens. */
+@layer components {
+  [data-module='ipb'] {
+    /* -- Civil considerations matrix (step 2) -------------------------- */
+
+    .civil-matrix-wrap {
+      overflow-x: auto;
+    }
+
+    .civil-matrix {
+      min-width: 720px;
+    }
+
+    .civil-matrix th {
+      vertical-align: top;
+    }
+
+    .civil-matrix td {
+      min-width: 130px;
+      padding: 4px;
+      vertical-align: top;
+    }
+
+    .civil-matrix textarea {
+      width: 100%;
+      min-height: 56px;
+      resize: vertical;
+      font-size: var(--t-xs);
+    }
+
+    .civil-matrix-row-label {
+      white-space: nowrap;
+      text-align: left;
+    }
+
+    /* -- Weather effects matrix (step 1) -------------------------------- */
+
+    .weather-thresholds {
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .weather-thresholds summary {
+      cursor: pointer;
+      padding: 8px 10px;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1.2 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .weather-threshold-form {
+      display: grid;
+      gap: 8px;
+      padding: 0 10px 10px;
+    }
+
+    .weather-threshold-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .weather-threshold-label {
+      flex: 1 0 150px;
+      font-weight: 500;
+    }
+
+    .weather-threshold-field {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font: var(--t-xs) / 1.2 var(--body);
+    }
+
+    .weather-threshold-field input {
+      width: 72px;
+      min-height: 26px;
+      border: 1px solid var(--line-dark);
+      padding: 2px 6px;
+      background: var(--paper);
+      color: var(--ink);
+      font: var(--t-xs) / 1.2 var(--data);
+    }
+
+    .weather-threshold-field input:disabled {
+      opacity: 0.6;
+    }
+
+    .weather-thresholds > .text-button {
+      margin: 0 10px 10px;
+    }
+
+    .weather-effects-wrap {
+      overflow-x: auto;
+    }
+
+    .weather-effects-matrix {
+      min-width: 780px;
+    }
+
+    .weather-effects-row-label {
+      white-space: nowrap;
+      text-align: left;
+      color: var(--ink);
+      font-weight: 500;
+    }
+
+    .weather-effects-cell {
+      padding: 0 !important;
+      text-align: center;
+    }
+
+    .weather-effects-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      min-height: 26px;
+      margin: 3px;
+      font: 700 var(--t-xs) / 1 var(--data);
+    }
+
+    .weather-effects-cell.rating-favourable .weather-effects-badge {
+      color: var(--ok);
+      background: var(--ok-bg);
+    }
+
+    .weather-effects-cell.rating-marginal .weather-effects-badge {
+      color: var(--caution);
+      background: var(--caution-bg);
+    }
+
+    .weather-effects-cell.rating-unfavourable .weather-effects-badge {
+      color: var(--danger);
+      background: var(--danger-bg);
+    }
+
+    /* -- Map tools toolbar (measure / graphics / range rings) --------- */
+
+    /* Left-centre of the status bar, as three compact buttons; flyouts open
+     * upward from the bar rather than floating over the map. */
+    .map-tools-toolbar {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .map-tools-row {
+      display: flex;
+      gap: 4px;
+    }
+
+    .map-tool-panel-host:not(:empty) {
+      position: absolute;
+      z-index: 6;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      translate: -50% 0;
+    }
+
+    .map-tool-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-width: var(--target);
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      padding: 0 8px;
+      background: transparent;
+      color: var(--ink);
+      font: 500 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+    }
+
+    /* Squeezed between both open sheets: icons only (the title and the
+     * visually hidden word below still name each button). */
+    @container status-bar (max-width: 760px) {
+      .map-tool-button {
+        padding: 0;
+      }
+
+      .map-tool-button .map-tool-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+    }
+
+    .map-tool-button:hover:not(:disabled) {
+      border-color: var(--blue-dark);
+      background: var(--surface-hover);
+    }
+
+    .map-tool-button[aria-pressed='true'] {
+      border-color: var(--fill);
+      color: var(--on-fill);
+      background: var(--fill);
+    }
+
+    .map-tool-button:disabled {
+      color: var(--muted);
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    .map-tool-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 280px;
+      max-height: 60vh;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      padding: 10px;
+      background: var(--sheet);
+      backdrop-filter: blur(12px) saturate(1.2);
+      box-shadow: var(--shadow);
+    }
+
+    .map-tool-panel h4 {
+      color: var(--blue);
+      font: 600 var(--t-xs) / 1.2 var(--display);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .map-tool-panel label.inline-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font: var(--t-sm) / 1.3 var(--body);
+    }
+
+    .map-tool-panel label.inline-field span {
+      color: var(--muted);
+      font-size: var(--t-xs);
+    }
+
+    .map-tool-panel .inline-field-row {
+      flex-direction: row;
+      align-items: center;
+    }
+
+    .map-tool-panel input,
+    .map-tool-panel select {
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      padding: 0 8px;
+      background: var(--paper);
+      color: var(--ink);
+    }
+
+    .graphic-group-label {
+      margin-top: 4px;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1.2 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .graphic-key-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .measure-readout {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      background: var(--surface);
+      font: var(--t-sm) / 1.4 var(--data);
+    }
+
+    .measure-readout output {
+      flex: 1;
+    }
+
+    /* -- Graphics / range-ring lists (step 2 worksheet) ------------------ */
+
+    .graphics-list,
+    .range-rings-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .graphic-row,
+    .range-ring-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border-left: 3px solid var(--line-dark);
+      padding: 6px 10px;
+      background: var(--surface);
+    }
+
+    .graphic-row-text,
+    .range-ring-row-text {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      border: 0;
+      padding: 0;
+      color: var(--ink);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .graphic-row-text:hover strong,
+    .range-ring-row-text:hover strong {
+      color: var(--blue-dark);
+    }
+
+    .graphic-row-text strong,
+    .range-ring-row-text strong {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .graphic-row-text small,
+    .range-ring-row-text small {
+      color: var(--muted);
+    }
+
+    /* -- Exchange (import / export) -------------------------------------- */
+
+    .exchange-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .import-preview {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border: 1px solid var(--line);
+      padding: 10px;
+      background: var(--surface);
+    }
+
+    .import-preview ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .import-skip-list {
+      max-height: 140px;
+      overflow-y: auto;
+      color: var(--muted);
+      font-size: var(--t-xs);
+    }
+
+    /* -- Classification marking ------------------------------------------- */
+
+    .classification-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+
+    .classification-field input {
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      padding: 0 10px;
+      background: var(--surface);
+      color: var(--ink);
+      font: 600 var(--t-sm) / 1.2 var(--data);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .classification-banner {
+      display: none;
+    }
+  }
+}
+
+@layer responsive {
+  [data-module='ipb'] {
+    @media (max-width: 980px) {
+      .map-tool-panel {
+        width: calc(100vw - 24px);
+        max-width: 340px;
+      }
+    }
+
+    @media print {
+      /* Empty ASCOPE × PMESII-PT rows add nothing on paper: collapse them. */
+      .civil-matrix tr[data-filled='0'] {
+        display: none;
+      }
+
+      .civil-matrix textarea {
+        display: none;
+      }
+
+      .civil-matrix td {
+        min-width: 0;
+        white-space: pre-wrap;
+        font: var(--t-xs) / 1.4 var(--body);
+      }
+
+      .weather-thresholds {
+        display: none;
+      }
+
+      .classification-field input {
+        display: none;
+      }
+
+      .classification-print-copy {
+        font: 700 var(--t-sm) / 1.4 var(--data);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .weather-effects-badge {
+        border: 1px solid currentcolor;
+      }
+
+      .map-tools-toolbar {
+        display: none;
+      }
+
+      /* Chromium repeats a `position: fixed` element on every printed page,
+       * which is the whole point here: a classification marking belongs on
+       * every page, not only the first. */
+      .classification-banner {
+        display: block;
+        position: fixed;
+        left: 0;
+        z-index: 10;
+        width: 100%;
+        padding: 4px 0;
+        background: #ffffff;
+        color: #17272d;
+        font: 700 11px / 1.2 var(--data);
+        letter-spacing: 0.08em;
+        text-align: center;
+        text-transform: uppercase;
+      }
+
+      .classification-banner-top {
+        top: 0;
+        border-bottom: 1px solid #17272d;
+      }
+
+      .classification-banner-bottom {
+        bottom: 0;
+        border-top: 1px solid #17272d;
+      }
+    }
+  }
+}
