@@ -2,8 +2,39 @@ import { defineConfig } from 'vite-plus';
 
 import ipbApi from './server/api.js';
 
+// Vite's default `fs.deny` only covers secrets-style files (.env, keys,
+// .git); the app's own module state (`server/state/`, `modules/*/state/`,
+// `modules/*/data/`) sits inside the project root too, and without this it
+// is otherwise servable straight off disk by the static/raw-fs middleware —
+// defence in depth alongside `server/api.js`'s own `isBlockedStaticPath`
+// guard, which runs first and covers every mode (IPB-AUTH-001, critical).
+const FS_DENY = [
+  '.env',
+  '.env.*',
+  '*.{crt,pem,key,p12,pfx,cer,der}',
+  '.npmrc',
+  '.yarnrc.yml',
+  '**/.git/**',
+  '**/state/**',
+  '**/data/**',
+  '**/*.db',
+  '**/*.db-*',
+  '**/*.mbtiles',
+  '**/*.pmtiles',
+];
+
 export default defineConfig({
   plugins: [ipbApi()],
+  server: {
+    fs: { deny: FS_DENY },
+    // Same-origin app; Vite's default CORS reflects any localhost origin,
+    // which in `off` mode (no cookie needed) would let another local page
+    // read every API response (IPB-AUTH-009).
+    cors: false,
+  },
+  preview: {
+    cors: false,
+  },
   build: {
     // The ipb view pulls in OpenLayers, milsymbol, and mgrs; splitting
     // third-party code out of it keeps the app chunk small (57 KB, down from

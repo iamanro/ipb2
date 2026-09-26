@@ -11,8 +11,10 @@
  * `terrain` has no entry here: it is a server-only analysis service
  * (`/api/terrain/...`) used by the IPB workspace.
  */
+import admin from '../modules/admin/module.js';
 import equipment from '../modules/equipment/module.js';
 import exercise from '../modules/exercise/module.js';
 import ipb from '../modules/ipb/module.js';
+import orbat from '../modules/orbat/module.js';
 
-export const modules = [ipb, exercise, equipment];
+export const modules = [ipb, exercise, orbat, equipment, admin];

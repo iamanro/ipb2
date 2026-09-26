@@ -1,0 +1,43 @@
+<div class="admin-shell">
+  <div class="tab-nav" role="tablist" aria-label="Admin sections">
+    <button class="tab-button" type="button" role="tab" data-tab="users">Users</button>
+    <button class="tab-button" type="button" role="tab" data-tab="members">Members</button>
+    <button class="tab-button" type="button" role="tab" data-tab="exercise">Exercise</button>
+    <button class="tab-button" type="button" role="tab" data-tab="audit">Audit trail</button>
+  </div>
+  <div class="panel" role="tabpanel"></div>
+</div>
+
+<dialog class="workspace-dialog" id="confirm-dialog">
+  <form method="dialog">
+    <p class="dialog-message" id="confirm-message"></p>
+    <div class="dialog-actions">
+      <button class="text-button" type="submit" value="cancel">Cancel</button>
+      <button class="dialog-accept" type="submit" value="accept">Confirm</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="workspace-dialog" id="reset-dialog">
+  <form method="dialog">
+    <h2 class="dialog-title">Reset the exercise</h2>
+    <p class="dialog-message">
+      Archives the current exercise first, then empties every study, ORBAT and exercise
+      record, and clears every membership. Type the exercise's current name to confirm.
+    </p>
+    <div class="dialog-fields">
+      <label class="dialog-field">
+        <span id="reset-confirm-label">Current name (type to confirm)</span>
+        <input class="dialog-input" type="text" id="reset-confirm-input" autocomplete="off" aria-describedby="reset-confirm-label" />
+      </label>
+      <label class="dialog-field">
+        <span>New exercise name</span>
+        <input class="dialog-input" type="text" id="reset-name-input" autocomplete="off" />
+      </label>
+    </div>
+    <div class="dialog-actions">
+      <button class="text-button" type="submit" value="cancel">Cancel</button>
+      <button class="dialog-accept danger" type="submit" value="accept" id="reset-confirm-accept">Reset exercise</button>
+    </div>
+  </form>
+</dialog>

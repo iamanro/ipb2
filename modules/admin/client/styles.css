@@ -1,0 +1,428 @@
+/* Admin module chrome: the same tab/panel/table/dialog vocabulary every
+ * other module defines for itself (there is no shared cross-module sheet —
+ * see modules/exercise/client/styles.css, modules/orbat/client/styles.css). */
+@layer components {
+  [data-module='admin'] {
+    .admin-shell {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: calc(100vh - var(--masthead));
+    }
+
+    .tab-nav {
+      display: flex;
+      gap: 2px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .tab-button {
+      min-height: 36px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      padding: 0 14px;
+      color: var(--muted);
+      background: transparent;
+      font: 600 var(--t-sm) / 1 var(--body);
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
+    }
+
+    .tab-button:hover {
+      color: var(--ink);
+    }
+
+    .tab-button.active {
+      border-bottom-color: var(--blue-dark);
+      color: var(--ink);
+    }
+
+    .panel {
+      overflow-y: auto;
+      padding: 24px 28px 60px;
+    }
+
+    .panel h2 {
+      margin-bottom: 18px;
+      font: 700 var(--t-xl) / 1.2 var(--display);
+    }
+
+    .panel-note {
+      color: var(--muted);
+      font: 400 var(--t-xs) / 1.4 var(--body);
+    }
+
+    .inline-error {
+      margin: 0 0 12px;
+      color: var(--danger);
+      font: 500 var(--t-xs) / 1.4 var(--body);
+    }
+
+    .field-group {
+      margin-bottom: 24px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .field-group h3 {
+      margin-bottom: 10px;
+      font: 600 var(--t-sm) / 1 var(--data);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .requirement-form,
+    .inline-form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .inline-checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--ink);
+      font: 400 var(--t-sm) / 1.3 var(--body);
+      cursor: pointer;
+    }
+
+    .requirement-form input,
+    .requirement-form select {
+      border: 1px solid var(--line-dark);
+      padding: 7px 9px;
+      color: var(--ink);
+      background: var(--surface);
+      font: 400 var(--t-sm) / 1.3 var(--body);
+      transition: border-color var(--d-fast) var(--ease-out);
+    }
+
+    .requirement-form input:focus-visible,
+    .requirement-form select:focus-visible {
+      border-color: var(--blue-dark);
+    }
+
+    .requirement-form input[type='text'] {
+      flex: 1 1 160px;
+      min-width: 120px;
+    }
+
+    .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: var(--target);
+      border: 1px solid var(--fill);
+      padding: 0 14px;
+      color: var(--on-fill);
+      background: var(--fill);
+      font: 600 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition:
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
+    }
+
+    .primary-button:hover {
+      background: var(--fill-hover);
+      border-color: var(--fill-hover);
+    }
+
+    .chip-button {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--target);
+      border: 1px solid var(--blue-dark);
+      padding: 0 11px;
+      color: var(--blue-dark);
+      background: transparent;
+      font: 600 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
+    }
+
+    .chip-button:hover {
+      color: var(--on-fill);
+      background: var(--fill);
+      border-color: var(--fill);
+    }
+
+    .chip-button:disabled {
+      cursor: default;
+      opacity: 0.5;
+    }
+
+    .text-button {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--target);
+      border: 0;
+      padding: 0 4px;
+      color: var(--muted);
+      background: transparent;
+      font: 600 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition: color var(--d-fast) var(--ease-out);
+    }
+
+    .text-button:hover {
+      color: var(--ink);
+    }
+
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 30px;
+      border: 1px solid var(--line-dark);
+      padding: 0 8px;
+      color: var(--blue-dark);
+      background: var(--surface);
+      font: 500 var(--t-xs) / 1 var(--body);
+      cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
+    }
+
+    .icon-button:hover:not(:disabled) {
+      color: var(--on-fill);
+      background: var(--fill);
+      border-color: var(--fill);
+    }
+
+    .icon-button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
+    .icon-button.danger {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .icon-button.danger:hover:not(:disabled) {
+      color: var(--on-fill);
+      background: var(--danger-fill);
+      border-color: var(--danger-fill);
+    }
+
+    /* -- dialog -- */
+
+    .workspace-dialog {
+      min-width: 320px;
+      border: 1px solid var(--line);
+      padding: 0;
+      background: var(--paper);
+    }
+
+    .workspace-dialog::backdrop {
+      background: var(--backdrop);
+    }
+
+    .workspace-dialog form {
+      display: grid;
+      gap: 14px;
+      padding: 18px 20px 16px;
+    }
+
+    .dialog-title {
+      margin: 0;
+      font: 600 var(--t-lg) / 1.2 var(--display);
+    }
+
+    .dialog-message {
+      font: 500 var(--t-base) / 1.45 var(--body);
+    }
+
+    .dialog-fields {
+      display: grid;
+      gap: 12px;
+    }
+
+    .dialog-field {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font: 500 var(--t-xs) / 1.2 var(--body);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .dialog-input {
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      padding: 5px 9px;
+      color: var(--ink);
+      background: var(--surface);
+      font: 400 var(--t-sm) / 1.3 var(--body);
+      letter-spacing: normal;
+      text-transform: none;
+    }
+
+    .dialog-input:focus-visible {
+      border-color: var(--blue-dark);
+    }
+
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .dialog-accept {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: var(--target);
+      border: 1px solid var(--fill);
+      padding: 0 14px;
+      color: var(--on-fill);
+      background: var(--fill);
+      font: 600 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition:
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
+    }
+
+    .dialog-accept:hover {
+      background: var(--fill-hover);
+      border-color: var(--fill-hover);
+    }
+
+    .dialog-accept.danger {
+      border-color: var(--danger-fill);
+      background: var(--danger-fill);
+    }
+
+    .dialog-accept.danger:hover {
+      background: color-mix(in srgb, var(--danger-fill) 85%, white);
+      border-color: color-mix(in srgb, var(--danger-fill) 85%, white);
+    }
+
+    /* -- table -- */
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font: 400 var(--t-sm) / 1.4 var(--data);
+    }
+
+    .data-table th,
+    .data-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+    }
+
+    .data-table thead th {
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1 var(--data);
+      text-transform: uppercase;
+    }
+
+    .data-table select {
+      border: 1px solid var(--line-dark);
+      padding: 4px 6px;
+      color: var(--ink);
+      background: var(--surface);
+      font: 400 var(--t-sm) / 1.3 var(--body);
+    }
+
+    .user-row-disabled {
+      opacity: 0.55;
+    }
+
+    .data-table .cell-badge {
+      vertical-align: middle;
+    }
+
+    /* -- members bulk-assign toolbar -- */
+
+    .bulk-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .bulk-bar select {
+      border: 1px solid var(--line-dark);
+      padding: 6px 8px;
+      color: var(--ink);
+      background: var(--paper);
+      font: 400 var(--t-sm) / 1.3 var(--body);
+    }
+
+    .bulk-bar-count {
+      color: var(--muted);
+      font: 500 var(--t-xs) / 1 var(--body);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    /* -- exercise tab -- */
+
+    .exercise-name-form {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+
+    .exercise-name-form input[type='text'] {
+      flex: 1 1 240px;
+      min-width: 160px;
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      padding: 0 9px;
+      color: var(--ink);
+      background: var(--surface);
+      font: 500 var(--t-lg) / 1.3 var(--display);
+    }
+
+    .exercise-danger-zone {
+      margin-top: 28px;
+      padding: 16px;
+      border: 1px solid var(--danger);
+      background: var(--danger-bg);
+    }
+
+    .exercise-danger-zone h3 {
+      margin-bottom: 6px;
+      color: var(--danger);
+      font: 600 var(--t-sm) / 1 var(--data);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .exercise-danger-zone p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font: 400 var(--t-xs) / 1.4 var(--body);
+    }
+
+    .status-light {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+    }
+  }
+}

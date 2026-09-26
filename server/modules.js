@@ -10,6 +10,7 @@
 import equipment from '../modules/equipment/server/routes.js';
 import exercise from '../modules/exercise/server/routes.js';
 import ipb from '../modules/ipb/server/routes.js';
+import orbat from '../modules/orbat/server/routes.js';
 import terrain from '../modules/terrain/server/routes.js';
 
-export const modules = [terrain, ipb, exercise, equipment];
+export const modules = [terrain, ipb, exercise, orbat, equipment];

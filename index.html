@@ -8,19 +8,20 @@
       content="A local Intelligence Preparation of the Battlefield workbench: terrain effects, threat evaluation, and threat courses of action."
     />
     <title>IPB</title>
+    <!-- Cascade layer order, declared before any stylesheet: a browser orders
+         layers by first appearance, and the build may link a shared chunk's
+         CSS (e.g. src/release.css, all "components") ahead of shell.css. -->
+    <style>
+      @layer reset, vendor, base, shell, components, responsive;
+    </style>
   </head>
   <body>
     <div class="app-shell">
       <header class="masthead">
-        <a class="brand" href="/" aria-label="IPB home">
-          <span class="brand-mark" aria-hidden="true">I</span>
-          <span>
-            <strong>IPB / Local</strong>
-            <small>Intelligence preparation of the battlefield</small>
-          </span>
-        </a>
+        <a class="brand" href="/">AGILE CUB</a>
         <nav class="module-nav" id="module-nav" aria-label="Modules"></nav>
         <div class="masthead-status" id="masthead-status"></div>
+        <div class="user-chip" id="user-chip" hidden></div>
       </header>
       <main class="module-root" id="module-root"></main>
     </div>
