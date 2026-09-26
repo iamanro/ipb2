@@ -31,8 +31,11 @@ import { fileURLToPath } from 'node:url';
 
 import { fromFile } from 'geotiff';
 
+import { dataDirectory } from '../../../server/state.js';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MODULE_ROOT = path.join(HERE, '..');
+const DATA_ROOT = dataDirectory('terrain', path.join(MODULE_ROOT, 'data'));
 const CELLS_PER_DEGREE = 3600;
 const TILE = 256;
 const DEFAULT_BOUNDS = [17.2, 49.5, 17.8, 49.9];
@@ -51,12 +54,12 @@ function parseArguments(argv) {
       options.bounds = parts;
     } else throw new Error(`Unknown argument ${argv[index]}`);
   }
-  options.out ??= path.join(MODULE_ROOT, 'data', 'terrain.db');
+  options.out ??= path.join(DATA_ROOT, 'terrain.db');
   return options;
 }
 
 const GLO30_BUCKET = 'https://copernicus-dem-30m.s3.amazonaws.com';
-const GLO30_CACHE = path.join(MODULE_ROOT, 'data', 'glo30');
+const GLO30_CACHE = path.join(DATA_ROOT, 'glo30');
 
 /** GLO-30 tile name for the 1° cell whose south-west corner is (lon, lat). */
 function glo30Name(lon, lat) {

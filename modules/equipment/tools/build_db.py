@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -14,7 +15,12 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
+# IPB_DATA_ROOT/equipment when set (containers), else modules/equipment/data.
+DATA_ROOT = (
+    Path(os.environ["IPB_DATA_ROOT"]) / "equipment"
+    if os.environ.get("IPB_DATA_ROOT")
+    else Path(__file__).resolve().parents[1] / "data"
+)
 SOURCE_URL = "https://spatialillusions.com/unitgenerator/weg-database.zipdb"
 SCOPE = "Public sample: Russian fixed-wing aircraft only; not the licensed full WEG database."
 

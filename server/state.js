@@ -13,12 +13,36 @@ export function stateDirectory(moduleId, defaultDirectory) {
 }
 
 /**
+ * A module's reference-data directory: `modules/<id>/data` normally, or
+ * `$IPB_DATA_ROOT/<id>` when set, so a container mounts one data volume
+ * (read-only for the server, writable for the build tools) instead of one
+ * per module inside the code tree.
+ */
+export function dataDirectory(moduleId, defaultDirectory) {
+  const root = process.env.IPB_DATA_ROOT;
+  return root ? path.join(root, moduleId) : defaultDirectory;
+}
+
+/**
  * Writable module state. Reference data lives in `modules/<id>/data/*.db` and is
  * rebuilt by the module tools; state lives in `modules/<id>/state/*.db` and is
  * the user's work, so the two never share a file or a lifetime.
  *
- * `migrations` is an ordered array of SQL strings. `PRAGMA user_version` records
- * how many have run, so opening an existing database only applies the new ones.
+ * `migrations` is an ordered array; `PRAGMA user_version` records how many have
+ * run, so opening an existing database only applies the new ones. Each entry is
+ * one of:
+ * - a plain SQL string, run in a transaction (unchanged behaviour);
+ * - `{ sql, rebuild: true }`, a table rebuild for schema changes SQLite can't do
+ *   in place (widening a CHECK, dropping/renaming a constrained column). `sql`
+ *   is the author's own `CREATE new_X` / `INSERT INTO new_X SELECT …` / `DROP
+ *   TABLE X` / `ALTER TABLE new_X RENAME TO X` / index-recreation script — the
+ *   parts of SQLite's 12-step ALTER procedure specific to the change. This
+ *   function supplies the rest: foreign keys go off *outside* the transaction
+ *   (SQLite ignores the pragma inside one), the script runs, `PRAGMA
+ *   foreign_key_check` must come back empty or the transaction rolls back
+ *   (leaving `user_version` unchanged), then foreign keys go back on;
+ * - `{ run(database) }`, a JS-driven migration (e.g. reparsing a column's text
+ *   into new columns before dropping it), executed inside one transaction.
  */
 export function openState(file, migrations) {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -32,12 +56,48 @@ export function openState(file, migrations) {
     throw new Error(`${file} was written by a newer schema (${applied}).`);
   }
   for (let index = applied; index < migrations.length; index += 1) {
-    transact(database, () => {
-      database.exec(migrations[index]);
-      database.exec(`PRAGMA user_version = ${index + 1}`);
-    });
+    const migration = migrations[index];
+    if (migration && typeof migration === 'object' && migration.rebuild) {
+      runRebuildMigration(database, migration, index);
+    } else if (migration && typeof migration === 'object' && typeof migration.run === 'function') {
+      transact(database, () => {
+        migration.run(database);
+        database.exec(`PRAGMA user_version = ${index + 1}`);
+      });
+    } else {
+      transact(database, () => {
+        database.exec(migration);
+        database.exec(`PRAGMA user_version = ${index + 1}`);
+      });
+    }
   }
   return database;
+}
+
+/**
+ * SQLite's 12-step ALTER procedure: foreign keys off outside the transaction,
+ * the rebuild script, a foreign-key check that must be clean, foreign keys
+ * back on. `migration.sql` does the create-copy-drop-rename part; ids are
+ * preserved because that script copies them, so any other table's foreign key
+ * into the rebuilt table survives untouched.
+ */
+function runRebuildMigration(database, migration, index) {
+  database.exec('PRAGMA foreign_keys = OFF');
+  try {
+    transact(database, () => {
+      database.exec(migration.sql);
+      const violations = database.prepare('PRAGMA foreign_key_check').all();
+      if (violations.length) {
+        throw new Error(
+          `Rebuild migration ${index + 1} left ${violations.length} foreign key ` +
+            `violation(s): ${JSON.stringify(violations)}`,
+        );
+      }
+      database.exec(`PRAGMA user_version = ${index + 1}`);
+    });
+  } finally {
+    database.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 /** Run `work` in one transaction. Rolls back on any throw. */

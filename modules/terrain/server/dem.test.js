@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
-import { openTerrain } from './dem.js';
+import { openElevation, openTerrain } from './dem.js';
 
 const TILE = 256;
 
@@ -229,5 +229,90 @@ describe('openTerrain: earth curvature over long, flat range', () => {
     const tall = terrain.lineOfSight(from, to, { observerHeight: 500, targetHeight: 1.8 });
     expect(short.visible).toBe(false);
     expect(tall.visible).toBe(true);
+  });
+});
+
+describe('openElevation: composite of a coarse base and a fine, partial detail', () => {
+  // A flat base (100 m) covering the whole tile, and a detail model at 4x
+  // the density covering only a quarter of the same ground, itself missing
+  // data at ix < 20 and ix >= 100 (simulating both an unbuilt neighbour and
+  // DMR4G's own ragged sheet edge) — everywhere it does have data it is a
+  // ramp, so slope tells detail and base apart as unambiguously as height.
+  const BASE_CELLS_PER_DEGREE = 100;
+  const DETAIL_CELLS_PER_DEGREE = 400;
+  const BASE_HEIGHT = 100;
+  const DETAIL_BASE_HEIGHT = 300;
+  const RAMP_PER_CELL = 2;
+  const DETAIL_VALID = [20, 100]; // ix range (exclusive end) with real detail data
+
+  const baseFile = path.join(os.tmpdir(), `dem-composite-base-${process.pid}.db`);
+  const detailFile = path.join(os.tmpdir(), `dem-composite-detail-${process.pid}.db`);
+  let base;
+  let detail;
+  let composite;
+
+  beforeAll(() => {
+    buildFixture(baseFile, BASE_CELLS_PER_DEGREE, () => BASE_HEIGHT);
+    buildFixture(detailFile, DETAIL_CELLS_PER_DEGREE, (ix) =>
+      ix >= DETAIL_VALID[0] && ix < DETAIL_VALID[1] ? DETAIL_BASE_HEIGHT + RAMP_PER_CELL * ix : NaN,
+    );
+    base = openTerrain(baseFile);
+    detail = openTerrain(detailFile);
+    composite = openElevation(base, detail);
+  });
+
+  afterAll(() => {
+    composite.close();
+    rmSync(baseFile, { force: true });
+    rmSync(detailFile, { force: true });
+  });
+
+  test('detail wins where it has data', () => {
+    const { lon, lat } = cellLonLat(60, 60, DETAIL_CELLS_PER_DEGREE);
+    expect(composite.elevation(lon, lat)).toBeCloseTo(DETAIL_BASE_HEIGHT + RAMP_PER_CELL * 60, 3);
+  });
+
+  test('base fills in at a NaN cell inside the detail tile (its ragged edge)', () => {
+    const { lon, lat } = cellLonLat(140, 60, DETAIL_CELLS_PER_DEGREE); // >= 100: NaN in the detail fixture
+    expect(composite.elevation(lon, lat)).toBe(BASE_HEIGHT);
+  });
+
+  test('base fills in entirely outside the detail tile', () => {
+    expect(composite.elevation(1, 1)).toBe(BASE_HEIGHT); // past the 0.64° detail tile, inside the 2.56° base one
+  });
+
+  test('bounds and dataset come from the base; detail is attached to meta', () => {
+    expect(composite.bounds).toEqual(base.bounds);
+    expect(composite.meta.dataset).toBe('synthetic-test');
+    expect(composite.meta.detail).toBe(detail.meta);
+  });
+
+  test('slope uses the detail step where detail has data', () => {
+    const { lon, lat } = cellLonLat(60, 60, DETAIL_CELLS_PER_DEGREE);
+    // Same independent trigonometry as the openTerrain ramp test above, at
+    // the detail grid's own density — the coarse base fixture is flat, so
+    // this value could only come from reading the detail step correctly.
+    const lonScale = 111319.49 * Math.cos((lat * Math.PI) / 180);
+    const gradient = (RAMP_PER_CELL * DETAIL_CELLS_PER_DEGREE) / lonScale;
+    const expectedDegrees = (Math.atan(gradient) * 180) / Math.PI;
+    expect(composite.slopeDegrees(lon, lat)).toBeCloseTo(expectedDegrees, 3);
+  });
+
+  test('slope falls back to the base step outside detail coverage', () => {
+    expect(composite.slopeDegrees(1, 1)).toBe(0); // the base fixture is flat everywhere
+  });
+
+  test('profile, line of sight and viewshed all read the composite elevation', () => {
+    const { lon: lon1, lat: lat1 } = cellLonLat(60, 60, DETAIL_CELLS_PER_DEGREE);
+    const point = composite.profile({ lon: lon1, lat: lat1 }, { lon: lon1, lat: lat1 + 0.0005 })
+      .points[0];
+    expect(point.elevation).toBeCloseTo(DETAIL_BASE_HEIGHT + RAMP_PER_CELL * 60, 3);
+    expect(() =>
+      composite.viewshed({ observers: [{ lon: lon1, lat: lat1 }], radiusMetres: 500 }),
+    ).not.toThrow();
+  });
+
+  test('with no detail file, the composite is exactly the base model', () => {
+    expect(openElevation(base, null)).toBe(base);
   });
 });

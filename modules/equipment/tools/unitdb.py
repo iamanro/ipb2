@@ -10,7 +10,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-DEFAULT_DATABASE = Path(__file__).resolve().parents[1] / "data" / "unitgenerator.db"
+from build_db import DATA_ROOT
+
+DEFAULT_DATABASE = DATA_ROOT / "unitgenerator.db"
 
 
 def connect(path: Path) -> sqlite3.Connection:

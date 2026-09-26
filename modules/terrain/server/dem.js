@@ -8,7 +8,7 @@ import {
 } from './lattice.js';
 
 const TILE = 256;
-const TILE_CACHE_LIMIT = 96;
+const DEFAULT_TILE_CACHE_LIMIT = 96;
 const EARTH_RADIUS = 6371008.8;
 const REFRACTION = 0.13;
 
@@ -22,84 +22,29 @@ function curvatureDrop(distance) {
 }
 
 /**
- * Elevation model over the one-arc-second grid described in tools/schema.sql.
- *
- * The interface is `{ meta, bounds, elevation, slopeDegrees, profile, lineOfSight,
- * viewshed, close }`. Tile addressing, the LRU cache and bilinear interpolation
- * stay inside; metres and grids come from the metric plane in lattice.js.
+ * Terrain slope in degrees from central differences one `step` (degrees) to
+ * either side, over any elevation function. Shared between a plain model's
+ * own grid step and the composite's per-point step (its detail step where
+ * the detail model has data, its base step otherwise).
  */
-export function openTerrain(file) {
-  const database = new DatabaseSync(file, { readOnly: true });
-  const meta = Object.fromEntries(
-    database
-      .prepare('SELECT key, value FROM meta')
-      .all()
-      .map((row) => [row.key, row.value]),
-  );
-  const cellsPerDegree = Number(meta.cells_per_degree || 3600);
-  const bounds = JSON.parse(meta.bounds || '[0,0,0,0]');
-  const selectTile = database.prepare('SELECT grid FROM dem_tiles WHERE tx = ? AND ty = ?');
-  const cache = new Map();
+function slopeFromElevation(elevation, step, lon, lat) {
+  const west = elevation(lon - step, lat);
+  const east = elevation(lon + step, lat);
+  const south = elevation(lon, lat - step);
+  const north = elevation(lon, lat + step);
+  if ([west, east, south, north].some(Number.isNaN)) return NaN;
+  const dzdx = (east - west) / (2 * step * longitudeScale(lat));
+  const dzdy = (north - south) / (2 * step * METRES_PER_DEGREE_LATITUDE);
+  return (Math.atan(Math.hypot(dzdx, dzdy)) * 180) / Math.PI;
+}
 
-  function tileGrid(tx, ty) {
-    const key = tx * 100000 + ty;
-    const cached = cache.get(key);
-    if (cached !== undefined) {
-      cache.delete(key);
-      cache.set(key, cached);
-      return cached;
-    }
-    const row = selectTile.get(tx, ty);
-    const grid = row
-      ? new Float32Array(row.grid.buffer, row.grid.byteOffset, row.grid.byteLength / 4)
-      : null;
-    cache.set(key, grid);
-    if (cache.size > TILE_CACHE_LIMIT) cache.delete(cache.keys().next().value);
-    return grid;
-  }
-
-  /** Elevation of one grid cell, NaN when the cell is absent. */
-  function cellElevation(ix, iy) {
-    const tx = Math.floor(ix / TILE);
-    const ty = Math.floor(iy / TILE);
-    const grid = tileGrid(tx, ty);
-    if (!grid) return NaN;
-    return grid[(iy - ty * TILE) * TILE + (ix - tx * TILE)];
-  }
-
-  /** Bilinear elevation in metres, NaN outside the built area. */
-  function elevation(lon, lat) {
-    const x = lon * cellsPerDegree - 0.5;
-    const y = lat * cellsPerDegree - 0.5;
-    const ix = Math.floor(x);
-    const iy = Math.floor(y);
-    const fx = x - ix;
-    const fy = y - iy;
-    const z00 = cellElevation(ix, iy);
-    const z10 = cellElevation(ix + 1, iy);
-    const z01 = cellElevation(ix, iy + 1);
-    const z11 = cellElevation(ix + 1, iy + 1);
-    if (Number.isNaN(z00) || Number.isNaN(z10) || Number.isNaN(z01) || Number.isNaN(z11)) {
-      return Number.isNaN(z00) ? NaN : z00;
-    }
-    const bottom = z00 * (1 - fx) + z10 * fx;
-    const top = z01 * (1 - fx) + z11 * fx;
-    return bottom * (1 - fy) + top * fy;
-  }
-
-  /** Terrain slope in degrees from central differences over one cell. */
-  function slopeDegrees(lon, lat) {
-    const step = 1 / cellsPerDegree;
-    const west = elevation(lon - step, lat);
-    const east = elevation(lon + step, lat);
-    const south = elevation(lon, lat - step);
-    const north = elevation(lon, lat + step);
-    if ([west, east, south, north].some(Number.isNaN)) return NaN;
-    const dzdx = (east - west) / (2 * step * longitudeScale(lat));
-    const dzdy = (north - south) / (2 * step * METRES_PER_DEGREE_LATITUDE);
-    return (Math.atan(Math.hypot(dzdx, dzdy)) * 180) / Math.PI;
-  }
-
+/**
+ * Profile, line-of-sight and viewshed, built once for any `elevation`
+ * function. These only ever call `elevation`, so a composite model gets
+ * them for free by calling this on its own combined `elevation` — the
+ * detail/base split is invisible past that point.
+ */
+function createAnalyses(elevation) {
   /** Evenly spaced terrain profile between two points. */
   function profile(from, to, { spacingMetres = 30 } = {}) {
     const distance = metresBetween(from, to);
@@ -263,14 +208,128 @@ export function openTerrain(file) {
     };
   }
 
+  return { profile, lineOfSight, viewshed };
+}
+
+/**
+ * Elevation model over the lon/lat grid described in tools/schema.sql (the
+ * cell density comes from the file's own `cells_per_degree`, so this reads
+ * both the 1-arcsecond GLO-30 base and the 1/6-arcsecond DMR4G detail).
+ *
+ * The interface is `{ meta, bounds, elevation, slopeDegrees, profile, lineOfSight,
+ * viewshed, close }`. Tile addressing, the LRU cache and bilinear interpolation
+ * stay inside; metres and grids come from the metric plane in lattice.js.
+ */
+export function openTerrain(file, { tileCacheLimit = DEFAULT_TILE_CACHE_LIMIT } = {}) {
+  const database = new DatabaseSync(file, { readOnly: true });
+  const meta = Object.fromEntries(
+    database
+      .prepare('SELECT key, value FROM meta')
+      .all()
+      .map((row) => [row.key, row.value]),
+  );
+  const cellsPerDegree = Number(meta.cells_per_degree || 3600);
+  const bounds = JSON.parse(meta.bounds || '[0,0,0,0]');
+  const selectTile = database.prepare('SELECT grid FROM dem_tiles WHERE tx = ? AND ty = ?');
+  const cache = new Map();
+
+  function tileGrid(tx, ty) {
+    const key = tx * 100000 + ty;
+    const cached = cache.get(key);
+    if (cached !== undefined) {
+      cache.delete(key);
+      cache.set(key, cached);
+      return cached;
+    }
+    const row = selectTile.get(tx, ty);
+    const grid = row
+      ? new Float32Array(row.grid.buffer, row.grid.byteOffset, row.grid.byteLength / 4)
+      : null;
+    cache.set(key, grid);
+    if (cache.size > tileCacheLimit) cache.delete(cache.keys().next().value);
+    return grid;
+  }
+
+  /** Elevation of one grid cell, NaN when the cell is absent. */
+  function cellElevation(ix, iy) {
+    const tx = Math.floor(ix / TILE);
+    const ty = Math.floor(iy / TILE);
+    const grid = tileGrid(tx, ty);
+    if (!grid) return NaN;
+    return grid[(iy - ty * TILE) * TILE + (ix - tx * TILE)];
+  }
+
+  /** Bilinear elevation in metres, NaN outside the built area. */
+  function elevation(lon, lat) {
+    const x = lon * cellsPerDegree - 0.5;
+    const y = lat * cellsPerDegree - 0.5;
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const z00 = cellElevation(ix, iy);
+    const z10 = cellElevation(ix + 1, iy);
+    const z01 = cellElevation(ix, iy + 1);
+    const z11 = cellElevation(ix + 1, iy + 1);
+    if (Number.isNaN(z00) || Number.isNaN(z10) || Number.isNaN(z01) || Number.isNaN(z11)) {
+      return Number.isNaN(z00) ? NaN : z00;
+    }
+    const bottom = z00 * (1 - fx) + z10 * fx;
+    const top = z01 * (1 - fx) + z11 * fx;
+    return bottom * (1 - fy) + top * fy;
+  }
+
+  const step = 1 / cellsPerDegree;
+  const slopeDegrees = (lon, lat) => slopeFromElevation(elevation, step, lon, lat);
+
   return {
     meta,
     bounds,
     elevation,
     slopeDegrees,
-    profile,
-    lineOfSight,
-    viewshed,
+    ...createAnalyses(elevation),
     close: () => database.close(),
+  };
+}
+
+/**
+ * Composite elevation model: `detail` (a fine, small-footprint model — DMR4G
+ * over GLO-30) wins wherever it has data, `base` fills the rest. Same
+ * interface as `openTerrain`, so callers (profile/LOS/viewshed included)
+ * don't know or care that two grids are behind it.
+ *
+ * Takes already-open models, not file paths: the server keeps `base` and
+ * `detail` behind separate `referenceFile` handles (so either rebuilding
+ * independently reopens just that one), and recomposes them here on every
+ * request — composing is pointer-cheap, no data is copied.
+ */
+export function openElevation(base, detail) {
+  if (!detail) return base;
+  const detailStep = 1 / Number(detail.meta.cells_per_degree || 3600);
+
+  /** Detail where it has data (including at its own ragged edge), base elsewhere. */
+  function elevation(lon, lat) {
+    const fine = detail.elevation(lon, lat);
+    return Number.isNaN(fine) ? base.elevation(lon, lat) : fine;
+  }
+
+  /** Central differences at the detail spacing inside detail's coverage, the base spacing outside it. */
+  function slopeDegrees(lon, lat) {
+    if (!Number.isNaN(detail.elevation(lon, lat))) {
+      return slopeFromElevation(elevation, detailStep, lon, lat);
+    }
+    return base.slopeDegrees(lon, lat);
+  }
+
+  return {
+    meta: { ...base.meta, detail: detail.meta },
+    bounds: base.bounds,
+    elevation,
+    slopeDegrees,
+    ...createAnalyses(elevation),
+    close: () => {
+      base.close();
+      detail.close();
+    },
   };
 }

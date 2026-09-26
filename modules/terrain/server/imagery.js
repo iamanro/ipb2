@@ -8,7 +8,9 @@ import { tmsRow } from './tiles.js';
  * returns the encoded image bytes, or null when the archive has no such tile.
  */
 export function openImagery(file) {
-  const database = new DatabaseSync(file, { readOnly: true });
+  // build_satellite.mjs writes into the archive in place (it resumes); wait out
+  // its brief write locks instead of failing the request.
+  const database = new DatabaseSync(file, { readOnly: true, timeout: 5000 });
   const metadata = Object.fromEntries(
     database
       .prepare('SELECT name, value FROM metadata')
