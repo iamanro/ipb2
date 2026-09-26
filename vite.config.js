@@ -24,7 +24,10 @@ const FS_DENY = [
 ];
 
 export default defineConfig({
-  plugins: [ipbApi()],
+  // Not under Vitest: its internal Vite server would mount the API, whose
+  // scenario-clock ticker then opens (and fires injects in) the real
+  // `modules/exercise/state/exercise.db` mid-run. Tests start their own.
+  plugins: process.env.VITEST ? [] : [ipbApi()],
   server: {
     fs: { deny: FS_DENY },
     // Same-origin app; Vite's default CORS reflects any localhost origin,
