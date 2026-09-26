@@ -1,0 +1,35 @@
+<div class="orbat-shell">
+  <div class="view-switch" role="tablist" aria-label="ORBAT sections">
+    <button
+      class="view-tab"
+      type="button"
+      role="tab"
+      id="tab-symbols"
+      data-view="symbols"
+      aria-controls="view-root"
+    >
+      Symbology
+    </button>
+    <button
+      class="view-tab"
+      type="button"
+      role="tab"
+      id="tab-builder"
+      data-view="builder"
+      aria-controls="view-root"
+    >
+      ORBAT builder
+    </button>
+  </div>
+  <div class="view-root" id="view-root" role="tabpanel"></div>
+</div>
+
+<dialog class="workspace-dialog" id="confirm-dialog">
+  <form method="dialog">
+    <p class="dialog-message" id="confirm-message"></p>
+    <div class="dialog-actions">
+      <button class="text-button" type="submit" value="cancel">Cancel</button>
+      <button class="dialog-accept" type="submit" value="accept">Delete</button>
+    </div>
+  </form>
+</dialog>

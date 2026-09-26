@@ -1,0 +1,521 @@
+/* ORBAT builder: three-pane workspace (list/outline, chart, inspector). */
+@layer components {
+  [data-module='orbat'] {
+    .builder-layout {
+      display: grid;
+      grid-template-columns: 300px 1fr 320px;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .builder-pane {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .builder-outline {
+      border-right: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .builder-inspector {
+      border-left: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .builder-chart {
+      background: var(--mist);
+    }
+
+    /* -- ORBAT switcher -- */
+
+    .orbat-switcher {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .switcher-row {
+      display: grid;
+    }
+
+    .switcher-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .switcher-actions .chip-button,
+    .switcher-actions .icon-button {
+      flex: none;
+    }
+
+    .example-select {
+      max-width: 160px;
+    }
+
+    .orbat-meta {
+      color: var(--muted);
+      font: 500 var(--t-xs) / 1.3 var(--data);
+      letter-spacing: 0.02em;
+    }
+
+    .orbat-description {
+      color: var(--muted);
+      font: 400 var(--t-sm) / 1.4 var(--body);
+    }
+
+    .orbat-release-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .read-only-note {
+      color: var(--muted);
+      font: 500 var(--t-sm) / 1.3 var(--body);
+    }
+
+    .inspector-facts {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 2px 10px;
+      margin: 8px 0;
+    }
+
+    .inspector-facts dt {
+      color: var(--muted);
+      font: 500 var(--t-xs) / 1.3 var(--data);
+      letter-spacing: 0.02em;
+    }
+
+    .inspector-facts dd {
+      margin: 0;
+      font: 400 var(--t-sm) / 1.4 var(--body);
+    }
+
+    /* -- outline -- */
+
+    .outline-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .outline-toolbar .icon-button {
+      padding: 0 8px;
+      font: 600 var(--t-xs) / 1 var(--data);
+    }
+
+    .outline-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 4px 0 16px;
+    }
+
+    .outline-empty {
+      padding: 16px;
+    }
+
+    .outline-tree {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .outline-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: var(--target);
+      padding: 2px 10px 2px calc(10px + (var(--level, 1) - 1) * 16px);
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition:
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
+    }
+
+    .outline-row[aria-level='1'] {
+      --level: 1;
+    }
+    .outline-row[aria-level='2'] {
+      --level: 2;
+    }
+    .outline-row[aria-level='3'] {
+      --level: 3;
+    }
+    .outline-row[aria-level='4'] {
+      --level: 4;
+    }
+    .outline-row[aria-level='5'] {
+      --level: 5;
+    }
+    .outline-row[aria-level='6'] {
+      --level: 6;
+    }
+    .outline-row[aria-level='7'] {
+      --level: 7;
+    }
+    .outline-row[aria-level='8'] {
+      --level: 8;
+    }
+
+    .outline-row:hover {
+      background: var(--surface-hover);
+    }
+
+    .outline-row[aria-selected='true'] {
+      border-left-color: var(--signal);
+      background: var(--surface);
+    }
+
+    .outline-row.drop-before {
+      box-shadow: inset 0 2px 0 var(--signal);
+    }
+
+    .outline-row.drop-after {
+      box-shadow: inset 0 -2px 0 var(--signal);
+    }
+
+    .outline-row.drop-inside {
+      outline: 2px solid var(--signal);
+      outline-offset: -2px;
+    }
+
+    .outline-toggle {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      border: 0;
+      padding: 0;
+      color: var(--muted);
+      background: transparent;
+      font-size: var(--t-xs);
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .outline-toggle-spacer {
+      flex: none;
+      width: 16px;
+    }
+
+    .outline-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font: 400 var(--t-sm) / 1.2 var(--body);
+    }
+
+    .outline-echelon {
+      flex: none;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1 var(--data);
+    }
+
+    /* -- chart pane -- */
+
+    .chart-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .chart-toolbar .icon-button {
+      padding: 0 9px;
+    }
+
+    .zoom-readout {
+      margin-left: 6px;
+      color: var(--muted);
+      font: 500 var(--t-xs) / 1 var(--data);
+      min-width: 38px;
+    }
+
+    .chart-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 24px;
+    }
+
+    .chart-empty,
+    .chart-pane-empty {
+      padding: 24px;
+    }
+
+    .orbat-chart-svg {
+      display: block;
+      transform-origin: top left;
+    }
+
+    .chart-edge {
+      fill: none;
+      stroke: var(--line-dark);
+      stroke-width: 1.5;
+    }
+
+    .chart-node {
+      cursor: pointer;
+      outline: none;
+    }
+
+    .chart-node:focus-visible .chart-symbol,
+    .chart-node.selected .chart-symbol {
+      outline: 2px solid var(--signal);
+      outline-offset: 3px;
+    }
+
+    .chart-caption {
+      fill: var(--ink);
+      font: 500 11px / 1 var(--body);
+    }
+
+    .chart-toggle {
+      cursor: pointer;
+    }
+
+    .chart-toggle circle {
+      fill: var(--surface);
+      stroke: var(--line-dark);
+      stroke-width: 1;
+    }
+
+    .chart-toggle text {
+      fill: var(--ink);
+      font: 600 var(--t-xs) / 1 var(--data);
+    }
+
+    /* -- inspector -- */
+
+    .inspector-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      /* minmax(0, …): a select's long option text must not widen the pane. */
+      grid-template-columns: minmax(0, 1fr);
+      gap: 14px;
+      align-content: start;
+    }
+
+    .inspector-preview {
+      display: flex;
+      justify-content: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .inspector-form,
+    .inspector-symbol-editor {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .inspector-heading {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1.2 var(--body);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .hqtfd-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .echelon-warning {
+      margin: 0;
+      padding: 6px 8px;
+      border: 1px solid var(--caution);
+      color: var(--caution);
+      background: var(--caution-bg);
+      font: 500 var(--t-xs) / 1.4 var(--body);
+    }
+
+    .sidc-input-error {
+      margin-top: 2px;
+    }
+
+    .sidc-describe {
+      display: grid;
+      gap: 2px;
+      margin-top: 4px;
+    }
+
+    .sidc-field-row {
+      display: grid;
+      grid-template-columns: 108px 1fr;
+      gap: 8px;
+      font: 400 var(--t-xs) / 1.4 var(--body);
+    }
+
+    .sidc-field-label {
+      color: var(--muted);
+    }
+
+    .sidc-field-value {
+      color: var(--ink);
+    }
+
+    /* -- entity picker -- */
+
+    .entity-picker {
+      position: relative;
+      display: grid;
+      gap: 0;
+    }
+
+    .entity-listbox {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      z-index: 5;
+      max-height: 260px;
+      overflow: auto;
+      margin: 2px 0 0;
+      padding: 4px 0;
+      list-style: none;
+      border: 1px solid var(--line-dark);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .entity-group-heading {
+      padding: 4px 10px;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1.2 var(--body);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .entity-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: var(--target);
+      padding: 2px 10px;
+      cursor: pointer;
+      font: 400 var(--t-sm) / 1.2 var(--body);
+    }
+
+    .entity-option:hover {
+      background: var(--surface-hover);
+    }
+
+    /* The keyboard's current option (aria-activedescendant). */
+    .entity-option.active {
+      background: var(--surface-hover);
+      box-shadow: inset 2px 0 0 var(--signal);
+    }
+
+    .entity-option[aria-selected='true'] {
+      color: var(--blue-dark);
+    }
+
+    .entity-option-noted {
+      color: var(--muted);
+    }
+
+    .entity-option-hint {
+      margin-left: auto;
+      flex: none;
+      color: var(--muted);
+      font: 500 var(--t-xs) / 1 var(--data);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    /* -- ORBAT create/rename form -- */
+
+    .orbat-form-title {
+      margin: 0;
+      font: 600 var(--t-lg) / 1.2 var(--display);
+    }
+
+    .orbat-form-error {
+      margin: 0;
+    }
+
+    .import-file-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+  }
+}
+
+@layer responsive {
+  [data-module='orbat'] {
+    @media (max-width: 1099px) {
+      .builder-layout {
+        grid-template-columns: 260px 1fr;
+        grid-template-rows: 1fr auto;
+      }
+
+      .builder-inspector {
+        grid-column: 1 / -1;
+        max-height: 42vh;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 720px) {
+      .builder-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+      }
+
+      .builder-outline {
+        max-height: 32vh;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+  }
+
+  @media print {
+    [data-module='orbat'] {
+      .builder-outline,
+      .builder-inspector,
+      .chart-toolbar {
+        display: none;
+      }
+
+      .builder-layout {
+        display: block;
+      }
+
+      .chart-scroll {
+        overflow: visible;
+        padding: 0;
+      }
+
+      .orbat-chart-svg {
+        transform: none !important;
+        color: #10181b;
+        background: #ffffff;
+      }
+    }
+  }
+}
