@@ -35,7 +35,8 @@ export async function sweepRoutes({ dispatcher, moduleId, actor, fixtures, param
         .split('/')
         .map((segment) => {
           if (segment === ':item') return String(target.item);
-          if (segment === ':part') return String(target.parts?.[route.part] ?? 'missing-part-fixture');
+          if (segment === ':part')
+            return String(target.parts?.[route.part] ?? 'missing-part-fixture');
           if (segment.startsWith(':')) return String(params[segment.slice(1)] ?? '1');
           return segment;
         })
@@ -46,7 +47,8 @@ export async function sweepRoutes({ dispatcher, moduleId, actor, fixtures, param
       } catch (error) {
         status = error.status ?? 500;
       }
-      if (status !== expected) failures.push(`${route.method} ${path} (${variant}): ${status}, expected ${expected}`);
+      if (status !== expected)
+        failures.push(`${route.method} ${path} (${variant}): ${status}, expected ${expected}`);
     }
   }
   return failures;

@@ -18,11 +18,20 @@ function store() {
   return connection;
 }
 
-const notes = () => store().prepare('SELECT text FROM notes').all().map((row) => row.text);
+const notes = () =>
+  store()
+    .prepare('SELECT text FROM notes')
+    .all()
+    .map((row) => row.text);
 
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), 'ipb-state-db-'));
-  state = declareStateDatabase({ id: 'toy', file: 'toy.db', exercise: true, defaultDir: path.join(root, 'state') });
+  state = declareStateDatabase({
+    id: 'toy',
+    file: 'toy.db',
+    exercise: true,
+    defaultDir: path.join(root, 'state'),
+  });
   connection = undefined;
   closed = 0;
   state.onClose(() => {

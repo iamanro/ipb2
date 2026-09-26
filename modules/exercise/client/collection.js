@@ -28,7 +28,18 @@ import {
   zoomWindow,
 } from './syncMatrix.js';
 
-const DISCIPLINES = ['HUMINT', 'SIGINT', 'IMINT', 'GEOINT', 'OSINT', 'MASINT', 'UAS', 'RECCE', 'OP', 'OTHER'];
+const DISCIPLINES = [
+  'HUMINT',
+  'SIGINT',
+  'IMINT',
+  'GEOINT',
+  'OSINT',
+  'MASINT',
+  'UAS',
+  'RECCE',
+  'OP',
+  'OTHER',
+];
 const TASKING_STATUSES = ['planned', 'tasked', 'active', 'complete', 'cancelled'];
 const QUICK_OFFSETS = ['+1h', '+6h', '+12h', '+24h'];
 
@@ -57,15 +68,17 @@ export function createCollectionController(ctx) {
   let panel = null;
 
   async function load() {
-    const [collectors, taskings, requirements, nais, conflicts, reports, clock] = await Promise.all([
-      requestJson(`${api}/collectors`),
-      requestJson(`${api}/taskings`),
-      requestJson(`${api}/requirements`),
-      requestJson(`${api}/nais`),
-      requestJson(`${api}/collection/conflicts`),
-      requestJson(`${api}/reports`),
-      requestJson(`${api}/clock`),
-    ]);
+    const [collectors, taskings, requirements, nais, conflicts, reports, clock] = await Promise.all(
+      [
+        requestJson(`${api}/collectors`),
+        requestJson(`${api}/taskings`),
+        requestJson(`${api}/requirements`),
+        requestJson(`${api}/nais`),
+        requestJson(`${api}/collection/conflicts`),
+        requestJson(`${api}/reports`),
+        requestJson(`${api}/clock`),
+      ],
+    );
     Object.assign(data, { collectors, taskings, requirements, nais, conflicts, reports, clock });
   }
 
@@ -112,7 +125,10 @@ export function createCollectionController(ctx) {
   }
 
   async function reassignCollectorOwner(collector, ownerCell) {
-    await requestJson(`${api}/collectors/${collector.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/collectors/${collector.id}/owner`, {
+      method: 'PATCH',
+      body: { owner_cell: ownerCell },
+    });
     await load();
     render();
   }
@@ -121,7 +137,10 @@ export function createCollectionController(ctx) {
     const text = await askText('Notes', collector.notes ?? '');
     if (text === null) return;
     try {
-      await requestJson(`${api}/collectors/${collector.id}`, { method: 'PATCH', body: { notes: text } });
+      await requestJson(`${api}/collectors/${collector.id}`, {
+        method: 'PATCH',
+        body: { notes: text },
+      });
       await load();
       render();
     } catch (error) {
@@ -151,15 +170,33 @@ export function createCollectionController(ctx) {
       rangeInput.min = '0';
       rangeInput.step = '0.1';
       rangeInput.placeholder = 'Range (km)';
-      const fromInput = createDtgInput({ name: 'available_from', label: 'Available from', reference: scenarioNow });
-      const toInput = createDtgInput({ name: 'available_to', label: 'Available to', reference: scenarioNow });
+      const fromInput = createDtgInput({
+        name: 'available_from',
+        label: 'Available from',
+        reference: scenarioNow,
+      });
+      const toInput = createDtgInput({
+        name: 'available_to',
+        label: 'Available to',
+        reference: scenarioNow,
+      });
       const addButton = createElement('button', 'primary-button', 'Add collector');
       addButton.type = 'button';
       addButton.addEventListener('click', () => createCollector(form, section));
-      form.append(nameInput, disciplineSelect, unitInput, rangeInput, fromInput, toInput, addButton);
+      form.append(
+        nameInput,
+        disciplineSelect,
+        unitInput,
+        rangeInput,
+        fromInput,
+        toInput,
+        addButton,
+      );
       section.append(form);
     } else {
-      section.append(createElement('p', 'panel-note', 'Adding collectors needs the collection-manager role.'));
+      section.append(
+        createElement('p', 'panel-note', 'Adding collectors needs the collection-manager role.'),
+      );
     }
 
     if (!data.collectors.length) {
@@ -193,10 +230,16 @@ export function createCollectionController(ctx) {
       );
       const cellCell = document.createElement('td');
       cellCell.append(renderCellBadge(collector.owner_cell));
-      appendOwnerReassign(cellCell, collector.owner_cell, (ownerCell) => reassignCollectorOwner(collector, ownerCell));
+      appendOwnerReassign(cellCell, collector.owner_cell, (ownerCell) =>
+        reassignCollectorOwner(collector, ownerCell),
+      );
       row.append(cellCell);
       const notesCell = document.createElement('td');
-      const notesButton = createElement('button', 'text-button', collector.notes ? 'Edit notes' : 'Add notes');
+      const notesButton = createElement(
+        'button',
+        'text-button',
+        collector.notes ? 'Edit notes' : 'Add notes',
+      );
       notesButton.type = 'button';
       // C2b: release grants read only (moot for collectors today — they
       // have no release endpoint — but the store enforces canEdit
@@ -262,12 +305,19 @@ export function createCollectionController(ctx) {
   }
 
   async function linkTaskingReport(tasking, container) {
-    const options = data.reports.map((r) => `#${r.id} ${r.text.slice(0, 40)}`).join(', ') || 'none yet';
-    const idText = await askText(`Report id to link (available: ${options})`, tasking.report_id ?? '');
+    const options =
+      data.reports.map((r) => `#${r.id} ${r.text.slice(0, 40)}`).join(', ') || 'none yet';
+    const idText = await askText(
+      `Report id to link (available: ${options})`,
+      tasking.report_id ?? '',
+    );
     if (idText === null) return;
     const reportId = idText.trim() ? Number.parseInt(idText, 10) : null;
     try {
-      await requestJson(`${api}/taskings/${tasking.id}`, { method: 'PATCH', body: { report_id: reportId } });
+      await requestJson(`${api}/taskings/${tasking.id}`, {
+        method: 'PATCH',
+        body: { report_id: reportId },
+      });
       await load();
       render();
     } catch (error) {
@@ -299,7 +349,11 @@ export function createCollectionController(ctx) {
     const options = [];
     for (const requirement of data.requirements) {
       for (const sir of requirement.sirs ?? []) {
-        options.push({ id: sir.id, label: `${requirement.text.slice(0, 30)} — ${sir.text.slice(0, 40)}`, sir });
+        options.push({
+          id: sir.id,
+          label: `${requirement.text.slice(0, 30)} — ${sir.text.slice(0, 40)}`,
+          sir,
+        });
       }
     }
     return options;
@@ -315,7 +369,9 @@ export function createCollectionController(ctx) {
       const collectorSelect = document.createElement('select');
       collectorSelect.name = 'collector_id';
       collectorSelect.append(new Option('Collector…', ''));
-      data.collectors.forEach((c) => collectorSelect.append(new Option(`${c.name} (${c.discipline})`, c.id)));
+      data.collectors.forEach((c) =>
+        collectorSelect.append(new Option(`${c.name} (${c.discipline})`, c.id)),
+      );
       const sirSelect = document.createElement('select');
       sirSelect.name = 'sir_id';
       sirSelect.append(new Option('SIR…', ''));
@@ -323,12 +379,18 @@ export function createCollectionController(ctx) {
       const naiSelect = document.createElement('select');
       naiSelect.name = 'nai_id';
       naiSelect.append(new Option('NAI (default: SIR\u2019s)', ''));
-      data.nais.forEach((n) => naiSelect.append(new Option(`${n.label} (${n.kind.toUpperCase()})`, n.id)));
+      data.nais.forEach((n) =>
+        naiSelect.append(new Option(`${n.label} (${n.kind.toUpperCase()})`, n.id)),
+      );
       sirSelect.addEventListener('change', () => {
         const sir = sirOptions.find((o) => String(o.id) === sirSelect.value)?.sir;
         naiSelect.value = sir?.nai_id ? String(sir.nai_id) : '';
       });
-      const startInput = createDtgInput({ name: 'start_at', label: 'Start', reference: scenarioNow });
+      const startInput = createDtgInput({
+        name: 'start_at',
+        label: 'Start',
+        reference: scenarioNow,
+      });
       const endInput = createDtgInput({ name: 'end_at', label: 'End', reference: scenarioNow });
       const quickWrap = createElement('div', 'inline-form quick-offsets');
       QUICK_OFFSETS.forEach((offset) => {
@@ -350,10 +412,20 @@ export function createCollectionController(ctx) {
       const addButton = createElement('button', 'primary-button', 'Task');
       addButton.type = 'button';
       addButton.addEventListener('click', () => createTasking(form, section));
-      form.append(collectorSelect, sirSelect, naiSelect, startInput, endInput, notesInput, addButton);
+      form.append(
+        collectorSelect,
+        sirSelect,
+        naiSelect,
+        startInput,
+        endInput,
+        notesInput,
+        addButton,
+      );
       section.append(form, quickWrap);
     } else {
-      section.append(createElement('p', 'panel-note', 'Tasking collectors needs the collection-manager role.'));
+      section.append(
+        createElement('p', 'panel-note', 'Tasking collectors needs the collection-manager role.'),
+      );
     }
 
     if (!data.taskings.length) {
@@ -380,7 +452,8 @@ export function createCollectionController(ctx) {
       );
       if (conflictIds.has(tasking.id)) {
         const warn = createElement('span', 'conflict-badge', '\u26A0 Conflict');
-        warn.title = 'Overlaps another tasking of the same collector, or is outside its availability window.';
+        warn.title =
+          'Overlaps another tasking of the same collector, or is outside its availability window.';
         header.append(warn);
       }
       row.append(header);
@@ -406,7 +479,9 @@ export function createCollectionController(ctx) {
         const statusSelect = document.createElement('select');
         TASKING_STATUSES.forEach((s) => statusSelect.append(new Option(s, s)));
         statusSelect.value = tasking.status;
-        statusSelect.addEventListener('change', () => updateTaskingStatus(tasking, statusSelect.value));
+        statusSelect.addEventListener('change', () =>
+          updateTaskingStatus(tasking, statusSelect.value),
+        );
         actions.append(statusSelect);
         if (tasking.status === 'complete') {
           const linkButton = createElement(
@@ -439,7 +514,11 @@ export function createCollectionController(ctx) {
     const header = createElement('div', 'panel-header-row');
     header.append(createElement('h3', null, 'ISR synchronization matrix'));
     const zoomControls = createElement('div', 'inline-form');
-    const autoButton = createElement('button', `chip-button${zoomHours === null ? ' active' : ''}`, 'Auto-fit');
+    const autoButton = createElement(
+      'button',
+      `chip-button${zoomHours === null ? ' active' : ''}`,
+      'Auto-fit',
+    );
     autoButton.type = 'button';
     autoButton.addEventListener('click', () => {
       zoomHours = null;
@@ -447,7 +526,11 @@ export function createCollectionController(ctx) {
     });
     zoomControls.append(autoButton);
     ZOOM_PRESETS.forEach((hours) => {
-      const button = createElement('button', `chip-button${zoomHours === hours ? ' active' : ''}`, `${hours} h`);
+      const button = createElement(
+        'button',
+        `chip-button${zoomHours === hours ? ' active' : ''}`,
+        `${hours} h`,
+      );
       button.type = 'button';
       button.addEventListener('click', () => {
         zoomHours = hours;
@@ -460,14 +543,22 @@ export function createCollectionController(ctx) {
 
     const rows = buildMatrixRows(data.requirements, data.taskings, data.nais);
     if (!rows.length) {
-      section.append(createElement('p', 'panel-note', 'No SIRs to schedule yet — import from IPB or add one on the Requirements tab.'));
+      section.append(
+        createElement(
+          'p',
+          'panel-note',
+          'No SIRs to schedule yet — import from IPB or add one on the Requirements tab.',
+        ),
+      );
       container.append(section);
       return;
     }
     const ltiovTimes = rows.filter((r) => r.kind === 'pir' && r.ltiov !== null).map((r) => r.ltiov);
     const now = data.clock ? new Date(data.clock.now).getTime() : Date.now();
     const timeWindow =
-      zoomHours === null ? computeTimeWindow(data.taskings, ltiovTimes, now) : zoomWindow(now, zoomHours);
+      zoomHours === null
+        ? computeTimeWindow(data.taskings, ltiovTimes, now)
+        : zoomWindow(now, zoomHours);
 
     const collectorsById = new Map(data.collectors.map((c) => [c.id, c]));
     const taskingsById = new Map(data.taskings.map((t) => [t.id, t]));

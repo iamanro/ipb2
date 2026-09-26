@@ -215,7 +215,14 @@ function createOrbat(owner, body) {
         `INSERT INTO orbats (name, description, created_at, updated_at, owner_cell, releasable_to)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(name, description, timestamp, timestamp, owner.owner_cell, JSON.stringify(owner.releasable_to));
+      .run(
+        name,
+        description,
+        timestamp,
+        timestamp,
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
+      );
     return documentFor(fetchRow('orbats', Number(lastInsertRowid)));
   });
 }
@@ -235,7 +242,9 @@ function updateOrbat(orbat, patch) {
     if (sets.length) {
       sets.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE orbats SET ${sets.join(', ')} WHERE id = ?`).run(...params, orbat.id);
+      database
+        .prepare(`UPDATE orbats SET ${sets.join(', ')} WHERE id = ?`)
+        .run(...params, orbat.id);
     }
     return documentFor(fetchRow('orbats', orbat.id));
   });
@@ -541,7 +550,14 @@ function importOrbat(owner, body) {
         `INSERT INTO orbats (name, description, created_at, updated_at, owner_cell, releasable_to)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(name, description, timestamp, timestamp, owner.owner_cell, JSON.stringify(owner.releasable_to));
+      .run(
+        name,
+        description,
+        timestamp,
+        timestamp,
+        owner.owner_cell,
+        JSON.stringify(owner.releasable_to),
+      );
     const orbatId = Number(lastInsertRowid);
     validated.forEach((node, index) => insertImportedNode(orbatId, null, index, node));
     return documentFor(fetchRow('orbats', orbatId));

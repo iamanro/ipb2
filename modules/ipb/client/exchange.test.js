@@ -57,12 +57,23 @@ describe('parseGeoJson', () => {
         properties: { name: 'From QGIS' },
       }),
     );
-    expect(items).toEqual([{ label: 'From QGIS', geometry: { type: 'Point', coordinates: [1, 2] }, properties: { name: 'From QGIS' } }]);
+    expect(items).toEqual([
+      {
+        label: 'From QGIS',
+        geometry: { type: 'Point', coordinates: [1, 2] },
+        properties: { name: 'From QGIS' },
+      },
+    ]);
   });
 
   test('skips a Feature with no geometry', () => {
     expect(
-      parseGeoJson(JSON.stringify({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: {} }] })),
+      parseGeoJson(
+        JSON.stringify({
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', properties: {} }],
+        }),
+      ),
     ).toEqual([]);
   });
 });
@@ -89,7 +100,13 @@ describe('parseKml', () => {
     });
     expect(items[1]).toMatchObject({
       label: 'PL Whiskey',
-      geometry: { type: 'LineString', coordinates: [[17.4, 49.6], [17.5, 49.7]] },
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [17.4, 49.6],
+          [17.5, 49.7],
+        ],
+      },
       properties: { graphic: 'phase-line' },
       folderLayer: 'graphic',
     });
@@ -116,8 +133,14 @@ describe('parseKml', () => {
     expect(item.geometry).toEqual({
       type: 'MultiLineString',
       coordinates: [
-        [[0, 0], [1, 1]],
-        [[2, 2], [3, 3]],
+        [
+          [0, 0],
+          [1, 1],
+        ],
+        [
+          [2, 2],
+          [3, 3],
+        ],
       ],
     });
   });
@@ -137,12 +160,20 @@ describe('parseKml', () => {
 describe('classifyImportItem', () => {
   test('a real layer with an explicit valid kind is native', () => {
     expect(
-      classifyImportItem({ geometry: { type: 'Point' }, properties: { layer: 'note', kind: 'point' } }),
+      classifyImportItem({
+        geometry: { type: 'Point' },
+        properties: { layer: 'note', kind: 'point' },
+      }),
     ).toEqual({ native: true, layer: 'note', kind: 'point' });
   });
 
   test('an unknown layer is foreign, even with a plausible kind', () => {
-    expect(classifyImportItem({ geometry: { type: 'Point' }, properties: { layer: 'poi', kind: 'point' } })).toEqual({
+    expect(
+      classifyImportItem({
+        geometry: { type: 'Point' },
+        properties: { layer: 'poi', kind: 'point' },
+      }),
+    ).toEqual({
       native: false,
       layer: null,
       kind: null,
@@ -151,15 +182,33 @@ describe('classifyImportItem', () => {
 
   test('a KML round trip infers kind from graphic/radii/sidc/geometry when the Folder names a real layer', () => {
     expect(
-      classifyImportItem({ geometry: { type: 'LineString' }, properties: { graphic: 'boundary' }, folderLayer: 'graphic' }),
+      classifyImportItem({
+        geometry: { type: 'LineString' },
+        properties: { graphic: 'boundary' },
+        folderLayer: 'graphic',
+      }),
     ).toEqual({ native: true, layer: 'graphic', kind: 'graphic' });
     expect(
-      classifyImportItem({ geometry: { type: 'Point' }, properties: { radii: [1000] }, folderLayer: 'range-ring' }),
+      classifyImportItem({
+        geometry: { type: 'Point' },
+        properties: { radii: [1000] },
+        folderLayer: 'range-ring',
+      }),
     ).toEqual({ native: true, layer: 'range-ring', kind: 'range-ring' });
     expect(
-      classifyImportItem({ geometry: { type: 'Point' }, properties: { sidc: '3' }, folderLayer: 'unit' }),
+      classifyImportItem({
+        geometry: { type: 'Point' },
+        properties: { sidc: '3' },
+        folderLayer: 'unit',
+      }),
     ).toEqual({ native: true, layer: 'unit', kind: 'symbol' });
-    expect(classifyImportItem({ geometry: { type: 'Polygon' }, properties: {}, folderLayer: 'key-terrain' })).toEqual({
+    expect(
+      classifyImportItem({
+        geometry: { type: 'Polygon' },
+        properties: {},
+        folderLayer: 'key-terrain',
+      }),
+    ).toEqual({
       native: true,
       layer: 'key-terrain',
       kind: 'polygon',
@@ -198,45 +247,87 @@ describe('buildImportPlan', () => {
       },
     ]);
     expect(toCreate).toEqual([
-      { layer: 'note', kind: 'point', label: 'OP 1', geometry: { type: 'Point', coordinates: [1, 2] }, properties: { extra: 'x' } },
+      {
+        layer: 'note',
+        kind: 'point',
+        label: 'OP 1',
+        geometry: { type: 'Point', coordinates: [1, 2] },
+        properties: { extra: 'x' },
+      },
     ]);
   });
 
   test('a bad native graphic (wrong geometry for its type) is skipped with a reason, not fatal to the batch', () => {
     const { skipped, toCreate } = buildImportPlan([
-      { label: 'Bad PL', geometry: { type: 'Polygon', coordinates: [] }, properties: { layer: 'graphic', kind: 'graphic', graphic: 'phase-line' } },
-      { label: 'Good OP', geometry: { type: 'Point', coordinates: [1, 2] }, properties: { layer: 'note', kind: 'point' } },
+      {
+        label: 'Bad PL',
+        geometry: { type: 'Polygon', coordinates: [] },
+        properties: { layer: 'graphic', kind: 'graphic', graphic: 'phase-line' },
+      },
+      {
+        label: 'Good OP',
+        geometry: { type: 'Point', coordinates: [1, 2] },
+        properties: { layer: 'note', kind: 'point' },
+      },
     ]);
     expect(skipped).toEqual([{ label: 'Bad PL', reason: 'graphic "phase-line" must be a line' }]);
     expect(toCreate).toHaveLength(1);
   });
 
   test('foreign data needs a targetLayer, and is filed under it with kind from geometry', () => {
-    const item = { label: 'POI', geometry: { type: 'Point', coordinates: [1, 2] }, properties: { name: 'POI' } };
+    const item = {
+      label: 'POI',
+      geometry: { type: 'Point', coordinates: [1, 2] },
+      properties: { name: 'POI' },
+    };
     expect(buildImportPlan([item], {}).skipped).toEqual([
       { label: 'POI', reason: 'No target layer chosen for this foreign feature' },
     ]);
     const { toCreate } = buildImportPlan([item], { targetLayer: 'key-terrain' });
     expect(toCreate).toEqual([
-      { layer: 'key-terrain', kind: 'point', label: 'POI', geometry: item.geometry, properties: {} },
+      {
+        layer: 'key-terrain',
+        kind: 'point',
+        label: 'POI',
+        geometry: item.geometry,
+        properties: {},
+      },
     ]);
   });
 
   test('FOREIGN_TARGET_LAYERS lists the four documented choices', () => {
-    expect(FOREIGN_TARGET_LAYERS.map((entry) => entry.id)).toEqual(['note', 'obstacle', 'nai', 'key-terrain']);
+    expect(FOREIGN_TARGET_LAYERS.map((entry) => entry.id)).toEqual([
+      'note',
+      'obstacle',
+      'nai',
+      'key-terrain',
+    ]);
   });
 });
 
-describe('round-trip through the server\'s own export (modules/ipb/server/export.js)', () => {
+describe("round-trip through the server's own export (modules/ipb/server/export.js)", () => {
   const STUDY = { name: 'Round Trip Study' };
   const FEATURES = [
-    { id: 1, layer: 'note', kind: 'point', label: 'OP 1', geometry: { type: 'Point', coordinates: [17.5, 49.7] }, properties: {} },
+    {
+      id: 1,
+      layer: 'note',
+      kind: 'point',
+      label: 'OP 1',
+      geometry: { type: 'Point', coordinates: [17.5, 49.7] },
+      properties: {},
+    },
     {
       id: 2,
       layer: 'obstacle',
       kind: 'line',
       label: 'Wire obstacle',
-      geometry: { type: 'LineString', coordinates: [[17.4, 49.6], [17.45, 49.65]] },
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [17.4, 49.6],
+          [17.45, 49.65],
+        ],
+      },
       properties: {},
     },
     {
@@ -244,7 +335,17 @@ describe('round-trip through the server\'s own export (modules/ipb/server/export
       layer: 'key-terrain',
       kind: 'polygon',
       label: 'Hill 214',
-      geometry: { type: 'Polygon', coordinates: [[[17.4, 49.6], [17.4, 49.7], [17.5, 49.7], [17.4, 49.6]]] },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [17.4, 49.6],
+            [17.4, 49.7],
+            [17.5, 49.7],
+            [17.4, 49.6],
+          ],
+        ],
+      },
       properties: {},
     },
     {
@@ -260,7 +361,13 @@ describe('round-trip through the server\'s own export (modules/ipb/server/export
       layer: 'graphic',
       kind: 'graphic',
       label: 'PL Whiskey',
-      geometry: { type: 'LineString', coordinates: [[17.4, 49.6], [17.5, 49.7]] },
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [17.4, 49.6],
+          [17.5, 49.7],
+        ],
+      },
       properties: { graphic: 'phase-line', affiliation: 'friendly', name: 'PL Whiskey' },
     },
     {

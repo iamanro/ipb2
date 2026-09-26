@@ -35,7 +35,8 @@ function flagValue(args, flag) {
 
 function backupRoot() {
   if (process.env.IPB_BACKUP_ROOT) return process.env.IPB_BACKUP_ROOT;
-  const stateRoot = process.env.IPB_STATE_ROOT || path.join(import.meta.dirname, '..', '..', 'modules');
+  const stateRoot =
+    process.env.IPB_STATE_ROOT || path.join(import.meta.dirname, '..', '..', 'modules');
   return path.join(path.dirname(stateRoot), 'backups');
 }
 
@@ -74,10 +75,15 @@ function main() {
   const source = path.isAbsolute(target) ? target : path.join(root, target);
   if (!existsSync(source)) fail(`no backup at ${source}. Run without arguments to list backups.`);
 
-  const only = flagValue(args, '--only')?.split(',').map((id) => id.trim()).filter(Boolean);
+  const only = flagValue(args, '--only')
+    ?.split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
   const unknown = only?.filter((id) => !STATE_DATABASES.some((database) => database.id === id));
   if (unknown?.length) {
-    fail(`unknown database(s): ${unknown.join(', ')}. Known: ${STATE_DATABASES.map((database) => database.id).join(', ')}.`);
+    fail(
+      `unknown database(s): ${unknown.join(', ')}. Known: ${STATE_DATABASES.map((database) => database.id).join(', ')}.`,
+    );
   }
 
   const plan = [];
@@ -94,7 +100,8 @@ function main() {
     } catch (error) {
       check = error.message;
     }
-    if (check !== 'ok') fail(`${from} failed its integrity check (${check}); nothing was restored.`);
+    if (check !== 'ok')
+      fail(`${from} failed its integrity check (${check}); nothing was restored.`);
     plan.push({ database, from });
   }
   if (!plan.length) fail('nothing to restore.');
@@ -110,7 +117,8 @@ function main() {
   }
 
   console.log(`Restore from ${source}:`);
-  for (const { database, from } of plan) console.log(`  ${database.id}: ${from} -> ${database.path}`);
+  for (const { database, from } of plan)
+    console.log(`  ${database.id}: ${from} -> ${database.path}`);
   if (!args.includes('--yes')) {
     console.log('Dry run. Add --yes to restore.');
     return;
@@ -120,7 +128,8 @@ function main() {
   const safety = path.join(root, `pre-restore-${stamp}`);
   mkdirSync(safety, { recursive: true });
   for (const { database } of plan) {
-    if (database.copyInto(safety) !== null) console.log(`  saved current ${database.id} to ${safety}`);
+    if (database.copyInto(safety) !== null)
+      console.log(`  saved current ${database.id} to ${safety}`);
   }
 
   for (const { database, from } of plan) {
@@ -133,7 +142,12 @@ function main() {
     const dest = archiveRoot();
     let copied = 0;
     for (const entry of readdirSync(mirrored, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name.startsWith('.') || existsSync(path.join(dest, entry.name))) continue;
+      if (
+        !entry.isDirectory() ||
+        entry.name.startsWith('.') ||
+        existsSync(path.join(dest, entry.name))
+      )
+        continue;
       cpSync(path.join(mirrored, entry.name), path.join(dest, entry.name), { recursive: true });
       copied += 1;
     }

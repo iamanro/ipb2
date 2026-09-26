@@ -118,7 +118,12 @@ describe('graphicColor', () => {
 describe('axisOfAdvancePolygon', () => {
   test('returns null for fewer than two distinct points', () => {
     expect(axisOfAdvancePolygon([[17.5, 49.7]])).toBeNull();
-    expect(axisOfAdvancePolygon([[17.5, 49.7], [17.5, 49.7]])).toBeNull();
+    expect(
+      axisOfAdvancePolygon([
+        [17.5, 49.7],
+        [17.5, 49.7],
+      ]),
+    ).toBeNull();
   });
 
   /** Distance from `point` to the nearest point on the polyline `line` (`[lon, lat]` pairs), by fine linear-interpolation sampling — accurate enough for a width sanity check without pulling in a full geodesic point-to-segment solver. */
@@ -150,7 +155,7 @@ describe('axisOfAdvancePolygon', () => {
     expect(distanceToPolyline(ring[0], LINE_LONLAT)).toBeCloseTo(widthM / 2, -2);
   });
 
-  test('one vertex sits exactly at the line\'s last vertex (the tip)', () => {
+  test("one vertex sits exactly at the line's last vertex (the tip)", () => {
     const ring = axisOfAdvancePolygon(LINE_LONLAT, 500);
     const lastVertex = LINE_LONLAT[LINE_LONLAT.length - 1];
     const closest = Math.min(...ring.map((point) => getDistance(point, lastVertex)));

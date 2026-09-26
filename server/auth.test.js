@@ -76,8 +76,15 @@ describe('users', () => {
     store.setAdmin('alice', true);
     expect(store.listUsers().find((u) => u.name === 'alice').admin).toBe(true);
     await store.setPassword('alice', 'new correct horse');
-    await expectStatus(store.login({ name: 'alice', password: 'correct horse', ip: '1.1.1.1' }), 401);
-    const result = await store.login({ name: 'alice', password: 'new correct horse', ip: '1.1.1.1' });
+    await expectStatus(
+      store.login({ name: 'alice', password: 'correct horse', ip: '1.1.1.1' }),
+      401,
+    );
+    const result = await store.login({
+      name: 'alice',
+      password: 'new correct horse',
+      ip: '1.1.1.1',
+    });
     expect(result.user.name).toBe('alice');
     store.removeUser('alice');
     expect(store.listUsers().map((u) => u.name)).toEqual(['other-admin']);
@@ -154,9 +161,7 @@ describe('membership (C2/C6)', () => {
     expect(() => store.setMembership('ghost', { cell: 'blue', role: 'analyst' })).toThrow(
       expect.objectContaining({ status: 404 }),
     );
-    expect(() => store.removeMembership('ghost')).toThrow(
-      expect.objectContaining({ status: 404 }),
-    );
+    expect(() => store.removeMembership('ghost')).toThrow(expect.objectContaining({ status: 404 }));
   });
 
   test('removeMembership is idempotent for a user with no membership', () => {
@@ -301,13 +306,19 @@ describe('login', () => {
     // of milliseconds. This is a floor, not a comparison between two runs
     // (which would be flaky) — proof the dummy-hash path actually hashes.
     const start = performance.now();
-    await expectStatus(store.login({ name: 'nosuchuser', password: 'whatever1', ip: '1.1.1.1' }), 401);
+    await expectStatus(
+      store.login({ name: 'nosuchuser', password: 'whatever1', ip: '1.1.1.1' }),
+      401,
+    );
     expect(performance.now() - start).toBeGreaterThan(5);
   });
 
   test('rejects a syntactically invalid name or an oversized/non-string password before checking credentials', async () => {
     await expectStatus(store.login({ name: 'a l!ce', password: 'whatever1', ip: '1.1.1.1' }), 400);
-    await expectStatus(store.login({ name: 'alice', password: 'x'.repeat(2000), ip: '1.1.1.1' }), 400);
+    await expectStatus(
+      store.login({ name: 'alice', password: 'x'.repeat(2000), ip: '1.1.1.1' }),
+      400,
+    );
     await expectStatus(store.login({ name: 'alice', password: 123, ip: '1.1.1.1' }), 400);
     await expectStatus(store.login({ name: 'alice', password: '', ip: '1.1.1.1' }), 400);
   });
@@ -357,7 +368,10 @@ describe('login', () => {
     // far under its own 10-failure budget, but the account-wide budget
     // (independent of address) is exhausted.
     for (let i = 0; i < 20; i += 1) {
-      await expectStatus(store.login({ name: 'alice', password: 'wrong', ip: `203.0.113.${i}` }), 401);
+      await expectStatus(
+        store.login({ name: 'alice', password: 'wrong', ip: `203.0.113.${i}` }),
+        401,
+      );
     }
     await expectStatus(
       store.login({ name: 'alice', password: 'correct horse battery', ip: '203.0.113.99' }),
@@ -630,12 +644,8 @@ describe('user management (admin flag)', () => {
 
   test('the last enabled admin cannot be demoted, disabled or deleted', async () => {
     await store.createUser('root', 'correct horse battery', { admin: true });
-    expect(() => store.setAdmin('root', false)).toThrow(
-      expect.objectContaining({ status: 409 }),
-    );
-    expect(() => store.setDisabled('root', true)).toThrow(
-      expect.objectContaining({ status: 409 }),
-    );
+    expect(() => store.setAdmin('root', false)).toThrow(expect.objectContaining({ status: 409 }));
+    expect(() => store.setDisabled('root', true)).toThrow(expect.objectContaining({ status: 409 }));
     expect(() => store.removeUser('root')).toThrow(expect.objectContaining({ status: 409 }));
   });
 

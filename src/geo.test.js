@@ -92,9 +92,14 @@ describe('formatArea', () => {
 describe('formatMgrs spaced', () => {
   test('groups zone, square and the two halves of the digits', () => {
     expect(formatMgrs(TARGET.lon, TARGET.lat, 5, { spaced: true })).toBe(
-      formatMgrs(TARGET.lon, TARGET.lat).replace(/^(\d+[A-Z])([A-Z]{2})(\d{5})(\d{5})$/, '$1 $2 $3 $4'),
+      formatMgrs(TARGET.lon, TARGET.lat).replace(
+        /^(\d+[A-Z])([A-Z]{2})(\d{5})(\d{5})$/,
+        '$1 $2 $3 $4',
+      ),
     );
-    expect(formatMgrs(TARGET.lon, TARGET.lat, 2, { spaced: true })).toMatch(/^\d+[A-Z] [A-Z]{2} \d{2} \d{2}$/);
+    expect(formatMgrs(TARGET.lon, TARGET.lat, 2, { spaced: true })).toMatch(
+      /^\d+[A-Z] [A-Z]{2} \d{2} \d{2}$/,
+    );
   });
 
   test('a spaced reference copied off the screen parses back to the same point', () => {

@@ -53,7 +53,14 @@ test('publish delivers to every open connection as an SSE data event', () => {
   const b = fakeConnection();
   handleLive(a.request, a.response, { user: 'alice' });
   handleLive(b.request, b.response, { user: 'bob' });
-  const event = { module: 'orbat', method: 'POST', route: 'orbats', client: 'c1', user: 'alice', at: 'now' };
+  const event = {
+    module: 'orbat',
+    method: 'POST',
+    route: 'orbats',
+    client: 'c1',
+    user: 'alice',
+    at: 'now',
+  };
   publish(event);
   for (const response of [a.response, b.response]) {
     const dataLine = response.written.find((chunk) => chunk.startsWith('data: '));
@@ -219,7 +226,12 @@ test('C4: the keep-alive tick closes the stream when the membership cell changed
   vi.useFakeTimers();
   const { request, response } = fakeConnection();
   let membership = { cell: 'blue', role: 'analyst', admin: false };
-  handleLive(request, response, { user: 'alice', cell: 'blue', role: 'analyst', revalidate: () => membership });
+  handleLive(request, response, {
+    user: 'alice',
+    cell: 'blue',
+    role: 'analyst',
+    revalidate: () => membership,
+  });
   const before = subscriberCount();
   membership = { cell: 'red', role: 'analyst', admin: false }; // reassigned to a different cell
   vi.advanceTimersByTime(30000);
@@ -231,7 +243,12 @@ test('C4: the keep-alive tick closes the stream when the membership role changed
   vi.useFakeTimers();
   const { request, response } = fakeConnection();
   let membership = { cell: 'blue', role: 'observer', admin: false };
-  handleLive(request, response, { user: 'alice', cell: 'blue', role: 'observer', revalidate: () => membership });
+  handleLive(request, response, {
+    user: 'alice',
+    cell: 'blue',
+    role: 'observer',
+    revalidate: () => membership,
+  });
   membership = { cell: 'blue', role: 'game-master', admin: false }; // promoted, same cell
   vi.advanceTimersByTime(30000);
   expect(response.ended).toBe(true);
@@ -241,7 +258,13 @@ test('C4: the keep-alive tick closes the stream when the admin flag changed', ()
   vi.useFakeTimers();
   const { request, response } = fakeConnection();
   let membership = { cell: 'white', role: 'game-master', admin: true };
-  handleLive(request, response, { user: 'root', cell: 'white', role: 'game-master', admin: true, revalidate: () => membership });
+  handleLive(request, response, {
+    user: 'root',
+    cell: 'white',
+    role: 'game-master',
+    admin: true,
+    revalidate: () => membership,
+  });
   membership = { cell: 'white', role: 'game-master', admin: false }; // admin flag removed
   vi.advanceTimersByTime(30000);
   expect(response.ended).toBe(true);
@@ -251,7 +274,12 @@ test('C4: an unchanged membership on the keep-alive tick just sends the comment,
   vi.useFakeTimers();
   const { request, response } = fakeConnection();
   const membership = { cell: 'blue', role: 'analyst', admin: false };
-  handleLive(request, response, { user: 'alice', cell: 'blue', role: 'analyst', revalidate: () => membership });
+  handleLive(request, response, {
+    user: 'alice',
+    cell: 'blue',
+    role: 'analyst',
+    revalidate: () => membership,
+  });
   const initialWrites = response.written.length;
   vi.advanceTimersByTime(30000);
   expect(response.ended).toBe(false);

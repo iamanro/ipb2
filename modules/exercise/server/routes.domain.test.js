@@ -23,7 +23,8 @@ const WHITE = { name: 'w', admin: false, cell: 'white', role: 'game-master' };
 const BLUE = { name: 'b', admin: false, cell: 'blue', role: 'analyst' };
 const RED = { name: 'r', admin: false, cell: 'red', role: 'analyst' };
 
-const call = (actor, method, route, body) => dispatcher.runAs(actor, 'exercise', method, route, body);
+const call = (actor, method, route, body) =>
+  dispatcher.runAs(actor, 'exercise', method, route, body);
 
 beforeAll(async () => {
   stateRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-exercise-domain-'));
@@ -31,7 +32,10 @@ beforeAll(async () => {
   process.env.IPB_STATE_ROOT = stateRoot;
   process.env.IPB_DATA_ROOT = dataRoot;
   mkdirSync(path.join(dataRoot, 'exercise'), { recursive: true });
-  writeFileSync(path.join(dataRoot, 'exercise', 'regions.json'), JSON.stringify({ type: 'FeatureCollection', features: [] }));
+  writeFileSync(
+    path.join(dataRoot, 'exercise', 'regions.json'),
+    JSON.stringify({ type: 'FeatureCollection', features: [] }),
+  );
   routes = (await import('./routes.js')).default;
 });
 
@@ -56,9 +60,17 @@ describe('evidence links are parts of the requirement they support', () => {
     const pir = await call(BLUE, 'POST', 'requirements', { kind: 'PIR', text: 'Blue PIR' });
     const sir = await call(BLUE, 'POST', `requirements/${pir.id}/sirs`, { text: 'SIR A' });
 
-    const releasedReport = await call(RED, 'POST', 'reports', { text: 'released report', reliability: 'A', credibility: 1 });
+    const releasedReport = await call(RED, 'POST', 'reports', {
+      text: 'released report',
+      reliability: 'A',
+      credibility: 1,
+    });
     await call(RED, 'POST', `reports/${releasedReport.id}/release`, { cells: ['blue'] });
-    const hiddenReport = await call(RED, 'POST', 'reports', { text: 'hidden report', reliability: 'A', credibility: 1 });
+    const hiddenReport = await call(RED, 'POST', 'reports', {
+      text: 'hidden report',
+      reliability: 'A',
+      credibility: 1,
+    });
 
     const link = await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
       report_id: releasedReport.id,
@@ -66,7 +78,11 @@ describe('evidence links are parts of the requirement they support', () => {
       target_id: sir.id,
       relation: 'confirms',
     });
-    expect(link).toMatchObject({ requirement_id: pir.id, report_id: releasedReport.id, withdrawn: false });
+    expect(link).toMatchObject({
+      requirement_id: pir.id,
+      report_id: releasedReport.id,
+      withdrawn: false,
+    });
 
     await expect(
       call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
@@ -78,10 +94,17 @@ describe('evidence links are parts of the requirement they support', () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  test('Red cannot see Blue\'s PIR or its evidence links', async () => {
+  test("Red cannot see Blue's PIR or its evidence links", async () => {
     const pir = await call(BLUE, 'POST', 'requirements', { kind: 'PIR', text: 'Blue-only PIR' });
     await expect(call(RED, 'GET', `requirements/${pir.id}`)).rejects.toMatchObject({ status: 404 });
-    await expect(call(RED, 'POST', `requirements/${pir.id}/evidence`, { report_id: 1, target_kind: 'requirement', target_id: pir.id, relation: 'confirms' })).rejects.toMatchObject({
+    await expect(
+      call(RED, 'POST', `requirements/${pir.id}/evidence`, {
+        report_id: 1,
+        target_kind: 'requirement',
+        target_id: pir.id,
+        relation: 'confirms',
+      }),
+    ).rejects.toMatchObject({
       status: 404,
     });
   });
@@ -91,8 +114,17 @@ describe('withdrawn reports never count toward fulfillment', () => {
   test('deleting the cited report leaves the link, shows withdrawn, and drops fulfillment', async () => {
     const pir = await call(BLUE, 'POST', 'requirements', { kind: 'PIR', text: 'x' });
     const sir = await call(BLUE, 'POST', `requirements/${pir.id}/sirs`, { text: 'SIR A' });
-    const report = await call(BLUE, 'POST', 'reports', { text: 'evidence', reliability: 'A', credibility: 1 });
-    await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, { report_id: report.id, target_kind: 'sir', target_id: sir.id, relation: 'confirms' });
+    const report = await call(BLUE, 'POST', 'reports', {
+      text: 'evidence',
+      reliability: 'A',
+      credibility: 1,
+    });
+    await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
+      report_id: report.id,
+      target_kind: 'sir',
+      target_id: sir.id,
+      relation: 'confirms',
+    });
 
     const before = await call(BLUE, 'GET', `requirements/${pir.id}`);
     expect(before.fulfillment).toMatchObject({ covered: 1, total: 1, state: 'fulfilled' });
@@ -108,11 +140,24 @@ describe('withdrawn reports never count toward fulfillment', () => {
 
 describe('fulfillment is per viewer', () => {
   test('a released-to-Blue report counts for Blue; the same requirement shows unfulfilled to a Red view of the same rows', async () => {
-    const pir = await call(WHITE, 'POST', 'requirements', { kind: 'PIR', text: 'x', owner_cell: 'blue' });
+    const pir = await call(WHITE, 'POST', 'requirements', {
+      kind: 'PIR',
+      text: 'x',
+      owner_cell: 'blue',
+    });
     await call(WHITE, 'POST', `requirements/${pir.id}/release`, { cells: ['red'] });
     const sir = await call(WHITE, 'POST', `requirements/${pir.id}/sirs`, { text: 'SIR A' });
-    const report = await call(BLUE, 'POST', 'reports', { text: 'blue-only evidence', reliability: 'A', credibility: 1 });
-    await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, { report_id: report.id, target_kind: 'sir', target_id: sir.id, relation: 'confirms' });
+    const report = await call(BLUE, 'POST', 'reports', {
+      text: 'blue-only evidence',
+      reliability: 'A',
+      credibility: 1,
+    });
+    await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
+      report_id: report.id,
+      target_kind: 'sir',
+      target_id: sir.id,
+      relation: 'confirms',
+    });
 
     const blueView = await call(BLUE, 'GET', `requirements/${pir.id}`);
     expect(blueView.fulfillment).toMatchObject({ covered: 1, state: 'fulfilled' });
@@ -135,7 +180,10 @@ describe('an inject fired by the clock reaches only its cells', () => {
     events.length = 0;
     const fired = await call(WHITE, 'POST', `scenario-events/${event.id}/fire`, {});
     expect(fired.state).toBe('fired');
-    expect(events.at(-1)).toMatchObject({ route: `scenario-events/${event.id}/fire`, cells: ['white', 'red'] });
+    expect(events.at(-1)).toMatchObject({
+      route: `scenario-events/${event.id}/fire`,
+      cells: ['white', 'red'],
+    });
 
     const redReports = await call(RED, 'GET', 'reports');
     expect(redReports.some((r) => r.text === 'Contact south of the bridge')).toBe(true);
@@ -153,7 +201,13 @@ describe('an inject fired by the clock reaches only its cells', () => {
       payload: { text: 'Due inject', release_to: ['blue'] },
     });
     events.length = 0;
-    await dispatcher.runAs(EXERCISE_CONTROL, 'exercise', 'POST', `scenario-events/${event.id}/fire`, null);
+    await dispatcher.runAs(
+      EXERCISE_CONTROL,
+      'exercise',
+      'POST',
+      `scenario-events/${event.id}/fire`,
+      null,
+    );
     expect(events.at(-1)).toMatchObject({ user: 'scenario clock', cells: ['white', 'blue'] });
     const blueMessages = await call(BLUE, 'GET', 'messages');
     expect(blueMessages.some((m) => m.text === 'Due inject')).toBe(true);
@@ -169,18 +223,32 @@ describe('RFI answered needs White', () => {
     await call(BLUE, 'POST', `rfis/${rfi.id}/transition`, { state: 'assigned' });
     await call(BLUE, 'POST', `rfis/${rfi.id}/transition`, { state: 'in_collection' });
 
-    const answerReport = await call(WHITE, 'POST', 'reports', { text: 'Confirmed: T-72 column', reliability: 'A', credibility: 1 });
-    await expect(call(BLUE, 'POST', `rfis/${rfi.id}/transition`, { state: 'answered', answer_report_id: answerReport.id })).rejects.toMatchObject({
+    const answerReport = await call(WHITE, 'POST', 'reports', {
+      text: 'Confirmed: T-72 column',
+      reliability: 'A',
+      credibility: 1,
+    });
+    await expect(
+      call(BLUE, 'POST', `rfis/${rfi.id}/transition`, {
+        state: 'answered',
+        answer_report_id: answerReport.id,
+      }),
+    ).rejects.toMatchObject({
       status: 403,
     });
 
-    const answered = await call(WHITE, 'POST', `rfis/${rfi.id}/transition`, { state: 'answered', answer_report_id: answerReport.id });
+    const answered = await call(WHITE, 'POST', `rfis/${rfi.id}/transition`, {
+      state: 'answered',
+      answer_report_id: answerReport.id,
+    });
     expect(answered.state).toBe('answered');
 
     // Blue could not see White's report until the answer released it to them.
     const blueSeesReport = await call(BLUE, 'GET', `reports/${answerReport.id}`);
     expect(blueSeesReport.releasable_to).toContain('blue');
     // Red still doesn't.
-    await expect(call(RED, 'GET', `reports/${answerReport.id}`)).rejects.toMatchObject({ status: 404 });
+    await expect(call(RED, 'GET', `reports/${answerReport.id}`)).rejects.toMatchObject({
+      status: 404,
+    });
   });
 });

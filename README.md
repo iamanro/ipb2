@@ -167,15 +167,15 @@ answers `503`. A disconnected client's queued analysis is dropped and its
 running one's worker is terminated and replaced (simpler and always correct
 next to threading a cooperative abort flag through every hot loop).
 
-**Bare-earth caveat:** DMR 4G is a *terrain* model — it has no trees or
-buildings, unlike GLO-30 (a *surface* model that includes both). Line of sight
+**Bare-earth caveat:** DMR 4G is a _terrain_ model — it has no trees or
+buildings, unlike GLO-30 (a _surface_ model that includes both). Line of sight
 and viewshed results over forested or built-up ground get more optimistic
 (more "visible") once this detail layer is built, because the canopy and
 rooftops GLO-30 saw are gone from the DMR 4G area. ČÚZK does also publish a
 surface model — DMP 1G — but only as LAZ point clouds
 ([atom.cuzk.gov.cz/DMP1G-ETRS89](https://atom.cuzk.gov.cz/DMP1G-ETRS89/DMP1G-ETRS89.xml),
 20,308 sheets, no TIFF ATOM feed exists for it) and DMP OK, a photogrammetric
-surface model that *is* published as TIFF over ATOM
+surface model that _is_ published as TIFF over ATOM
 ([atom.cuzk.gov.cz/DMPOK-SJTSK-TIFF](https://atom.cuzk.gov.cz/DMPOK-SJTSK-TIFF/DMPOK-SJTSK-TIFF.xml),
 16,301 SM5 sheets, S-JTSK only, ~60 MB per sheet — roughly a terabyte for all
 of Czechia). Neither is built by this tool; building one would need its own
@@ -581,7 +581,7 @@ White and admins see everything, and everyone else sees their own cell's
 items plus anything **released** to them. Each item's owner badge and
 **Release…** control (White, or an analyst-or-above member of the owning
 cell) sit next to it in its list/detail view; White additionally gets an
-**owner select** to reassign it. Releasing *replaces* the release list —
+**owner select** to reassign it. Releasing _replaces_ the release list —
 re-releasing without a cell that previously had it hides the item from that
 cell again. State from before cells shipped is all White-owned, so nothing
 already in a running exercise leaks. Membership in the current exercise (a
@@ -606,16 +606,16 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      White additionally gets a **Reassign** owner select. The printed
      classification banner names the owning cell next to the marking (e.g.
      "UNCLASSIFIED // EXERCISE — BLUE").
-   - *Step 1*: AOI, light data, forecast and the **weather effects matrix**
+   - _Step 1_: AOI, light data, forecast and the **weather effects matrix**
      (favourable/marginal/unfavourable per system and forecast block, against
      editable thresholds), the study's **classification marking** (printed top
      and bottom of every page), GeoJSON/KML import and export.
-   - *Step 2*: OAKOC analyses (MCOO, viewshed, key terrain, avenues) and the
+   - _Step 2_: OAKOC analyses (MCOO, viewshed, key terrain, avenues) and the
      **civil considerations** matrix (ASCOPE × PMESII-PT).
-   - *Step 3*: threats with APP-6 symbols (the symbol picker, or **Import from
+   - _Step 3_: threats with APP-6 symbols (the symbol picker, or **Import from
      ORBAT**), HVT and HPT lists, and weapon **range rings** from a threat's
      WEG card.
-   - *Step 4*: COAs with their **SITEMP** (unit symbols and tactical graphics
+   - _Step 4_: COAs with their **SITEMP** (unit symbols and tactical graphics
      per COA), **H-hour** and phases, **decision points**, the event template
      and matrix with times as DTG or H±offset, and a **timeline** showing the
      scenario "now".
@@ -628,7 +628,7 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
    generated SOR.
 5. **Reporting and tracking** (analyst): reports are placed by MGRS or on the
    map and linked to the NAI they fall in; plotting them builds tracks on the
-   **Situation** map, also available in IPB as the *Current situation* overlay.
+   **Situation** map, also available in IPB as the _Current situation_ overlay.
 6. **Products** (analyst): an **INTSUM** drafted from the tracks, reports and
    PIR status of a period, then edited, saved and printed; a **graphic INTSUM**
    (the situation map with a legend); and printable SALUTE/SPOTREP forms. Each
@@ -689,7 +689,7 @@ map, plus every imported NAI/TAI as a labelled outline. Selecting a track
 position history table, and every report linked to it, with an edit
 (designation/status/SIDC/notes) and delete. **Add track** places a new one
 the same way a report's location is set. A **reports within** filter narrows
-the map to the last N hours of *scenario* time (the exercise clock, not the
+the map to the last N hours of _scenario_ time (the exercise clock, not the
 wall clock). Clicking a report opens its own detail card with a jump back to
 its Reports tab entry. Every change here or in Reports refreshes live for
 every other open tab.
@@ -768,10 +768,10 @@ operator (`local`, role `game-master`) — no login, exactly as before this
 feature existed. That changes only when the server is reachable from the
 network:
 
-| Mode  | When                                                          | Behaviour                                                          |
-| ----- | -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Mode  | When                                                               | Behaviour                                                                                                                           |
+| ----- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `off` | Bound to `127.0.0.1`, `localhost` or `::1` (`npm run dev`/`start`) | No login; every request acts as White's implicit game-master: `{ name: 'local', admin: true, cell: 'white', role: 'game-master' }`. |
-| `on`  | Bound to any other host (`npm run dev:lan`/`start:lan`, `::`)     | A session cookie is required; roles and cells are enforced on the server.     |
+| `on`  | Bound to any other host (`npm run dev:lan`/`start:lan`, `::`)      | A session cookie is required; roles and cells are enforced on the server.                                                           |
 
 `IPB_AUTH=on` / `IPB_AUTH=off` overrides the default either way — except
 `IPB_AUTH=off` on a non-loopback host, which refuses to start rather than
@@ -786,13 +786,13 @@ any membership it also holds — see "Exercises and cells" below.
 
 **Roles**, weakest to strongest: `observer` < `analyst` <
 `collection-manager` < `game-master`. These are per-exercise, assigned via
-a *membership* (a cell plus one of these roles — see "Exercises and
+a _membership_ (a cell plus one of these roles — see "Exercises and
 cells"), not a property of the account itself. Every GET is `observer`.
 Most mutations need `analyst`. `collection-manager` (and above) is needed
 for `exercise`'s collectors and taskings. `game-master` (and above) is
 needed for the exercise's own controls — the scenario clock and the
 scenario/country/place library — plus the audit trail below. An admin with
-no membership acts as White's game-master by default; one *with* a
+no membership acts as White's game-master by default; one _with_ a
 membership uses it instead for these role checks (their cell visibility
 stays unrestricted regardless). Each route declares the role it needs in
 its module's route table (`modules/<id>/server/routes.js`); the dispatcher
@@ -986,8 +986,8 @@ admin-only) — per-row cell/role selects, a "Remove" per row, and a
 bulk-assign bar (select users, pick one cell and role, apply to all of
 them at once). The **Users** tab shows the same cell/role read-only.
 `node server/tools/users.mjs member <name> --cell <c> --role <r>` and
-`unmember <name>` do the same from the CLI. An admin *without* a
-membership acts as White's game-master for exercise data; one *with* a
+`unmember <name>` do the same from the CLI. An admin _without_ a
+membership acts as White's game-master for exercise data; one _with_ a
 membership uses it for role checks instead (their White-level visibility
 never depends on it).
 
@@ -997,7 +997,7 @@ orbat state databases plus the membership roster into a dated,
 `VACUUM INTO`-consistent folder under `$IPB_STATE_ROOT/archives`, safe to
 run against a live server), and the archives list with a **Restore** per
 row. **Reset** opens a typed-confirmation dialog — type the exercise's
-*current* name — and then: archives the current exercise automatically,
+_current_ name — and then: archives the current exercise automatically,
 empties the ipb/exercise/orbat databases (closes each module's store,
 deletes its file, which reopens empty on the next request), clears every
 membership, and renames/restarts the exercise. **Restore** archives the
@@ -1011,14 +1011,14 @@ any one exercise.
 
 ## Modules
 
-| Module      | Route                      | Data                                      | State                                                                         |
-| ----------- | -------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
-| `equipment` | `/equipment/`              | ODIN WEG cards, images (read-only)        | bookmarks + notes                                                             |
-| `terrain`   | server-only, used by `ipb` | GLO-30 elevation, vector basemap, imagery | —                                                                             |
-| `ipb`       | `/ipb/`                    | —                                         | studies: AOI, OAKOC features, threats, COAs, event matrix                     |
+| Module      | Route                      | Data                                      | State                                                                                                                            |
+| ----------- | -------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `equipment` | `/equipment/`              | ODIN WEG cards, images (read-only)        | bookmarks + notes                                                                                                                |
+| `terrain`   | server-only, used by `ipb` | GLO-30 elevation, vector basemap, imagery | —                                                                                                                                |
+| `ipb`       | `/ipb/`                    | —                                         | studies: AOI, OAKOC features, threats, COAs, event matrix                                                                        |
 | `exercise`  | `/exercise/`               | kraje/okresy (`regions.json`)             | PIR/SIR/indicators, NAIs/TAIs, reports, tracks, collectors/taskings, INTSUMs, RFIs, messages, scenario clock, exercise scenarios |
-| `orbat`     | `/orbat/`                  | APP-6(D) code tables (`src/symbols/`)     | orders of battle: unit trees with symbols and amplifiers                      |
-| `admin`     | `/admin/`, admin flag only | —                                         | none of its own — reads/writes `server/state/auth.db` via `/api/auth/*`      |
+| `orbat`     | `/orbat/`                  | APP-6(D) code tables (`src/symbols/`)     | orders of battle: unit trees with symbols and amplifiers                                                                         |
+| `admin`     | `/admin/`, admin flag only | —                                         | none of its own — reads/writes `server/state/auth.db` via `/api/auth/*`                                                          |
 
 `exercise` can import an `ipb` study's event matrix (Requirements → Import
 from IPB): each threat COA becomes a PIR, each NAI it uses a SIR, each
@@ -1039,7 +1039,7 @@ link is a part of the requirement it supports, not of the report it cites
 in the body plus `target_kind`/`target_id` (the requirement itself, or one of
 its SIRs) and reads the report with the same visibility a plain `GET` would
 — a cell may cite any report merely released to it, same as before. Deleting
-the *report* a link cites never deletes the link: it keeps citing that
+the _report_ a link cites never deletes the link: it keeps citing that
 `report_id`, and reads back `report: null, withdrawn: true` wherever it's
 shown, never counting toward fulfillment. Fulfillment itself (a requirement's
 and each SIR's) is computed per viewer: only evidence from reports that
@@ -1113,23 +1113,22 @@ first), so a new module is backed up and reset without touching those tools.
 
 ## Scripts
 
-| Command            | Does                                                                                                                                                                         |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run dev`      | Vite dev server, `:5180`, loopback, no login                                                                                                                                |
-| `npm run dev:lan`  | Vite dev server, `:5180`, every interface, login required (see "Users, roles and network access")                                                                          |
-| `npm run build`    | Production bundle to `dist/`                                                                                                                                                 |
-| `npm start`        | Serve the production build (`dist/`, already built) standalone on `:8000`, loopback, no login — run `npm run build` first                                                  |
-| `npm run start:lan`| Same, every interface, login required (see "Users, roles and network access")                                                                                              |
-| `npm test`         | Runs `src/geo.test.js` and any other `*.test.js` (Vitest via `vp test`)                                                                                                      |
-| `npm run test:e2e` | Real-browser tests in `e2e/*.e2e.js` (Playwright) against a production build on :5190, plus the standalone server with sign-in on at :5191 for the White/Blue/Red isolation test (`e2e/cells.e2e.js`), each with its own throwaway state; first run: `npx playwright install chromium` |
-| `npm run check`    | Format check + lint + typecheck; run before committing                                                                                                                       |
-| `npm run format`   | Auto-format with Prettier conventions (`vp fmt --write`)                                                                                                                     |
+| Command             | Does                                                                                                                                                                                                                                                                                   |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev`       | Vite dev server, `:5180`, loopback, no login                                                                                                                                                                                                                                           |
+| `npm run dev:lan`   | Vite dev server, `:5180`, every interface, login required (see "Users, roles and network access")                                                                                                                                                                                      |
+| `npm run build`     | Production bundle to `dist/`                                                                                                                                                                                                                                                           |
+| `npm start`         | Serve the production build (`dist/`, already built) standalone on `:8000`, loopback, no login — run `npm run build` first                                                                                                                                                              |
+| `npm run start:lan` | Same, every interface, login required (see "Users, roles and network access")                                                                                                                                                                                                          |
+| `npm test`          | Runs `src/geo.test.js` and any other `*.test.js` (Vitest via `vp test`)                                                                                                                                                                                                                |
+| `npm run test:e2e`  | Real-browser tests in `e2e/*.e2e.js` (Playwright) against a production build on :5190, plus the standalone server with sign-in on at :5191 for the White/Blue/Red isolation test (`e2e/cells.e2e.js`), each with its own throwaway state; first run: `npx playwright install chromium` |
+| `npm run check`     | Format check + lint + typecheck; run before committing                                                                                                                                                                                                                                 |
+| `npm run format`    | Auto-format with Prettier conventions (`vp fmt --write`)                                                                                                                                                                                                                               |
 
 CI (`.github/workflows/ci.yml`, GitHub Actions, every push to `master` and
-every pull request) runs `vp lint`, `npm test` and `npm run test:e2e` on
-Node 24 against a fresh clone (no reference data), and checks that the
-Docker image builds; nothing is pushed or deployed. The format check
-(`npm run check`) is not part of CI yet: the tree isn't formatted.
+every pull request) runs `npm run check`, `npm test` and `npm run test:e2e`
+on Node 24 against a fresh clone (no reference data), and checks that the
+Docker image builds; nothing is pushed or deployed.
 
 ## Deployment (Docker / Podman)
 
@@ -1212,13 +1211,13 @@ an NFS/SMB mount of the NAS target) before `docker compose up`.
 
    - Visit `http://ac.lan/ca.crt` (plain HTTP; this one path is exempt from
      the HTTPS redirect) and save it.
-   - **Windows:** double-click the file → *Install Certificate* → *Local
-     Machine* → *Place all certificates in the following store* → *Trusted
-     Root Certification Authorities*.
+   - **Windows:** double-click the file → _Install Certificate_ → _Local
+     Machine_ → _Place all certificates in the following store_ → _Trusted
+     Root Certification Authorities_.
    - **macOS:** open in Keychain Access (System keychain) → double-click the
-     entry → *Trust* → *Always Trust*.
+     entry → _Trust_ → _Always Trust_.
    - **Linux:** `sudo cp ca.crt /usr/local/share/ca-certificates/ac-lan.crt
-     && sudo update-ca-certificates` (Debian/Ubuntu); most browsers also
+&& sudo update-ca-certificates` (Debian/Ubuntu); most browsers also
      accept it imported directly into their own certificate store.
    - **Android:** Settings → Security → Encryption & credentials → Install a
      certificate → CA certificate.
@@ -1298,13 +1297,13 @@ under sustained multi-user viewshed use.
 
 ### Troubleshooting
 
-| Symptom                                           | Check                                                                                                                    |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Browser: "connection not private"                  | Root CA not installed on that client (see "First start" step 4), or you browsed `https://<IP>` instead of `https://ac.lan` (the cert only covers `ac.lan`/`localhost`) |
-| `docker compose ps` shows `app` unhealthy           | `docker compose logs app`; often a missing/misnamed file under `IPB_DATA_DIR` — check `curl -k https://ac.lan/healthz` for which reference files it found |
-| 503 "No users yet" on login                         | The admin bootstrap didn't run — check `deploy/secrets/admin_password` exists, is non-empty, and `docker compose logs app` for a bootstrap error |
-| Bootstrap error reading the admin secret            | The container runs as uid 1000 (`node`) and Compose mounts the secret file with its host owner and mode: with `chmod 600`, the file must be owned by uid 1000 (`sudo chown 1000 deploy/secrets/admin_password`) |
-| `up` fails: "create mountpoint … read-only file system" | `IPB_DATA_DIR` lacks the `terrain/`, `equipment/` or `exercise/` folder (e.g. binding module folders over an empty data dir): create the three folders, or use `deploy/pack-data.sh`, which does |
-| Live updates (SSE) not appearing across tabs        | Something is buffering the stream — confirm `deploy/Caddyfile`'s `flush_interval -1` is in effect; a corporate proxy in front of Caddy can still buffer regardless |
-| `docker compose up` fails on ports 80/443           | Something else on the host owns them — use the override file or `IPB_HTTP_PORT`/`IPB_HTTPS_PORT` above                  |
-| App reachable directly on `:8000` from another host | It shouldn't be — `app` only `expose`s the port to the compose network, no host `ports:` mapping; check nothing else (a stray `docker run`, an old override) republishes it |
+| Symptom                                                 | Check                                                                                                                                                                                                           |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser: "connection not private"                       | Root CA not installed on that client (see "First start" step 4), or you browsed `https://<IP>` instead of `https://ac.lan` (the cert only covers `ac.lan`/`localhost`)                                          |
+| `docker compose ps` shows `app` unhealthy               | `docker compose logs app`; often a missing/misnamed file under `IPB_DATA_DIR` — check `curl -k https://ac.lan/healthz` for which reference files it found                                                       |
+| 503 "No users yet" on login                             | The admin bootstrap didn't run — check `deploy/secrets/admin_password` exists, is non-empty, and `docker compose logs app` for a bootstrap error                                                                |
+| Bootstrap error reading the admin secret                | The container runs as uid 1000 (`node`) and Compose mounts the secret file with its host owner and mode: with `chmod 600`, the file must be owned by uid 1000 (`sudo chown 1000 deploy/secrets/admin_password`) |
+| `up` fails: "create mountpoint … read-only file system" | `IPB_DATA_DIR` lacks the `terrain/`, `equipment/` or `exercise/` folder (e.g. binding module folders over an empty data dir): create the three folders, or use `deploy/pack-data.sh`, which does                |
+| Live updates (SSE) not appearing across tabs            | Something is buffering the stream — confirm `deploy/Caddyfile`'s `flush_interval -1` is in effect; a corporate proxy in front of Caddy can still buffer regardless                                              |
+| `docker compose up` fails on ports 80/443               | Something else on the host owns them — use the override file or `IPB_HTTP_PORT`/`IPB_HTTPS_PORT` above                                                                                                          |
+| App reachable directly on `:8000` from another host     | It shouldn't be — `app` only `expose`s the port to the compose network, no host `ports:` mapping; check nothing else (a stray `docker run`, an old override) republishes it                                     |

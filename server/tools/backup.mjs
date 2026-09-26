@@ -37,7 +37,8 @@ function dtgStamp(date) {
 function backupRoot(args) {
   const explicit = flagValue(args, '--out') || process.env.IPB_BACKUP_ROOT;
   if (explicit) return explicit;
-  const stateRoot = process.env.IPB_STATE_ROOT || path.join(import.meta.dirname, '..', '..', 'modules');
+  const stateRoot =
+    process.env.IPB_STATE_ROOT || path.join(import.meta.dirname, '..', '..', 'modules');
   return path.join(path.dirname(stateRoot), 'backups');
 }
 
@@ -54,7 +55,9 @@ function backupOne(database, destDir) {
   }
   const before = statSync(database.path).size;
   const after = database.copyInto(destDir);
-  console.log(`  ${database.id}/${database.file}: ${(before / 1024).toFixed(0)} KiB -> ${(after / 1024).toFixed(0)} KiB`);
+  console.log(
+    `  ${database.id}/${database.file}: ${(before / 1024).toFixed(0)} KiB -> ${(after / 1024).toFixed(0)} KiB`,
+  );
   return true;
 }
 
@@ -107,7 +110,10 @@ function main() {
   console.log(`Rotating: keeping the newest ${keep} backup(s) in ${root}`);
   rotate(root, keep);
   const archives = mirrorArchives(root);
-  if (archives) console.log(`  mirrored ${archives} new exercise archive(s) into ${path.join(root, 'archives')}`);
+  if (archives)
+    console.log(
+      `  mirrored ${archives} new exercise archive(s) into ${path.join(root, 'archives')}`,
+    );
   console.log('Done.');
 }
 

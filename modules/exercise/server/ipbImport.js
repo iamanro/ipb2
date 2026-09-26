@@ -51,8 +51,12 @@ function requireText(value, name) {
 }
 
 function isGeometryLike(value) {
-  return typeof value === 'object' && value !== null && typeof value.type === 'string' &&
-    Array.isArray(value.coordinates);
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof value.type === 'string' &&
+    Array.isArray(value.coordinates)
+  );
 }
 
 /**

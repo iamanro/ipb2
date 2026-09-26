@@ -6,7 +6,10 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { HttpError } from '../../../server/http.js';
 import { createTerrainPool } from './pool.js';
 
-const FIXTURE_WORKER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'pool.fixture.worker.js');
+const FIXTURE_WORKER = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'pool.fixture.worker.js',
+);
 
 let pool;
 

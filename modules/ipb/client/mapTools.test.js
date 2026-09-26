@@ -19,10 +19,31 @@ describe('GRAPHIC_GROUPS', () => {
   });
 
   test('groups match the assignment: control measures, areas, obstacles', () => {
-    expect(GRAPHIC_GROUPS.map((group) => group.label)).toEqual(['Control measures', 'Areas', 'Obstacles']);
-    expect(GRAPHIC_GROUPS[0].keys).toEqual(['phase-line', 'boundary', 'axis-of-advance', 'direction-of-attack']);
-    expect(GRAPHIC_GROUPS[1].keys).toEqual(['objective', 'assembly-area', 'battle-position', 'engagement-area']);
-    expect(GRAPHIC_GROUPS[2].keys).toEqual(['minefield', 'obstacle-line', 'block', 'fix', 'turn', 'disrupt']);
+    expect(GRAPHIC_GROUPS.map((group) => group.label)).toEqual([
+      'Control measures',
+      'Areas',
+      'Obstacles',
+    ]);
+    expect(GRAPHIC_GROUPS[0].keys).toEqual([
+      'phase-line',
+      'boundary',
+      'axis-of-advance',
+      'direction-of-attack',
+    ]);
+    expect(GRAPHIC_GROUPS[1].keys).toEqual([
+      'objective',
+      'assembly-area',
+      'battle-position',
+      'engagement-area',
+    ]);
+    expect(GRAPHIC_GROUPS[2].keys).toEqual([
+      'minefield',
+      'obstacle-line',
+      'block',
+      'fix',
+      'turn',
+      'disrupt',
+    ]);
   });
 });
 
@@ -128,7 +149,10 @@ describe('rangeRingsFromEntries', () => {
   });
 
   test('caps at 8 rings', () => {
-    const entries = Array.from({ length: 10 }, (_, index) => ({ kind: 'other', max_m: (index + 1) * 1000 }));
+    const entries = Array.from({ length: 10 }, (_, index) => ({
+      kind: 'other',
+      max_m: (index + 1) * 1000,
+    }));
     expect(rangeRingsFromEntries(entries, 'X').radii).toHaveLength(8);
   });
 
@@ -159,19 +183,16 @@ describe('formatMeasureReadout', () => {
     expect(
       formatMeasureReadout({
         mode: 'distance',
-        segments: [
-          { label: '1.00 km' },
-          { label: '2.00 km' },
-        ],
+        segments: [{ label: '1.00 km' }, { label: '2.00 km' }],
         totalLabel: '3.00 km',
       }),
     ).toBe('1.00 km + 2.00 km = Σ 3.00 km');
   });
 
   test('area', () => {
-    expect(formatMeasureReadout({ mode: 'area', areaLabel: '1.20 km²', perimeterLabel: '4.10 km' })).toBe(
-      '1.20 km² · perimeter 4.10 km',
-    );
+    expect(
+      formatMeasureReadout({ mode: 'area', areaLabel: '1.20 km²', perimeterLabel: '4.10 km' }),
+    ).toBe('1.20 km² · perimeter 4.10 km');
   });
 
   test('bearing before the second point is blank, not garbled', () => {

@@ -599,7 +599,13 @@ function buildFeatureStyle(feature, iconCache, darkBase) {
   const geometry = feature.getGeometry();
   if (!geometry) return [];
 
-  if (kind === 'graphic') return buildGraphicStyle(feature, properties, label || graphicLabel(properties.graphic, properties.name), darkBase);
+  if (kind === 'graphic')
+    return buildGraphicStyle(
+      feature,
+      properties,
+      label || graphicLabel(properties.graphic, properties.name),
+      darkBase,
+    );
   if (kind === 'range-ring') return buildRangeRingStyle(feature, properties, darkBase);
 
   if (properties.sidc) {
@@ -830,7 +836,10 @@ function countryFillStyle(color, zoom) {
   if (alpha <= 0) return null;
   const key = `${color}|${alpha}`;
   if (!COUNTRY_FILL_STYLE_CACHE.has(key)) {
-    COUNTRY_FILL_STYLE_CACHE.set(key, new Style({ fill: new Fill({ color: withAlpha(color, alpha) }) }));
+    COUNTRY_FILL_STYLE_CACHE.set(
+      key,
+      new Style({ fill: new Fill({ color: withAlpha(color, alpha) }) }),
+    );
   }
   return COUNTRY_FILL_STYLE_CACHE.get(key);
 }
@@ -1577,7 +1586,9 @@ export function createMap(options) {
           features.push(dot);
         }
       }
-      const trackFeature = new Feature(new Point(fromLonLat([track.lon, track.lat], MAP_PROJECTION)));
+      const trackFeature = new Feature(
+        new Point(fromLonLat([track.lon, track.lat], MAP_PROJECTION)),
+      );
       trackFeature.set('situationKind', 'track');
       trackFeature.set('situationId', track.id);
       trackFeature.set('track', track);
@@ -1664,7 +1675,11 @@ export function createMap(options) {
     if (!geometryType) throw new Error(`createMap: unknown draw kind "${kind}"`);
     const config = layerConfig(drawOptions.layer);
     const style = drawOptions.graphic
-      ? graphicSketchStyle(drawOptions.graphic, drawOptions, graphicColor(drawOptions.affiliation, darkBase))
+      ? graphicSketchStyle(
+          drawOptions.graphic,
+          drawOptions,
+          graphicColor(drawOptions.affiliation, darkBase),
+        )
       : new Style({
           stroke: new Stroke({ color: config.color, width: 2, lineDash: [6, 4] }),
           fill: new Fill({ color: withAlpha(config.color, 0.15) }),

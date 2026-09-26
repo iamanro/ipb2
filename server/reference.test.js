@@ -20,8 +20,7 @@ function build(value) {
   renameSync(temporary, file);
 }
 
-const read = () =>
-  reference.get()?.prepare('SELECT value FROM meta').get().value ?? null;
+const read = () => reference.get()?.prepare('SELECT value FROM meta').get().value ?? null;
 
 beforeEach(() => {
   file = path.join(

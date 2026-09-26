@@ -27,7 +27,11 @@ export function renderChangePasswordScreen(root, { forced, onSuccess, onCancel }
   card.noValidate = true;
 
   card.append(
-    createElement('p', 'login-eyebrow eyebrow', forced ? 'Password change required' : 'Change password'),
+    createElement(
+      'p',
+      'login-eyebrow eyebrow',
+      forced ? 'Password change required' : 'Change password',
+    ),
     createElement('h1', 'login-title', 'AGILE CUB'),
     createElement(
       'p',
@@ -104,7 +108,8 @@ export function renderChangePasswordScreen(root, { forced, onSuccess, onCancel }
         body: JSON.stringify({ current: currentInput.value, next: nextInput.value }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || `Could not change password (${response.status}).`);
+      if (!response.ok)
+        throw new Error(payload.error || `Could not change password (${response.status}).`);
       currentInput.value = '';
       nextInput.value = '';
       confirmInput.value = '';

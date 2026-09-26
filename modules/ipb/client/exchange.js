@@ -62,7 +62,10 @@ export const FOREIGN_TARGET_LAYERS = [
 const XML_UNESCAPES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
 function xmlUnescape(text) {
-  return String(text ?? '').replace(/&(amp|lt|gt|quot|apos);/g, (_match, name) => XML_UNESCAPES[name]);
+  return String(text ?? '').replace(
+    /&(amp|lt|gt|quot|apos);/g,
+    (_match, name) => XML_UNESCAPES[name],
+  );
 }
 
 // -- KML parsing --------------------------------------------------------------
@@ -96,11 +99,7 @@ function parseCoordinateTuple(text) {
 }
 
 function parseCoordinateList(text) {
-  return text
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(parseCoordinateTuple);
+  return text.trim().split(/\s+/).filter(Boolean).map(parseCoordinateTuple);
 }
 
 function parseSimpleGeometry(tag, block) {
@@ -110,7 +109,9 @@ function parseSimpleGeometry(tag, block) {
   }
   if (tag === 'LineString') {
     const coordinates = firstTag(block, 'coordinates');
-    return coordinates ? { type: 'LineString', coordinates: parseCoordinateList(coordinates) } : null;
+    return coordinates
+      ? { type: 'LineString', coordinates: parseCoordinateList(coordinates) }
+      : null;
   }
   // Polygon
   const outer = firstTag(block, 'outerBoundaryIs');
@@ -130,7 +131,9 @@ function parseSimpleGeometry(tag, block) {
 function parsePlacemarkGeometry(block) {
   const multi = firstTag(block, 'MultiGeometry');
   if (multi !== null) {
-    const points = allTagBlocks(multi, 'Point').map((entry) => parseSimpleGeometry('Point', entry)).filter(Boolean);
+    const points = allTagBlocks(multi, 'Point')
+      .map((entry) => parseSimpleGeometry('Point', entry))
+      .filter(Boolean);
     const lines = allTagBlocks(multi, 'LineString')
       .map((entry) => parseSimpleGeometry('LineString', entry))
       .filter(Boolean);
@@ -168,7 +171,8 @@ function parseExtendedData(block) {
     const key = xmlUnescape(match[1]);
     const value = xmlUnescape(match[2]);
     if (key === 'coa_id') properties.coa_id = Number(value);
-    else if (key === 'radii') properties.radii = value.split(',').map(Number).filter(Number.isFinite);
+    else if (key === 'radii')
+      properties.radii = value.split(',').map(Number).filter(Number.isFinite);
     else properties[key] = value;
     match = regex.exec(extended);
   }
@@ -265,7 +269,8 @@ const KIND_BY_GEOMETRY_TYPE = {
 
 function matchesGeometryKind(geometry, expectedKind) {
   if (!geometry) return false;
-  if (expectedKind === 'line') return geometry.type === 'LineString' || geometry.type === 'MultiLineString';
+  if (expectedKind === 'line')
+    return geometry.type === 'LineString' || geometry.type === 'MultiLineString';
   return geometry.type === 'Polygon' || geometry.type === 'MultiPolygon';
 }
 
@@ -277,8 +282,10 @@ function matchesGeometryKind(geometry, expectedKind) {
  */
 export function classifyImportItem(item) {
   const properties = item.properties ?? {};
-  const layer = typeof properties.layer === 'string' ? properties.layer : (item.folderLayer ?? null);
-  if (typeof layer !== 'string' || !LAYERS.includes(layer)) return { native: false, layer: null, kind: null };
+  const layer =
+    typeof properties.layer === 'string' ? properties.layer : (item.folderLayer ?? null);
+  if (typeof layer !== 'string' || !LAYERS.includes(layer))
+    return { native: false, layer: null, kind: null };
   let kind = typeof properties.kind === 'string' ? properties.kind : null;
   if (!kind) {
     if (properties.graphic) kind = 'graphic';
@@ -286,7 +293,9 @@ export function classifyImportItem(item) {
     else if (layer === 'unit' && properties.sidc) kind = 'symbol';
     else kind = KIND_BY_GEOMETRY_TYPE[item.geometry?.type] ?? null;
   }
-  return kind && FEATURE_KINDS.includes(kind) ? { native: true, layer, kind } : { native: false, layer: null, kind: null };
+  return kind && FEATURE_KINDS.includes(kind)
+    ? { native: true, layer, kind }
+    : { native: false, layer: null, kind: null };
 }
 
 /** A light preflight of the three semantically-checked layers, so an
@@ -294,7 +303,11 @@ export function classifyImportItem(item) {
  * (all-or-nothing) bulk import. */
 function nativeItemProblem(layer, kind, geometry, properties) {
   if (layer === 'unit') {
-    if (kind !== 'symbol' || typeof properties.sidc !== 'string' || !/^\d{20}$/.test(properties.sidc)) {
+    if (
+      kind !== 'symbol' ||
+      typeof properties.sidc !== 'string' ||
+      !/^\d{20}$/.test(properties.sidc)
+    ) {
       return 'a unit needs kind "symbol" and a valid 20-digit sidc';
     }
   } else if (layer === 'graphic') {
@@ -305,7 +318,8 @@ function nativeItemProblem(layer, kind, geometry, properties) {
     }
   } else if (layer === 'range-ring') {
     if (geometry?.type !== 'Point') return 'a range ring must be a Point';
-    if (!Array.isArray(properties.radii) || !properties.radii.length) return 'a range ring needs radii';
+    if (!Array.isArray(properties.radii) || !properties.radii.length)
+      return 'a range ring needs radii';
   }
   return null;
 }
@@ -353,7 +367,13 @@ export function buildImportPlan(items, { targetLayer } = {}) {
       }
       toCreate.push({ layer, kind, label, geometry: item.geometry, properties });
     } else if (targetLayer) {
-      toCreate.push({ layer: targetLayer, kind: geomKind, label, geometry: item.geometry, properties: {} });
+      toCreate.push({
+        layer: targetLayer,
+        kind: geomKind,
+        label,
+        geometry: item.geometry,
+        properties: {},
+      });
     } else {
       skipped.push({ label, reason: 'No target layer chosen for this foreign feature' });
     }
@@ -370,7 +390,14 @@ export function buildImportPlan(items, { targetLayer } = {}) {
  * `POST studies/:id/features/bulk`. `onImported(items)` is told the created
  * features so the caller can push them into `study.features` and resync.
  */
-export function renderExchangeTools({ createElement, requestJson, showError, can, getStudyId, onImported }) {
+export function renderExchangeTools({
+  createElement,
+  requestJson,
+  showError,
+  can,
+  getStudyId,
+  onImported,
+}) {
   const container = createElement('div', 'field-group');
   container.append(createElement('h3', null, 'Data exchange'));
 
@@ -453,12 +480,20 @@ export function renderExchangeTools({ createElement, requestJson, showError, can
       .map(([type, count]) => `${type}: ${count}`)
       .join(', ');
     preview.append(
-      createElement('p', null, `${plan.toCreate.length} feature${plan.toCreate.length === 1 ? '' : 's'} ready (${counts}).`),
+      createElement(
+        'p',
+        null,
+        `${plan.toCreate.length} feature${plan.toCreate.length === 1 ? '' : 's'} ready (${counts}).`,
+      ),
     );
     const overLimit = plan.toCreate.length > MAX_BULK_FEATURES;
     if (overLimit) {
       preview.append(
-        createElement('p', 'inline-error', `At most ${MAX_BULK_FEATURES} features per import; trim the file and try again.`),
+        createElement(
+          'p',
+          'inline-error',
+          `At most ${MAX_BULK_FEATURES} features per import; trim the file and try again.`,
+        ),
       );
     }
     if (plan.skipped.length) {
@@ -466,7 +501,11 @@ export function renderExchangeTools({ createElement, requestJson, showError, can
       const skipList = createElement('ul', 'import-skip-list');
       plan.skipped
         .slice(0, 50)
-        .forEach((entry) => skipList.append(createElement('li', null, `${entry.label || '(unnamed)'}: ${entry.reason}`)));
+        .forEach((entry) =>
+          skipList.append(
+            createElement('li', null, `${entry.label || '(unnamed)'}: ${entry.reason}`),
+          ),
+        );
       preview.append(skipList);
     }
     if (plan.toCreate.length && !overLimit) {
@@ -528,7 +567,16 @@ export function renderExchangeTools({ createElement, requestJson, showError, can
  * `onSaved(text)` lets the caller update the print banners without a full
  * worksheet re-render.
  */
-export function renderClassificationField({ createElement, requestJson, showError, can, study, studyId, getStudyId, onSaved }) {
+export function renderClassificationField({
+  createElement,
+  requestJson,
+  showError,
+  can,
+  study,
+  studyId,
+  getStudyId,
+  onSaved,
+}) {
   const wrap = createElement('div', 'classification-field');
   const label = createElement('label', 'field-label', 'Classification marking');
   label.setAttribute('for', 'classification-input');
@@ -567,7 +615,8 @@ const CELL_LABELS = { white: 'WHITE', blue: 'BLUE', red: 'RED' };
  * its classification marking. */
 export function applyClassificationBanner(topEl, bottomEl, text, ownerCell) {
   const base = text || '';
-  const cellSuffix = base && ownerCell ? ` — ${CELL_LABELS[ownerCell] ?? ownerCell.toUpperCase()}` : '';
+  const cellSuffix =
+    base && ownerCell ? ` — ${CELL_LABELS[ownerCell] ?? ownerCell.toUpperCase()}` : '';
   const value = base ? `${base}${cellSuffix}` : '';
   if (topEl) topEl.textContent = value;
   if (bottomEl) bottomEl.textContent = value;

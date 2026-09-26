@@ -31,7 +31,9 @@ export function referenceFile(file, open) {
   return {
     get() {
       const stats = paths.map((path) => statSync(path, { throwIfNoEntry: false }));
-      const current = stats[0] ? stats.map((s) => (s ? `${s.ino}:${s.mtimeMs}` : '')).join('|') : null;
+      const current = stats[0]
+        ? stats.map((s) => (s ? `${s.ino}:${s.mtimeMs}` : '')).join('|')
+        : null;
       if (current !== identity) {
         close();
         if (current) handle = open(multiple ? paths : paths[0]);

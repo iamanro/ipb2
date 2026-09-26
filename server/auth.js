@@ -341,8 +341,9 @@ export function openAuthStore(file = authState.path) {
    * refuse to cross for the last one, so a classroom can never lock itself
    * out of user management entirely. */
   function countEnabledAdmins() {
-    return database.prepare('SELECT COUNT(*) AS n FROM users WHERE admin = 1 AND disabled = 0').get()
-      .n;
+    return database
+      .prepare('SELECT COUNT(*) AS n FROM users WHERE admin = 1 AND disabled = 0')
+      .get().n;
   }
 
   /** Throws if demoting/disabling/deleting `user` would leave zero enabled
@@ -517,7 +518,9 @@ export function openAuthStore(file = authState.path) {
       if (!user) throw new HttpError(404, `No user named "${name}".`);
       if (disabled) guardLastAdmin(user, 'disable');
       transact(database, () => {
-        database.prepare('UPDATE users SET disabled = ? WHERE id = ?').run(disabled ? 1 : 0, user.id);
+        database
+          .prepare('UPDATE users SET disabled = ? WHERE id = ?')
+          .run(disabled ? 1 : 0, user.id);
         if (disabled) deleteUserSessions(user.id);
       });
     },
@@ -597,10 +600,9 @@ export function openAuthStore(file = authState.path) {
      * been emptied, so `started_at` reflects when *this* exercise began. */
     resetExercise(name) {
       requireExerciseName(name);
-      database.prepare('UPDATE exercise SET name = ?, started_at = ? WHERE id = 1').run(
-        name.trim(),
-        now(),
-      );
+      database
+        .prepare('UPDATE exercise SET name = ?, started_at = ? WHERE id = 1')
+        .run(name.trim(), now());
     },
 
     async login({ name, password, ip }) {
@@ -633,9 +635,7 @@ export function openAuthStore(file = authState.path) {
           .run(hashToken(token), user.id, created, expires);
         database.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(created, user.id);
       });
-      const full = database
-        .prepare(`${USER_MEMBERSHIP_JOIN} WHERE users.id = ?`)
-        .get(user.id);
+      const full = database.prepare(`${USER_MEMBERSHIP_JOIN} WHERE users.id = ?`).get(user.id);
       return { token, user: shapeUser(full) };
     },
 

@@ -35,10 +35,12 @@ afterAll(() => {
  * browser would see it. */
 function startServer() {
   const { dispatch, close } = createApiMiddleware('off');
-  const server = http.createServer((request, response) => dispatch(request, response, () => {
-    response.statusCode = 404;
-    response.end();
-  }));
+  const server = http.createServer((request, response) =>
+    dispatch(request, response, () => {
+      response.statusCode = 404;
+      response.end();
+    }),
+  );
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address();
@@ -196,7 +198,9 @@ describe('exercise lifecycle (C6)', () => {
     expect(counts).toEqual({ studies: 0, orbats: 0, requirements: 0 });
 
     // ...and still accept new writes after reopening.
-    const created = await postJson(server.origin, '/api/orbat/orbats', { name: 'Post-reset orbat' });
+    const created = await postJson(server.origin, '/api/orbat/orbats', {
+      name: 'Post-reset orbat',
+    });
     expect(created.status).toBe(200);
   });
 
@@ -241,7 +245,9 @@ describe('exercise lifecycle (C6)', () => {
     const archived = await lifecycle.archive({ note: 'to be damaged' });
     writeFileSync(path.join(stateRoot, 'archives', archived.id, 'orbat.db'), 'not a database');
     const archivesBefore = (await lifecycle.listArchives()).length;
-    await expect(lifecycle.restore({ archive: archived.id })).rejects.toMatchObject({ status: 422 });
+    await expect(lifecycle.restore({ archive: archived.id })).rejects.toMatchObject({
+      status: 422,
+    });
     expect(await countRows(server.origin)).toEqual(before);
     expect(await lifecycle.listArchives()).toHaveLength(archivesBefore);
     expect(lifecycle.isLocked()).toBeFalsy();

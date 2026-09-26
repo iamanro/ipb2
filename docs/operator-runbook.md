@@ -33,11 +33,11 @@ IPB_BACKUP_DIR=/srv/ipb-backups   # where backups land
 
 ## 2. Accounts
 
-| Where | What |
-|---|---|
-| Admin → **Users** | Create an account with a temporary password; the user must change it at first sign-in. Also: disable, reset password (temporary again), sign out everywhere, delete, admin flag. |
-| Admin → **Members** | Cell (White/Blue/Red) and role for the *current* exercise, per user or several at once. An account without a membership can sign in but opens nothing. |
-| Admin → **Audit trail** | Who changed what, when. |
+| Where                   | What                                                                                                                                                                             |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Admin → **Users**       | Create an account with a temporary password; the user must change it at first sign-in. Also: disable, reset password (temporary again), sign out everywhere, delete, admin flag. |
+| Admin → **Members**     | Cell (White/Blue/Red) and role for the _current_ exercise, per user or several at once. An account without a membership can sign in but opens nothing.                           |
+| Admin → **Audit trail** | Who changed what, when.                                                                                                                                                          |
 
 **Cells.** White (EXCON) sees everything, runs the clock and injects, answers RFIs, and can hand an item to another cell. Blue and Red see their own cell's items plus what was released to them. Released items are read-only for the receiving cell.
 
@@ -132,14 +132,14 @@ Run it from **another machine on the LAN**, as the clients will connect. Run on 
 
 Reference results: 30 users (2 White, 14 Blue, 14 Red) for 5 minutes, through Caddy. The host had 32 cores, but the app was capped at 6 CPUs by `compose.yaml`, and 4 terrain workers ran, as on an 8-core server.
 
-| Request | Count | p50 | p95 | max |
-|---|---|---|---|---|
-| lists (studies, reports, requirements, tracks, messages) | 7,925 | 5 ms | 14 ms | 34 ms |
-| saving a report | 218 | 2 ms | 5 ms | 16 ms |
-| satellite tiles | 6,876 | 10 ms | 690 ms | 1.2 s |
-| vector basemap reads | 5,157 | 19 ms | 745 ms | 1.2 s |
-| hillshade tiles (drawn on demand) | 6,876 | 16 ms | 1.4 s | 4.6 s |
-| viewshed, 3–10 km radius | 69 | 2.6 s | 8.5 s | 11.4 s |
+| Request                                                  | Count | p50   | p95    | max    |
+| -------------------------------------------------------- | ----- | ----- | ------ | ------ |
+| lists (studies, reports, requirements, tracks, messages) | 7,925 | 5 ms  | 14 ms  | 34 ms  |
+| saving a report                                          | 218   | 2 ms  | 5 ms   | 16 ms  |
+| satellite tiles                                          | 6,876 | 10 ms | 690 ms | 1.2 s  |
+| vector basemap reads                                     | 5,157 | 19 ms | 745 ms | 1.2 s  |
+| hillshade tiles (drawn on demand)                        | 6,876 | 16 ms | 1.4 s  | 4.6 s  |
+| viewshed, 3–10 km radius                                 | 69    | 2.6 s | 8.5 s  | 11.4 s |
 
 - **Errors:** none. No request was turned away as busy (429 or 503).
 - **Live updates:** a report reached the other members of its cell in 3 ms at p50 and 17 ms at worst.

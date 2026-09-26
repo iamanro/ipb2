@@ -44,9 +44,12 @@ describe('classifyLight', () => {
 
   test('missing light data (polar day/night) defaults to day', () => {
     expect(classifyLight(null, 0)).toBe('day');
-    expect(classifyLight({ bmnt: null, bmct: null, sunrise: null, sunset: null, eect: null, eent: null }, 0)).toBe(
-      'day',
-    );
+    expect(
+      classifyLight(
+        { bmnt: null, bmct: null, sunrise: null, sunset: null, eect: null, eent: null },
+        0,
+      ),
+    ).toBe('day');
   });
 });
 
@@ -84,13 +87,23 @@ describe('evaluateWeatherCell', () => {
 
   test('a factor with no data is skipped, not counted favourable or unfavourable', () => {
     const system = WEATHER_SYSTEMS.find((entry) => entry.id === 'wheeled-movement');
-    const cell = evaluateWeatherCell(system, { precipitation: 0, visibility: null }, thresholds, 'day');
+    const cell = evaluateWeatherCell(
+      system,
+      { precipitation: 0, visibility: null },
+      thresholds,
+      'day',
+    );
     expect(cell.reasons.map((reason) => reason.factor)).toEqual(['precipitation']);
   });
 
   test('visibility is low-is-bad: low visibility rates worse, not better', () => {
     const system = WEATHER_SYSTEMS.find((entry) => entry.id === 'observation-isr-eo');
-    const clear = evaluateWeatherCell(system, { visibility: 10000, cloudLow: 0 }, thresholds, 'day');
+    const clear = evaluateWeatherCell(
+      system,
+      { visibility: 10000, cloudLow: 0 },
+      thresholds,
+      'day',
+    );
     const fog = evaluateWeatherCell(system, { visibility: 500, cloudLow: 0 }, thresholds, 'day');
     expect(clear.rating).toBe('favourable');
     expect(fog.rating).toBe('unfavourable');
@@ -105,8 +118,18 @@ describe('evaluateWeatherCell', () => {
 
   test('temperature outside the band in either direction is unfavourable', () => {
     const system = WEATHER_SYSTEMS.find((entry) => entry.id === 'dismounted-movement');
-    const cold = evaluateWeatherCell(system, { precipitation: 0, visibility: 10000, temperature: -30 }, thresholds, 'day');
-    const hot = evaluateWeatherCell(system, { precipitation: 0, visibility: 10000, temperature: 50 }, thresholds, 'day');
+    const cold = evaluateWeatherCell(
+      system,
+      { precipitation: 0, visibility: 10000, temperature: -30 },
+      thresholds,
+      'day',
+    );
+    const hot = evaluateWeatherCell(
+      system,
+      { precipitation: 0, visibility: 10000, temperature: 50 },
+      thresholds,
+      'day',
+    );
     expect(cold.rating).toBe('unfavourable');
     expect(hot.rating).toBe('unfavourable');
   });
@@ -115,8 +138,24 @@ describe('evaluateWeatherCell', () => {
 describe('evaluateWeatherMatrix', () => {
   test('one row per system, one cell per hour', () => {
     const hours = [
-      { time: Date.UTC(2026, 5, 1, 10), wind: 1, gusts: 1, precipitation: 0, visibility: 10000, cloudLow: 0, temperature: 18 },
-      { time: Date.UTC(2026, 5, 1, 13), wind: 20, gusts: 25, precipitation: 5, visibility: 500, cloudLow: 90, temperature: 18 },
+      {
+        time: Date.UTC(2026, 5, 1, 10),
+        wind: 1,
+        gusts: 1,
+        precipitation: 0,
+        visibility: 10000,
+        cloudLow: 0,
+        temperature: 18,
+      },
+      {
+        time: Date.UTC(2026, 5, 1, 13),
+        wind: 20,
+        gusts: 25,
+        precipitation: 5,
+        visibility: 500,
+        cloudLow: 90,
+        temperature: 18,
+      },
     ];
     const matrix = evaluateWeatherMatrix(hours, DEFAULT_WEATHER_THRESHOLDS, 49.7, 17.5);
     expect(matrix).toHaveLength(WEATHER_SYSTEMS.length);
@@ -131,7 +170,11 @@ describe('forecastLightStates', () => {
   test('computes light at most once per calendar day spanned by the hours', () => {
     const dayOne = Date.UTC(2026, 5, 1, 10);
     const dayTwo = Date.UTC(2026, 5, 2, 10);
-    const states = forecastLightStates([{ time: dayOne }, { time: dayOne + 3600_000 }, { time: dayTwo }], 49.7, 17.5);
+    const states = forecastLightStates(
+      [{ time: dayOne }, { time: dayOne + 3600_000 }, { time: dayTwo }],
+      49.7,
+      17.5,
+    );
     expect(states).toHaveLength(3);
     for (const state of states) {
       expect(['day', 'civil-twilight', 'nautical-twilight', 'night']).toContain(state);
@@ -146,7 +189,9 @@ describe('forecastLightStates', () => {
 
 describe('resolveWeatherEffectsPoint', () => {
   test('prefers the study weather point when set', () => {
-    expect(resolveWeatherEffectsPoint({ weather_point: { lon: 1, lat: 2 }, bounds: [0, 0, 10, 10] })).toEqual({
+    expect(
+      resolveWeatherEffectsPoint({ weather_point: { lon: 1, lat: 2 }, bounds: [0, 0, 10, 10] }),
+    ).toEqual({
       lon: 1,
       lat: 2,
     });

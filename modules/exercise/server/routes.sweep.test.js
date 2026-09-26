@@ -22,7 +22,8 @@ let dispatcher;
 const RED_CM = { name: 'r', admin: false, cell: 'red', role: 'collection-manager' };
 const BLUE_CM = { name: 'b', admin: false, cell: 'blue', role: 'collection-manager' };
 
-const call = (actor, method, route, body) => dispatcher.runAs(actor, 'exercise', method, route, body);
+const call = (actor, method, route, body) =>
+  dispatcher.runAs(actor, 'exercise', method, route, body);
 
 async function seedItem(createRoute, createBody, partMakers = {}) {
   const hiddenItem = await call(RED_CM, 'POST', createRoute, createBody);
@@ -33,15 +34,25 @@ async function seedItem(createRoute, createBody, partMakers = {}) {
     parts.hidden[partKind] = await makePart(hiddenItem.id);
     parts.released[partKind] = await makePart(releasedItem.id);
   }
-  return { hidden: { item: hiddenItem.id, parts: parts.hidden }, released: { item: releasedItem.id, parts: parts.released } };
+  return {
+    hidden: { item: hiddenItem.id, parts: parts.hidden },
+    released: { item: releasedItem.id, parts: parts.released },
+  };
 }
 
 /** A SIR, an indicator on it, and an evidence link against it — every part
  * kind `requirements/:item/...` declares. */
 async function seedRequirementParts(requirementId) {
   const sir = await call(RED_CM, 'POST', `requirements/${requirementId}/sirs`, { text: 'sir' });
-  const indicator = await call(RED_CM, 'POST', `requirements/${requirementId}/indicators`, { sir_id: sir.id, description: 'd' });
-  const report = await call(RED_CM, 'POST', 'reports', { text: 'r', reliability: 'A', credibility: 1 });
+  const indicator = await call(RED_CM, 'POST', `requirements/${requirementId}/indicators`, {
+    sir_id: sir.id,
+    description: 'd',
+  });
+  const report = await call(RED_CM, 'POST', 'reports', {
+    text: 'r',
+    reliability: 'A',
+    credibility: 1,
+  });
   const evidence = await call(RED_CM, 'POST', `requirements/${requirementId}/evidence`, {
     report_id: report.id,
     target_kind: 'sir',
@@ -57,7 +68,10 @@ beforeAll(async () => {
   process.env.IPB_STATE_ROOT = stateRoot;
   process.env.IPB_DATA_ROOT = dataRoot;
   mkdirSync(path.join(dataRoot, 'exercise'), { recursive: true });
-  writeFileSync(path.join(dataRoot, 'exercise', 'regions.json'), JSON.stringify({ type: 'FeatureCollection', features: [] }));
+  writeFileSync(
+    path.join(dataRoot, 'exercise', 'regions.json'),
+    JSON.stringify({ type: 'FeatureCollection', features: [] }),
+  );
   routes = (await import('./routes.js')).default;
   dispatcher = createDispatcher([routes], { publish: () => {} });
 });
@@ -77,13 +91,26 @@ test('every route naming an item holds the line: 404 hidden, 403 released-but-no
 
   const report = await seedItem('reports', { text: 'r', reliability: 'A', credibility: 1 });
   const rfi = await seedItem('rfis', { question: 'q' });
-  const track = await seedItem('tracks', { sidc: '10031000141211000000', lon: 1, lat: 1, observed_at: new Date().toISOString() });
+  const track = await seedItem('tracks', {
+    sidc: '10031000141211000000',
+    lon: 1,
+    lat: 1,
+    observed_at: new Date().toISOString(),
+  });
   const collector = await seedItem('collectors', { name: 'c', discipline: 'UAS' });
 
   // Taskings need their own collector + SIR, both Red-owned.
-  const taskingCollector = await call(RED_CM, 'POST', 'collectors', { name: 'tc', discipline: 'UAS' });
-  const taskingRequirement = await call(RED_CM, 'POST', 'requirements', { kind: 'PIR', text: 'for tasking' });
-  const taskingSir = await call(RED_CM, 'POST', `requirements/${taskingRequirement.id}/sirs`, { text: 'sir' });
+  const taskingCollector = await call(RED_CM, 'POST', 'collectors', {
+    name: 'tc',
+    discipline: 'UAS',
+  });
+  const taskingRequirement = await call(RED_CM, 'POST', 'requirements', {
+    kind: 'PIR',
+    text: 'for tasking',
+  });
+  const taskingSir = await call(RED_CM, 'POST', `requirements/${taskingRequirement.id}/sirs`, {
+    text: 'sir',
+  });
   const tasking = await seedItem('taskings', {
     collector_id: taskingCollector.id,
     sir_id: taskingSir.id,
@@ -91,9 +118,17 @@ test('every route naming an item holds the line: 404 hidden, 403 released-but-no
     end_at: new Date(Date.now() + 3_600_000).toISOString(),
   });
 
-  const intsum = await seedItem('intsums', { period_start: new Date().toISOString(), period_end: new Date().toISOString() });
+  const intsum = await seedItem('intsums', {
+    period_start: new Date().toISOString(),
+    period_end: new Date().toISOString(),
+  });
 
   const fixtures = { requirement, report, rfi, track, collector, tasking, intsum };
-  const failures = await sweepRoutes({ dispatcher, moduleId: 'exercise', actor: BLUE_CM, fixtures });
+  const failures = await sweepRoutes({
+    dispatcher,
+    moduleId: 'exercise',
+    actor: BLUE_CM,
+    fixtures,
+  });
   expect(failures).toEqual([]);
 });

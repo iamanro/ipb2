@@ -37,7 +37,18 @@ const SQUARE_WITH_HOLE = {
 
 const TWO_SQUARES = {
   type: 'MultiPolygon',
-  coordinates: [SQUARE.coordinates, [[[10, 10], [11, 10], [11, 11], [10, 11], [10, 10]]]],
+  coordinates: [
+    SQUARE.coordinates,
+    [
+      [
+        [10, 10],
+        [11, 10],
+        [11, 11],
+        [10, 11],
+        [10, 10],
+      ],
+    ],
+  ],
 };
 
 describe('haversineMetres', () => {
@@ -102,8 +113,18 @@ describe('geometryContains: malformed or unsupported geometry', () => {
   });
 
   test('an unsupported geometry type never matches', () => {
-    expect(geometryContains({ type: 'LineString', coordinates: [[0, 0], [1, 1]] }, 0.5, 0.5)).toBe(
-      false,
-    );
+    expect(
+      geometryContains(
+        {
+          type: 'LineString',
+          coordinates: [
+            [0, 0],
+            [1, 1],
+          ],
+        },
+        0.5,
+        0.5,
+      ),
+    ).toBe(false);
   });
 });

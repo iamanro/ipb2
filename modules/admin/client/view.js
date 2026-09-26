@@ -18,8 +18,7 @@ const CELL_LABELS = { white: 'White', blue: 'Blue', red: 'Red' };
 const MEMBERSHIP_ROLES = ['observer', 'analyst', 'collection-manager', 'game-master'];
 const PASSWORD_MIN_LENGTH = 12;
 const GENERATED_PASSWORD_LENGTH = 16;
-const GENERATED_PASSWORD_ALPHABET =
-  'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const GENERATED_PASSWORD_ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 let state;
 let elements;
@@ -117,7 +116,8 @@ function createResetDialogNode(root) {
   // avoids that entirely; the button's look still communicates readiness.
   form.addEventListener('submit', (event) => {
     if (event.submitter?.value !== 'accept') return;
-    const ready = confirmInput.value === resetDialogNode.dataset.currentName && nameInput.value.trim();
+    const ready =
+      confirmInput.value === resetDialogNode.dataset.currentName && nameInput.value.trim();
     if (!ready) event.preventDefault();
   });
 }
@@ -148,7 +148,10 @@ function askResetConfirmation(currentName) {
 
 function generatePassword() {
   const bytes = crypto.getRandomValues(new Uint32Array(GENERATED_PASSWORD_LENGTH));
-  return Array.from(bytes, (n) => GENERATED_PASSWORD_ALPHABET[n % GENERATED_PASSWORD_ALPHABET.length]).join('');
+  return Array.from(
+    bytes,
+    (n) => GENERATED_PASSWORD_ALPHABET[n % GENERATED_PASSWORD_ALPHABET.length],
+  ).join('');
 }
 
 // --- Tab chrome --------------------------------------------------------------
@@ -180,9 +183,7 @@ function switchTab(tab) {
  * the real gate regardless (every `/api/auth/*` route this module calls). */
 function renderAccessNote(container, subject) {
   if (sessionMode() !== 'on') {
-    container.append(
-      createElement('p', 'panel-note', `${subject} needs LAN mode (IPB_AUTH=on).`),
-    );
+    container.append(createElement('p', 'panel-note', `${subject} needs LAN mode (IPB_AUTH=on).`));
     return true;
   }
   if (!can('admin')) {
@@ -241,12 +242,18 @@ async function reportAndReload(action) {
 
 function setAdmin(name, admin) {
   return reportAndReload(() =>
-    requestJson(`/api/auth/users/${encodeURIComponent(name)}`, { method: 'PATCH', body: { admin } }),
+    requestJson(`/api/auth/users/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      body: { admin },
+    }),
   );
 }
 
 async function setDisabled(name, disabled) {
-  if (disabled && !(await askConfirm(`Disable ${name}? Their sessions end immediately.`, 'Disable'))) {
+  if (
+    disabled &&
+    !(await askConfirm(`Disable ${name}? Their sessions end immediately.`, 'Disable'))
+  ) {
     return;
   }
   return reportAndReload(() =>
@@ -355,7 +362,11 @@ function renderUserRow(user) {
   roleCell.append(document.createTextNode(user.role ?? '—'));
 
   const actionsCell = document.createElement('td');
-  const disableButton = createElement('button', 'icon-button', user.disabled ? 'Enable' : 'Disable');
+  const disableButton = createElement(
+    'button',
+    'icon-button',
+    user.disabled ? 'Enable' : 'Disable',
+  );
   disableButton.type = 'button';
   disableButton.disabled = isSelf && !user.disabled;
   disableButton.title = isSelf && !user.disabled ? "You can't disable your own account." : '';
@@ -387,8 +398,16 @@ function renderUserRow(user) {
     })(),
     cellCell,
     roleCell,
-    createElement('td', null, user.created_at ? formatDtg(new Date(user.created_at).getTime()) : '—'),
-    createElement('td', null, user.last_login_at ? formatDtg(new Date(user.last_login_at).getTime()) : 'Never'),
+    createElement(
+      'td',
+      null,
+      user.created_at ? formatDtg(new Date(user.created_at).getTime()) : '—',
+    ),
+    createElement(
+      'td',
+      null,
+      user.last_login_at ? formatDtg(new Date(user.last_login_at).getTime()) : 'Never',
+    ),
     createElement('td', null, String(user.session_count)),
     createElement('td', null, user.disabled ? 'Disabled' : 'Active'),
     createElement('td', null, user.must_change_password ? 'Yes' : 'No'),
@@ -406,9 +425,18 @@ function renderUsersTable(container) {
   table.className = 'data-table';
   const head = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['Name', 'Admin', 'Cell', 'Role', 'Created', 'Last login', 'Sessions', 'Status', 'Must change pw', ''].forEach(
-    (label) => headRow.append(createElement('th', null, label)),
-  );
+  [
+    'Name',
+    'Admin',
+    'Cell',
+    'Role',
+    'Created',
+    'Last login',
+    'Sessions',
+    'Status',
+    'Must change pw',
+    '',
+  ].forEach((label) => headRow.append(createElement('th', null, label)));
   head.append(headRow);
   table.append(head);
   const body = document.createElement('tbody');
@@ -531,7 +559,14 @@ function renderMemberRow(member) {
   removeButton.addEventListener('click', () => removeMembership(member.name));
   actionsCell.append(removeButton);
 
-  row.append(selectCell, createElement('td', null, member.name), adminCell, cellCell, roleCell, actionsCell);
+  row.append(
+    selectCell,
+    createElement('td', null, member.name),
+    adminCell,
+    cellCell,
+    roleCell,
+    actionsCell,
+  );
   return row;
 }
 
@@ -540,7 +575,8 @@ function renderBulkBar(container) {
   const selectAll = document.createElement('input');
   selectAll.type = 'checkbox';
   selectAll.setAttribute('aria-label', 'Select all members');
-  const allSelected = state.members.length > 0 && state.members.every((m) => state.selectedMembers.has(m.name));
+  const allSelected =
+    state.members.length > 0 && state.members.every((m) => state.selectedMembers.has(m.name));
   selectAll.checked = allSelected;
   selectAll.addEventListener('change', () => {
     if (selectAll.checked) state.members.forEach((m) => state.selectedMembers.add(m.name));
@@ -593,7 +629,9 @@ function renderBulkBar(container) {
     createElement(
       'span',
       'bulk-bar-count',
-      state.selectedMembers.size ? `${state.selectedMembers.size} selected` : 'Select members to bulk-assign',
+      state.selectedMembers.size
+        ? `${state.selectedMembers.size} selected`
+        : 'Select members to bulk-assign',
     ),
     cellSelect,
     roleSelect,
@@ -692,7 +730,9 @@ function renderArchiveNowForm(container) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     try {
-      await requestJson('/api/auth/exercise/archive', { body: { note: noteInput.value.trim() || null } });
+      await requestJson('/api/auth/exercise/archive', {
+        body: { note: noteInput.value.trim() || null },
+      });
       form.reset();
       await loadArchives();
       renderPanel();
@@ -830,7 +870,13 @@ function renderExercisePanel() {
 async function loadAudit(offset = 0) {
   try {
     const result = await requestJson(`/api/auth/audit?limit=${state.audit.limit}&offset=${offset}`);
-    state.audit = { ...state.audit, items: result.items, total: result.total, offset, loaded: true };
+    state.audit = {
+      ...state.audit,
+      items: result.items,
+      total: result.total,
+      offset,
+      loaded: true,
+    };
     if (state.tab === 'audit') renderPanel();
   } catch (error) {
     if (error.name !== 'AbortError') state.audit = { ...state.audit, loaded: true };
@@ -854,7 +900,9 @@ function renderAuditPanel() {
   table.className = 'data-table';
   const head = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['At', 'User', 'Method', 'Path', 'Status'].forEach((label) => headRow.append(createElement('th', null, label)));
+  ['At', 'User', 'Method', 'Path', 'Status'].forEach((label) =>
+    headRow.append(createElement('th', null, label)),
+  );
   head.append(headRow);
   table.append(head);
   const body = document.createElement('tbody');
@@ -876,7 +924,9 @@ function renderAuditPanel() {
   const prevButton = createElement('button', 'chip-button', 'Newer');
   prevButton.type = 'button';
   prevButton.disabled = state.audit.offset <= 0;
-  prevButton.addEventListener('click', () => loadAudit(Math.max(0, state.audit.offset - state.audit.limit)));
+  prevButton.addEventListener('click', () =>
+    loadAudit(Math.max(0, state.audit.offset - state.audit.limit)),
+  );
   const nextButton = createElement('button', 'chip-button', 'Older');
   nextButton.type = 'button';
   nextButton.disabled = state.audit.offset + state.audit.limit >= state.audit.total;

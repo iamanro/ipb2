@@ -15,7 +15,13 @@ import { renderLoginScreen } from './login.js';
 import { modules } from './modules.js';
 import { subscribe } from './live.js';
 import { renderCellBadge } from './release.js';
-import { currentUser, handleUnauthorized, loadSession, onUnauthorized, sessionMode } from './session.js';
+import {
+  currentUser,
+  handleUnauthorized,
+  loadSession,
+  onUnauthorized,
+  sessionMode,
+} from './session.js';
 
 const nav = document.querySelector('#module-nav');
 const root = document.querySelector('#module-root');
@@ -60,7 +66,9 @@ function requestedModule() {
  * actual gate regardless (`/api/auth/users/*` needs the admin role, checked
  * in `server/api.js`), this only avoids advertising a link a role can't use. */
 function visibleModules() {
-  return modules.filter((module) => !module.visible || module.visible(currentUser(), sessionMode()));
+  return modules.filter(
+    (module) => !module.visible || module.visible(currentUser(), sessionMode()),
+  );
 }
 
 function renderNav() {
@@ -179,7 +187,8 @@ function showNotAssignedScreen() {
   title.textContent = 'Not assigned to the current exercise';
   const message = document.createElement('p');
   message.className = 'not-assigned-message';
-  message.textContent = 'Ask an admin to assign you to a cell (White, Blue or Red) before you can open a module.';
+  message.textContent =
+    'Ask an admin to assign you to a cell (White, Blue or Red) before you can open a module.';
   card.append(title, message);
   screen.append(card);
   root.replaceChildren(screen);

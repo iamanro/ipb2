@@ -68,7 +68,10 @@ function boxedLabel(coordinate, text, color, font = LABEL_FONT) {
 /** A casing-then-ink stroke pair, so the line reads over any basemap. */
 function lineStyles(geometry, color, darkBase, { width = 2.5, dash = null } = {}) {
   return [
-    new Style({ geometry, stroke: new Stroke({ color: casingColor(darkBase), width: width + 2.5, lineDash: dash }) }),
+    new Style({
+      geometry,
+      stroke: new Stroke({ color: casingColor(darkBase), width: width + 2.5, lineDash: dash }),
+    }),
     new Style({ geometry, stroke: new Stroke({ color, width, lineDash: dash }) }),
   ];
 }
@@ -90,7 +93,12 @@ function midpointLabel(lineGeometry, text, color) {
 }
 
 function areaLabel(polygonGeometry, text, color) {
-  return boxedLabel(polygonGeometry.getInteriorPoint().getCoordinates(), text, color, MID_LABEL_FONT);
+  return boxedLabel(
+    polygonGeometry.getInteriorPoint().getCoordinates(),
+    text,
+    color,
+    MID_LABEL_FONT,
+  );
 }
 
 // -- axis-of-advance: a geodesic arrow corridor from a centreline -----------
@@ -110,7 +118,9 @@ function bearingRad(a, b) {
 }
 
 function dedupeAdjacent(points) {
-  return points.filter((point, index) => index === 0 || getDistance(point, points[index - 1]) > 0.01);
+  return points.filter(
+    (point, index) => index === 0 || getDistance(point, points[index - 1]) > 0.01,
+  );
 }
 
 /** The point and outbound bearing at `distance` along a cumulative-distance-indexed polyline. */
@@ -223,7 +233,10 @@ function lineEntry(displayLabel, prefix, { width = 2.5, dash = null } = {}) {
     labelFormat: (name) => (name ? `${prefix} ${name}` : prefix),
     style(feature, { color, darkBase, label }) {
       const geometry = feature.getGeometry();
-      return [...lineStyles(geometry, color, darkBase, { width, dash }), ...endpointLabels(geometry, label, color)];
+      return [
+        ...lineStyles(geometry, color, darkBase, { width, dash }),
+        ...endpointLabels(geometry, label, color),
+      ];
     },
   };
 }
@@ -303,7 +316,12 @@ export const TACTICAL_GRAPHICS = {
       const properties = feature.get('properties') || {};
       const styles = lineStyles(geometry, color, darkBase, { width: 2.5, dash: [14, 6, 2, 6] });
       if (properties.echelon) {
-        const label = boxedLabel(geometry.getCoordinateAt(0.5), properties.echelon, color, MID_LABEL_FONT);
+        const label = boxedLabel(
+          geometry.getCoordinateAt(0.5),
+          properties.echelon,
+          color,
+          MID_LABEL_FONT,
+        );
         if (label) styles.push(label);
       }
       return styles;
@@ -396,7 +414,10 @@ export const TACTICAL_GRAPHICS = {
       const geometry = feature.getGeometry();
       const zigzag = zigzagLineString(geometry);
       const styles = [
-        new Style({ geometry: zigzag, stroke: new Stroke({ color: casingColor(darkBase), width: 4 }) }),
+        new Style({
+          geometry: zigzag,
+          stroke: new Stroke({ color: casingColor(darkBase), width: 4 }),
+        }),
         new Style({ geometry: zigzag, stroke: new Stroke({ color, width: 1.75 }) }),
       ];
       const mid = midpointLabel(geometry, label, color);

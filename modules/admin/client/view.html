@@ -22,13 +22,19 @@
   <form method="dialog">
     <h2 class="dialog-title">Reset the exercise</h2>
     <p class="dialog-message">
-      Archives the current exercise first, then empties every study, ORBAT and exercise
-      record, and clears every membership. Type the exercise's current name to confirm.
+      Archives the current exercise first, then empties every study, ORBAT and exercise record, and
+      clears every membership. Type the exercise's current name to confirm.
     </p>
     <div class="dialog-fields">
       <label class="dialog-field">
         <span id="reset-confirm-label">Current name (type to confirm)</span>
-        <input class="dialog-input" type="text" id="reset-confirm-input" autocomplete="off" aria-describedby="reset-confirm-label" />
+        <input
+          class="dialog-input"
+          type="text"
+          id="reset-confirm-input"
+          autocomplete="off"
+          aria-describedby="reset-confirm-label"
+        />
       </label>
       <label class="dialog-field">
         <span>New exercise name</span>
@@ -37,7 +43,9 @@
     </div>
     <div class="dialog-actions">
       <button class="text-button" type="submit" value="cancel">Cancel</button>
-      <button class="dialog-accept danger" type="submit" value="accept" id="reset-confirm-accept">Reset exercise</button>
+      <button class="dialog-accept danger" type="submit" value="accept" id="reset-confirm-accept">
+        Reset exercise
+      </button>
     </div>
   </form>
 </dialog>

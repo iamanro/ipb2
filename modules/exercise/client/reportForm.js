@@ -105,11 +105,15 @@ export function credibilityOptionLabel(n) {
 
 /** Appends `<option>`s with Admiralty meanings to a reliability/credibility `<select>`. */
 export function appendReliabilityOptions(select) {
-  'ABCDEF'.split('').forEach((letter) => select.append(new Option(reliabilityOptionLabel(letter), letter)));
+  'ABCDEF'
+    .split('')
+    .forEach((letter) => select.append(new Option(reliabilityOptionLabel(letter), letter)));
 }
 
 export function appendCredibilityOptions(select) {
-  [1, 2, 3, 4, 5, 6].forEach((n) => select.append(new Option(credibilityOptionLabel(n), String(n))));
+  [1, 2, 3, 4, 5, 6].forEach((n) =>
+    select.append(new Option(credibilityOptionLabel(n), String(n))),
+  );
 }
 
 /**
@@ -226,7 +230,9 @@ export function createReportFieldset({ initial = null, ariaLabel = 'Report locat
   typeSelect.addEventListener('change', () => {
     draft.report_type = typeSelect.value;
     draft.fields = Object.fromEntries(
-      Object.entries(draft.fields).filter(([key]) => FIELDS_BY_TYPE[draft.report_type].includes(key)),
+      Object.entries(draft.fields).filter(([key]) =>
+        FIELDS_BY_TYPE[draft.report_type].includes(key),
+      ),
     );
     fieldsSection.hidden = draft.report_type === 'free';
     renderFields();
@@ -330,9 +336,12 @@ export function createReportsController(ctx) {
   function renderForm(container) {
     fieldset?.destroy();
     fieldset = null;
-    const editingReport = editingId != null ? data.reports.find((report) => report.id === editingId) : null;
+    const editingReport =
+      editingId != null ? data.reports.find((report) => report.id === editingId) : null;
     const section = el('section', 'field-group');
-    section.append(el('h3', null, editingReport ? `Edit report #${editingReport.id}` : 'New report'));
+    section.append(
+      el('h3', null, editingReport ? `Edit report #${editingReport.id}` : 'New report'),
+    );
     if (!can('analyst') || !hasCell()) {
       section.append(el('p', 'panel-note', 'Analyst role required to add or edit reports.'));
       container.append(section);
@@ -374,14 +383,31 @@ export function createReportsController(ctx) {
     credibilitySelect.setAttribute('aria-label', 'Credibility');
     appendCredibilityOptions(credibilitySelect);
     credibilitySelect.value = String(formMeta.credibility);
-    metaRow.append(sourceInput, authorInput, occurredLabel, occurredError, reliabilitySelect, credibilitySelect);
+    metaRow.append(
+      sourceInput,
+      authorInput,
+      occurredLabel,
+      occurredError,
+      reliabilitySelect,
+      credibilitySelect,
+    );
     section.append(metaRow);
 
     const actions = el('div', 'inline-form');
-    const saveButton = el('button', 'primary-button', editingReport ? 'Save changes' : 'Add report');
+    const saveButton = el(
+      'button',
+      'primary-button',
+      editingReport ? 'Save changes' : 'Add report',
+    );
     saveButton.type = 'button';
     saveButton.addEventListener('click', () =>
-      submitForm(section, { sourceInput, authorInput, occurredInput, reliabilitySelect, credibilitySelect }),
+      submitForm(section, {
+        sourceInput,
+        authorInput,
+        occurredInput,
+        reliabilitySelect,
+        credibilitySelect,
+      }),
     );
     actions.append(saveButton);
     if (editingReport) {
@@ -453,11 +479,18 @@ export function createReportsController(ctx) {
     // tracks this cell can edit — "New track…" below stays available
     // regardless, since creating one doesn't need canEdit on anything.
     const editableTracks = data.tracks.filter((track) => canEditClient(track));
-    sortTracksByDistance({ lon: report.lon, lat: report.lat }, editableTracks).forEach(({ track, km }) => {
-      const label = `${track.designation || track.sidc} \u2014 ${km.toFixed(1)} km \u2014 ${track.status}`;
-      const option = new Option(label, String(track.id), track.id === report.track_id, track.id === report.track_id);
-      select.append(option);
-    });
+    sortTracksByDistance({ lon: report.lon, lat: report.lat }, editableTracks).forEach(
+      ({ track, km }) => {
+        const label = `${track.designation || track.sidc} \u2014 ${km.toFixed(1)} km \u2014 ${track.status}`;
+        const option = new Option(
+          label,
+          String(track.id),
+          track.id === report.track_id,
+          track.id === report.track_id,
+        );
+        select.append(option);
+      },
+    );
     select.append(new Option('New track\u2026', '__new__', !report.track_id, !report.track_id));
 
     const newTrackRow = el('div', 'inline-form plot-track-new-row');
@@ -528,13 +561,23 @@ export function createReportsController(ctx) {
         });
         await requestJson(`${api}/tracks/${created.id}/positions`, {
           method: 'POST',
-          body: { lon: report.lon, lat: report.lat, observed_at: report.occurred_at, report_id: report.id },
+          body: {
+            lon: report.lon,
+            lat: report.lat,
+            observed_at: report.occurred_at,
+            report_id: report.id,
+          },
         });
       } else {
         const trackId = Number.parseInt(selectValue, 10);
         await requestJson(`${api}/tracks/${trackId}/positions`, {
           method: 'POST',
-          body: { lon: report.lon, lat: report.lat, observed_at: report.occurred_at, report_id: report.id },
+          body: {
+            lon: report.lon,
+            lat: report.lat,
+            observed_at: report.occurred_at,
+            report_id: report.id,
+          },
         });
       }
       trackPanelId = null;
@@ -558,11 +601,16 @@ export function createReportsController(ctx) {
       const item = el('li', 'evidence-item');
       item.append(
         el('span', `relation-badge relation-${link.relation}`, link.relation),
-        el('span', null, targetOption ? targetOption.label : `${link.target_kind} #${link.target_id}`),
+        el(
+          'span',
+          null,
+          targetOption ? targetOption.label : `${link.target_kind} #${link.target_id}`,
+        ),
       );
       // C2b: deleting a link needs canEdit on its target, not the report —
       // an invisible target (not in `targets`) is never editable either.
-      const canEditTarget = Boolean(targetOption) && canEditClient({ owner_cell: targetOption.owner_cell });
+      const canEditTarget =
+        Boolean(targetOption) && canEditClient({ owner_cell: targetOption.owner_cell });
       if (can('analyst') && canEditTarget) {
         const remove = el('button', 'icon-button danger', '\u00d7');
         remove.type = 'button';
@@ -571,7 +619,9 @@ export function createReportsController(ctx) {
         remove.addEventListener('click', async () => {
           // Evidence links are parts of the requirement they support
           // (CONTEXT.md), addressed flat under it.
-          await requestJson(`${api}/requirements/${link.requirement_id}/evidence/${link.id}`, { method: 'DELETE' });
+          await requestJson(`${api}/requirements/${link.requirement_id}/evidence/${link.id}`, {
+            method: 'DELETE',
+          });
           await load();
           render();
         });
@@ -584,7 +634,9 @@ export function createReportsController(ctx) {
     // C2b: creating a link changes its target, so the picker only offers
     // targets this cell can edit (canSee(report) alone isn't enough) — a
     // requirement/SIR merely released for reading never appears here.
-    const editableTargets = targets.filter((option) => canEditClient({ owner_cell: option.owner_cell }));
+    const editableTargets = targets.filter((option) =>
+      canEditClient({ owner_cell: option.owner_cell }),
+    );
     if (can('analyst') && editableTargets.length) {
       const form = el('div', 'inline-form');
       const targetSelect = document.createElement('select');
@@ -594,7 +646,9 @@ export function createReportsController(ctx) {
       );
       const relationSelect = document.createElement('select');
       relationSelect.setAttribute('aria-label', 'Relation');
-      EVIDENCE_RELATIONS.forEach((relation) => relationSelect.append(new Option(relation, relation)));
+      EVIDENCE_RELATIONS.forEach((relation) =>
+        relationSelect.append(new Option(relation, relation)),
+      );
       const noteInput = document.createElement('input');
       noteInput.type = 'text';
       noteInput.placeholder = 'Note (optional)';
@@ -631,7 +685,9 @@ export function createReportsController(ctx) {
     } else if (can('analyst') && !targets.length) {
       section.append(el('p', 'panel-note', 'Create a requirement or SIR to link evidence.'));
     } else if (can('analyst')) {
-      section.append(el('p', 'panel-note', 'No requirement or SIR your cell can edit to link evidence to.'));
+      section.append(
+        el('p', 'panel-note', 'No requirement or SIR your cell can edit to link evidence to.'),
+      );
     }
     container.append(section);
   }
@@ -680,10 +736,17 @@ export function createReportsController(ctx) {
     row.className = 'report-row';
     const toggleCell = document.createElement('td');
     const expanded = expandedId === report.id;
-    const toggleButton = el('button', 'text-button report-row-toggle', expanded ? '\u25be' : '\u25b8');
+    const toggleButton = el(
+      'button',
+      'text-button report-row-toggle',
+      expanded ? '\u25be' : '\u25b8',
+    );
     toggleButton.type = 'button';
     toggleButton.setAttribute('aria-expanded', String(expanded));
-    toggleButton.setAttribute('aria-label', expanded ? 'Collapse report details' : 'Expand report details');
+    toggleButton.setAttribute(
+      'aria-label',
+      expanded ? 'Collapse report details' : 'Expand report details',
+    );
     toggleButton.addEventListener('click', () => {
       expandedId = expanded ? null : report.id;
       if (expandedId !== report.id) trackPanelId = null;
@@ -692,14 +755,18 @@ export function createReportsController(ctx) {
     toggleCell.append(toggleButton);
     row.append(toggleCell);
     row.append(el('td', null, REPORT_TYPE_LABEL[report.report_type]));
-    row.append(el('td', null, formatDtg(new Date(report.occurred_at || report.created_at).getTime())));
+    row.append(
+      el('td', null, formatDtg(new Date(report.occurred_at || report.created_at).getTime())),
+    );
     row.append(el('td', null, report.lon != null ? formatMgrs(report.lon, report.lat) : '\u2014'));
     row.append(el('td', null, naiLabel(report.nai_id) ?? '\u2014'));
     const cellCell = document.createElement('td');
     cellCell.append(renderCellBadge(report.owner_cell));
     row.append(cellCell);
     const admiraltyCell = document.createElement('td');
-    admiraltyCell.append(el('span', 'admiralty-badge', `${report.reliability}${report.credibility}`));
+    admiraltyCell.append(
+      el('span', 'admiralty-badge', `${report.reliability}${report.credibility}`),
+    );
     row.append(admiraltyCell);
     const actionsCell = document.createElement('td');
     const actions = el('div', 'row-actions');
@@ -738,7 +805,10 @@ export function createReportsController(ctx) {
   }
 
   async function reassignReportOwner(report, ownerCell) {
-    await requestJson(`${api}/reports/${report.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/reports/${report.id}/owner`, {
+      method: 'PATCH',
+      body: { owner_cell: ownerCell },
+    });
     await load();
     render();
   }
@@ -748,8 +818,12 @@ export function createReportsController(ctx) {
     row.className = 'report-detail-row';
     const cell = document.createElement('td');
     cell.colSpan = 8;
-    cell.append(renderReleaseControl({ item: report, onRelease: (cells) => releaseReport(report, cells) }));
-    appendOwnerReassign(cell, report.owner_cell, (ownerCell) => reassignReportOwner(report, ownerCell));
+    cell.append(
+      renderReleaseControl({ item: report, onRelease: (cells) => releaseReport(report, cells) }),
+    );
+    appendOwnerReassign(cell, report.owner_cell, (ownerCell) =>
+      reassignReportOwner(report, ownerCell),
+    );
     cell.append(el('p', null, report.text));
     const fieldKeys = FIELDS_BY_TYPE[report.report_type];
     if (fieldKeys.length) {
@@ -766,7 +840,11 @@ export function createReportsController(ctx) {
       cell.append(sidcRow);
     }
     cell.append(
-      el('p', 'panel-note', `Source: ${report.source || '\u2014'} \u00b7 Author: ${report.author || '\u2014'}`),
+      el(
+        'p',
+        'panel-note',
+        `Source: ${report.source || '\u2014'} \u00b7 Author: ${report.author || '\u2014'}`,
+      ),
     );
     if (report.track_id != null) {
       const track = data.tracks.find((entry) => entry.id === report.track_id);
@@ -820,7 +898,11 @@ export function createReportsController(ctx) {
     const filtered = filteredReports();
     if (!filtered.length) {
       panel.append(
-        el('p', 'panel-note', data.reports.length ? 'No reports match the filters.' : 'No reports yet.'),
+        el(
+          'p',
+          'panel-note',
+          data.reports.length ? 'No reports match the filters.' : 'No reports yet.',
+        ),
       );
       return;
     }
@@ -841,7 +923,9 @@ export function createReportsController(ctx) {
     unsubscribe = subscribe(
       (event) => event.module === 'exercise',
       () => {
-        load().then(render).catch(() => {});
+        load()
+          .then(render)
+          .catch(() => {});
       },
     );
   }

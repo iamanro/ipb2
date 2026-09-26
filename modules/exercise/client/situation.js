@@ -142,7 +142,10 @@ export function createSituationController(ctx) {
   function updateMapData() {
     if (!map) return;
     map.setFeatures(naiFeatures());
-    map.setSituation({ tracks: data.tracks, reports: filteredReports() }, { onSelect: onMapSelect });
+    map.setSituation(
+      { tracks: data.tracks, reports: filteredReports() },
+      { onSelect: onMapSelect },
+    );
   }
 
   function focusPoint(point) {
@@ -193,7 +196,12 @@ export function createSituationController(ctx) {
     const label = el('label', 'field-label-inline', 'Reports within');
     const select = document.createElement('select');
     TIME_FILTER_HOURS.forEach((hours) => {
-      select.append(new Option(hours == null ? 'All scenario time' : `Last ${hours}h`, hours == null ? 'all' : String(hours)));
+      select.append(
+        new Option(
+          hours == null ? 'All scenario time' : `Last ${hours}h`,
+          hours == null ? 'all' : String(hours),
+        ),
+      );
     });
     select.value = hoursFilter == null ? 'all' : String(hoursFilter);
     select.addEventListener('change', () => {
@@ -204,7 +212,9 @@ export function createSituationController(ctx) {
     label.append(select);
     row.append(label);
     if (data.clock) {
-      row.append(el('p', 'panel-note', `Scenario time: ${formatDtg(new Date(data.clock.now).getTime())}`));
+      row.append(
+        el('p', 'panel-note', `Scenario time: ${formatDtg(new Date(data.clock.now).getTime())}`),
+      );
     }
     container.append(row);
   }
@@ -230,16 +240,23 @@ export function createSituationController(ctx) {
     designationInput.setAttribute('aria-label', 'Track designation');
     const statusSelect = document.createElement('select');
     statusSelect.setAttribute('aria-label', 'Track status');
-    TRACK_STATUSES.forEach((status) => statusSelect.append(new Option(TRACK_STATUS_LABEL[status], status)));
+    TRACK_STATUSES.forEach((status) =>
+      statusSelect.append(new Option(TRACK_STATUS_LABEL[status], status)),
+    );
 
     let sidc = withAffiliation(DEFAULT_SIDC, 'hostile');
     const sidcPreview = el('span', 'report-sidc-preview');
-    const renderSidc = () => sidcPreview.replaceChildren(symbolElement(sidc, { size: 26 }, 'Track symbol'));
+    const renderSidc = () =>
+      sidcPreview.replaceChildren(symbolElement(sidc, { size: 26 }, 'Track symbol'));
     renderSidc();
     const sidcButton = el('button', 'chip-button', 'Symbol\u2026');
     sidcButton.type = 'button';
     sidcButton.addEventListener('click', async () => {
-      const picked = await openSymbolPicker({ initial: sidc, affiliation: 'hostile', title: 'Track symbol' });
+      const picked = await openSymbolPicker({
+        initial: sidc,
+        affiliation: 'hostile',
+        title: 'Track symbol',
+      });
       if (picked) {
         sidc = picked;
         renderSidc();
@@ -289,7 +306,15 @@ export function createSituationController(ctx) {
     });
     actions.append(saveButton, cancelButton);
 
-    form.append(designationInput, statusSelect, sidcPreview, sidcButton, addTrackField.element, errorNode, actions);
+    form.append(
+      designationInput,
+      statusSelect,
+      sidcPreview,
+      sidcButton,
+      addTrackField.element,
+      errorNode,
+      actions,
+    );
     container.append(form);
   }
 
@@ -311,7 +336,10 @@ export function createSituationController(ctx) {
       group.forEach((track) => {
         const item = document.createElement('li');
         const selected = selectedTrackId === track.id;
-        const button = el('button', `situation-track-item status-${track.status}${selected ? ' selected' : ''}`);
+        const button = el(
+          'button',
+          `situation-track-item status-${track.status}${selected ? ' selected' : ''}`,
+        );
         button.type = 'button';
         button.setAttribute('aria-pressed', String(selected));
         button.append(
@@ -346,11 +374,19 @@ export function createSituationController(ctx) {
     const statusSelect = document.createElement('select');
     statusSelect.setAttribute('aria-label', 'Status');
     TRACK_STATUSES.forEach((status) =>
-      statusSelect.append(new Option(TRACK_STATUS_LABEL[status], status, status === track.status, status === track.status)),
+      statusSelect.append(
+        new Option(
+          TRACK_STATUS_LABEL[status],
+          status,
+          status === track.status,
+          status === track.status,
+        ),
+      ),
     );
     let sidc = track.sidc;
     const sidcPreview = el('span', 'report-sidc-preview');
-    const renderSidc = () => sidcPreview.replaceChildren(symbolElement(sidc, { size: 24 }, 'Track symbol'));
+    const renderSidc = () =>
+      sidcPreview.replaceChildren(symbolElement(sidc, { size: 24 }, 'Track symbol'));
     renderSidc();
     const sidcButton = el('button', 'chip-button', 'Symbol\u2026');
     sidcButton.type = 'button';
@@ -394,12 +430,25 @@ export function createSituationController(ctx) {
       editingTrackId = null;
       renderSidebar();
     });
-    form.append(designationInput, statusSelect, sidcPreview, sidcButton, notesInput, saveButton, cancelButton);
+    form.append(
+      designationInput,
+      statusSelect,
+      sidcPreview,
+      sidcButton,
+      notesInput,
+      saveButton,
+      cancelButton,
+    );
     container.append(form);
   }
 
   async function deleteTrack(track) {
-    if (!(await askConfirm(`Delete track ${track.designation || track.sidc}? This removes its history.`))) return;
+    if (
+      !(await askConfirm(
+        `Delete track ${track.designation || track.sidc}? This removes its history.`,
+      ))
+    )
+      return;
     await requestJson(`${api}/tracks/${track.id}`, { method: 'DELETE' });
     selectedTrackId = null;
     await load();
@@ -414,7 +463,10 @@ export function createSituationController(ctx) {
   }
 
   async function reassignTrackOwner(track, ownerCell) {
-    await requestJson(`${api}/tracks/${track.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/tracks/${track.id}/owner`, {
+      method: 'PATCH',
+      body: { owner_cell: ownerCell },
+    });
     await load();
     renderSidebar();
   }
@@ -440,11 +492,17 @@ export function createSituationController(ctx) {
         onRelease: (cells) => releaseTrack(track, cells),
       }),
     );
-    appendOwnerReassign(card, track.owner_cell, (ownerCell) => reassignTrackOwner(track, ownerCell));
+    appendOwnerReassign(card, track.owner_cell, (ownerCell) =>
+      reassignTrackOwner(track, ownerCell),
+    );
     card.append(
       symbolElement(
         track.sidc,
-        { size: 32, designation: track.designation, dtg: formatDtg(new Date(track.observed_at).getTime()) },
+        {
+          size: 32,
+          designation: track.designation,
+          dtg: formatDtg(new Date(track.observed_at).getTime()),
+        },
         'Track symbol',
       ),
     );
@@ -523,7 +581,13 @@ export function createSituationController(ctx) {
     if (!report) return;
     const card = el('div', 'situation-detail-card field-group');
     const header = el('div', 'panel-header-row');
-    header.append(el('h3', null, `${report.report_type.toUpperCase()} \u00b7 ${report.reliability}${report.credibility}`));
+    header.append(
+      el(
+        'h3',
+        null,
+        `${report.report_type.toUpperCase()} \u00b7 ${report.reliability}${report.credibility}`,
+      ),
+    );
     const closeButton = el('button', 'text-button', 'Close');
     closeButton.type = 'button';
     closeButton.addEventListener('click', () => {

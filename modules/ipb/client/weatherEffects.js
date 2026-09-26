@@ -51,13 +51,21 @@ const FACTOR_LABELS = {
 /** Rows: systems/activities an analyst cares about, each rated on the
  * factors that actually affect it. Order matches the printed matrix. */
 export const WEATHER_SYSTEMS = [
-  { id: 'dismounted-movement', label: 'Dismounted movement', factors: ['precipitation', 'visibility', 'temperature'] },
+  {
+    id: 'dismounted-movement',
+    label: 'Dismounted movement',
+    factors: ['precipitation', 'visibility', 'temperature'],
+  },
   { id: 'wheeled-movement', label: 'Wheeled movement', factors: ['precipitation', 'visibility'] },
   { id: 'tracked-movement', label: 'Tracked movement', factors: ['precipitation'] },
   { id: 'rotary-wing', label: 'Rotary wing', factors: ['wind', 'gusts', 'visibility', 'cloud'] },
   { id: 'uas-small', label: 'UAS (small)', factors: ['wind', 'gusts', 'precipitation', 'light'] },
   { id: 'uas-tactical', label: 'UAS (tactical)', factors: ['wind', 'gusts', 'precipitation'] },
-  { id: 'observation-isr-eo', label: 'Observation/ISR (EO)', factors: ['visibility', 'cloud', 'light'] },
+  {
+    id: 'observation-isr-eo',
+    label: 'Observation/ISR (EO)',
+    factors: ['visibility', 'cloud', 'light'],
+  },
   { id: 'artillery-mortar', label: 'Artillery/mortar', factors: ['wind', 'visibility'] },
   { id: 'smoke-obscurants', label: 'Smoke/obscurants', factors: ['wind', 'precipitation'] },
 ];
@@ -67,14 +75,22 @@ const round = (value, digits = 0) => Number(value.toFixed(digits));
 function rateHighIsBad(value, threshold, unit, label) {
   if (!Number.isFinite(value)) return null;
   const rating =
-    value >= threshold.unfavourable ? 'unfavourable' : value >= threshold.marginal ? 'marginal' : 'favourable';
+    value >= threshold.unfavourable
+      ? 'unfavourable'
+      : value >= threshold.marginal
+        ? 'marginal'
+        : 'favourable';
   return { rating, detail: `${label} ${round(value, 1)} ${unit}` };
 }
 
 function rateLowIsBad(value, threshold, unit, label) {
   if (!Number.isFinite(value)) return null;
   const rating =
-    value <= threshold.unfavourable ? 'unfavourable' : value <= threshold.marginal ? 'marginal' : 'favourable';
+    value <= threshold.unfavourable
+      ? 'unfavourable'
+      : value <= threshold.marginal
+        ? 'marginal'
+        : 'favourable';
   return { rating, detail: `${label} ${round(value, 1)} ${unit}` };
 }
 
@@ -93,7 +109,10 @@ function rateTemperature(value, threshold) {
 function rateLight(light) {
   if (!light || light === 'day') return { rating: 'favourable', detail: 'Daylight' };
   if (light === 'night') return { rating: 'unfavourable', detail: 'Night' };
-  return { rating: 'marginal', detail: light === 'civil-twilight' ? 'Civil twilight' : 'Nautical twilight' };
+  return {
+    rating: 'marginal',
+    detail: light === 'civil-twilight' ? 'Civil twilight' : 'Nautical twilight',
+  };
 }
 
 const FACTOR_EVALUATORS = {
@@ -106,7 +125,8 @@ const FACTOR_EVALUATORS = {
       'km',
       'Visibility',
     ),
-  cloud: (hour, thresholds) => rateHighIsBad(hour.cloudLow, thresholds.low_cloud_pct, '%', 'Low cloud'),
+  cloud: (hour, thresholds) =>
+    rateHighIsBad(hour.cloudLow, thresholds.low_cloud_pct, '%', 'Low cloud'),
   precipitation: (hour, thresholds) =>
     rateHighIsBad(hour.precipitation, thresholds.precipitation_mm, 'mm', 'Precip.'),
   temperature: (hour, thresholds) => rateTemperature(hour.temperature, thresholds.temperature_c),
@@ -197,7 +217,9 @@ export function evaluateWeatherMatrix(hours, thresholds, lat, lon) {
   const lightStates = forecastLightStates(hours, lat, lon);
   return WEATHER_SYSTEMS.map((system) => ({
     system,
-    cells: hours.map((hour, index) => evaluateWeatherCell(system, hour, thresholds, lightStates[index])),
+    cells: hours.map((hour, index) =>
+      evaluateWeatherCell(system, hour, thresholds, lightStates[index]),
+    ),
   }));
 }
 
@@ -213,7 +235,11 @@ export function resolveWeatherEffectsPoint(study) {
 }
 
 const RATING_BADGE = { favourable: 'F', marginal: 'M', unfavourable: 'U' };
-const RATING_WORD = { favourable: 'Favourable', marginal: 'Marginal', unfavourable: 'Unfavourable' };
+const RATING_WORD = {
+  favourable: 'Favourable',
+  marginal: 'Marginal',
+  unfavourable: 'Unfavourable',
+};
 
 const THRESHOLD_FIELDS = [
   { key: 'wind_ms', label: 'Wind (m/s)', kind: 'pair' },
@@ -245,14 +271,22 @@ function renderThresholdForm({ createElement, thresholds, can, onChange }) {
       if (field.kind === 'pair') {
         next[field.key] = {
           marginal: Number(form.querySelector(`[data-field="${field.key}.marginal"]`).value),
-          unfavourable: Number(form.querySelector(`[data-field="${field.key}.unfavourable"]`).value),
+          unfavourable: Number(
+            form.querySelector(`[data-field="${field.key}.unfavourable"]`).value,
+          ),
         };
       } else {
         next[field.key] = {
           marginalLow: Number(form.querySelector(`[data-field="${field.key}.marginalLow"]`).value),
-          marginalHigh: Number(form.querySelector(`[data-field="${field.key}.marginalHigh"]`).value),
-          unfavourableLow: Number(form.querySelector(`[data-field="${field.key}.unfavourableLow"]`).value),
-          unfavourableHigh: Number(form.querySelector(`[data-field="${field.key}.unfavourableHigh"]`).value),
+          marginalHigh: Number(
+            form.querySelector(`[data-field="${field.key}.marginalHigh"]`).value,
+          ),
+          unfavourableLow: Number(
+            form.querySelector(`[data-field="${field.key}.unfavourableLow"]`).value,
+          ),
+          unfavourableHigh: Number(
+            form.querySelector(`[data-field="${field.key}.unfavourableHigh"]`).value,
+          ),
         };
       }
     }
@@ -288,9 +322,12 @@ function renderThresholdForm({ createElement, thresholds, can, onChange }) {
           createElement(
             'span',
             null,
-            { unfavourableLow: 'Unfav. below', marginalLow: 'Marg. below', marginalHigh: 'Marg. above', unfavourableHigh: 'Unfav. above' }[
-              sub
-            ],
+            {
+              unfavourableLow: 'Unfav. below',
+              marginalLow: 'Marg. below',
+              marginalHigh: 'Marg. above',
+              unfavourableHigh: 'Unfav. above',
+            }[sub],
           ),
           numberInput(`${field.key}.${sub}`, thresholds[field.key][sub]),
         );
@@ -309,7 +346,15 @@ function renderThresholdForm({ createElement, thresholds, can, onChange }) {
  * the view's own autosave convention); `hours` is the already-fetched 48 h
  * forecast (`state.weather.forecast.data[0].hours`), or an empty array.
  */
-export function renderWeatherEffectsBlock({ createElement, requestJson, showError, can, study, hours, point }) {
+export function renderWeatherEffectsBlock({
+  createElement,
+  requestJson,
+  showError,
+  can,
+  study,
+  hours,
+  point,
+}) {
   const block = createElement('section', 'worksheet-block weather-effects-block');
   block.append(createElement('h4', null, 'Weather effects matrix'));
 
@@ -352,11 +397,7 @@ export function renderWeatherEffectsBlock({ createElement, requestJson, showErro
 
   if (!hours.length) {
     block.append(
-      createElement(
-        'p',
-        'panel-note',
-        'Get the 48-hour forecast above to fill this matrix.',
-      ),
+      createElement('p', 'panel-note', 'Get the 48-hour forecast above to fill this matrix.'),
     );
     return block;
   }

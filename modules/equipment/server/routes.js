@@ -298,7 +298,9 @@ export default {
       handler: () => {
         const database = referenceDatabase();
         bookmarkStore ??= openBookmarks(bookmarksState.path);
-        return { items: bookmarkStore.list().map((bookmark) => enrichBookmark(database, bookmark)) };
+        return {
+          items: bookmarkStore.list().map((bookmark) => enrichBookmark(database, bookmark)),
+        };
       },
     },
     {

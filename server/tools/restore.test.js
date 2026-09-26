@@ -13,7 +13,13 @@ let env;
 
 function run(tool, args = []) {
   try {
-    return { code: 0, out: execFileSync(process.execPath, [path.join(TOOLS, tool), ...args], { env, encoding: 'utf8' }) };
+    return {
+      code: 0,
+      out: execFileSync(process.execPath, [path.join(TOOLS, tool), ...args], {
+        env,
+        encoding: 'utf8',
+      }),
+    };
   } catch (error) {
     return { code: error.status, out: `${error.stdout}${error.stderr}` };
   }
@@ -44,7 +50,11 @@ function backups() {
 
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), 'ipb-restore-test-'));
-  env = { ...process.env, IPB_STATE_ROOT: path.join(root, 'state'), IPB_BACKUP_ROOT: path.join(root, 'backups') };
+  env = {
+    ...process.env,
+    IPB_STATE_ROOT: path.join(root, 'state'),
+    IPB_BACKUP_ROOT: path.join(root, 'backups'),
+  };
   writeState('auth', 'auth.db', 'users v1');
   writeState('ipb', 'ipb.db', 'studies v1');
 });
@@ -69,7 +79,9 @@ test('a backup restores the databases it holds and keeps the replaced state to u
   expect(readState('ipb', 'ipb.db')).toBe('studies v1');
 
   // The state it replaced is kept, and is itself restorable.
-  const safety = readdirSync(path.join(root, 'backups')).find((name) => name.startsWith('pre-restore-'));
+  const safety = readdirSync(path.join(root, 'backups')).find((name) =>
+    name.startsWith('pre-restore-'),
+  );
   expect(run('restore.mjs', [safety, '--yes']).code).toBe(0);
   expect(readState('ipb', 'ipb.db')).toBe('studies v2');
 });
@@ -110,7 +122,9 @@ test('exercise archives are mirrored into backups and come back when the state v
   mkdirSync(archive, { recursive: true });
   writeFileSync(path.join(archive, 'meta.json'), '{"name":"Exercise 1"}');
   run('backup.mjs');
-  expect(existsSync(path.join(root, 'backups', 'archives', path.basename(archive), 'meta.json'))).toBe(true);
+  expect(
+    existsSync(path.join(root, 'backups', 'archives', path.basename(archive), 'meta.json')),
+  ).toBe(true);
 
   rmSync(path.join(root, 'state', 'archives'), { recursive: true });
   const [backup] = backups();

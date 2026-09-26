@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'vitest';
 
-import { ASCOPE_ROWS, PMESII_COLUMNS, countFilledCells, countFilledInRow, indexCivilConsiderations } from './civil.js';
+import {
+  ASCOPE_ROWS,
+  PMESII_COLUMNS,
+  countFilledCells,
+  countFilledInRow,
+  indexCivilConsiderations,
+} from './civil.js';
 
 const ROWS = [
   { id: 1, ascope: 'areas', pmesii: 'military', text: 'Key crossroads at Hill 214.' },

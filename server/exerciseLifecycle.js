@@ -23,7 +23,6 @@ import { EXERCISE_DATABASES } from './stateDatabases.js';
 
 const EXERCISE_NAME_MAX_LENGTH = 80;
 
-
 function now() {
   return new Date().toISOString();
 }
@@ -71,7 +70,6 @@ function assertExerciseName(name) {
     throw new HttpError(400, `Exercise name must be 1-${EXERCISE_NAME_MAX_LENGTH} characters.`);
   }
 }
-
 
 /**
  * `{ getAuthStore }`: a `server/api.js`-owned accessor for the (lazily
@@ -216,7 +214,11 @@ export function createExerciseLifecycle({ getAuthStore }) {
      * the rest of the restore. */
     async restore({ archive }) {
       // Archive ids are generated directory names (timestamp + slug), never paths.
-      if (typeof archive !== 'string' || !/^[A-Za-z0-9][\w.-]*$/.test(archive) || archive.includes('..')) {
+      if (
+        typeof archive !== 'string' ||
+        !/^[A-Za-z0-9][\w.-]*$/.test(archive) ||
+        archive.includes('..')
+      ) {
         throw new HttpError(400, 'archive must be an archive id from the archives list.');
       }
       // Acquires the lock before the first `await` (matching `reset`), so
@@ -238,7 +240,11 @@ export function createExerciseLifecycle({ getAuthStore }) {
           const archivedFile = path.join(archiveDir, database.file);
           if (!(await fileExists(archivedFile))) continue;
           const check = safeIntegrityCheck(archivedFile);
-          if (check !== 'ok') throw new HttpError(422, `Archive "${archive}" is damaged (${database.file}: ${check}).`);
+          if (check !== 'ok')
+            throw new HttpError(
+              422,
+              `Archive "${archive}" is damaged (${database.file}: ${check}).`,
+            );
         }
         await yieldTick();
         await performArchive({ note: 'auto: before restore' });

@@ -142,9 +142,18 @@ export function createHealthzHandler({ projectRoot }) {
       checks.stateError = error.message;
     }
 
-    const terrainRoot = dataDirectory('terrain', path.join(projectRoot, 'modules', 'terrain', 'data'));
-    const equipmentRoot = dataDirectory('equipment', path.join(projectRoot, 'modules', 'equipment', 'data'));
-    const exerciseRoot = dataDirectory('exercise', path.join(projectRoot, 'modules', 'exercise', 'data'));
+    const terrainRoot = dataDirectory(
+      'terrain',
+      path.join(projectRoot, 'modules', 'terrain', 'data'),
+    );
+    const equipmentRoot = dataDirectory(
+      'equipment',
+      path.join(projectRoot, 'modules', 'equipment', 'data'),
+    );
+    const exerciseRoot = dataDirectory(
+      'exercise',
+      path.join(projectRoot, 'modules', 'exercise', 'data'),
+    );
 
     const terrainFiles = {
       'terrain.db': path.join(terrainRoot, 'terrain.db'),

@@ -59,7 +59,14 @@ export default defineConfig({
     ignorePatterns: ['dist/**', 'modules/*/data/**', 'modules/*/state/**', 'node_modules/**'],
   },
   fmt: {
-    ignorePatterns: ['dist/**', 'modules/*/data/**', 'modules/*/state/**', 'node_modules/**'],
+    // `.agents/` is vendored as-is: skills-lock.json pins each file's hash.
+    ignorePatterns: [
+      'dist/**',
+      'modules/*/data/**',
+      'modules/*/state/**',
+      'node_modules/**',
+      '.agents/**',
+    ],
     semi: true,
     singleQuote: true,
   },

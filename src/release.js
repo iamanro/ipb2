@@ -147,7 +147,10 @@ function openReleaseDialog(item) {
  */
 export function renderReleaseControl({ item, onRelease }) {
   const wrap = createElement('div', 'release-control');
-  wrap.append(createElement('span', 'release-control-label', 'Owner'), renderCellBadge(item.owner_cell));
+  wrap.append(
+    createElement('span', 'release-control-label', 'Owner'),
+    renderCellBadge(item.owner_cell),
+  );
 
   const released = releasedCells(item);
   if (released.length) {

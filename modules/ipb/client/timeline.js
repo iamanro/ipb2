@@ -9,7 +9,14 @@
  * Everything else is DOM glue reaching into `./view.js`'s shared internals —
  * see the comment above its export block.
  */
-import { formatDtg, formatHOffset, parseDtg, parseHOffset, parsePlannedTime, resolveTime } from '../../../src/dtg.js';
+import {
+  formatDtg,
+  formatHOffset,
+  parseDtg,
+  parseHOffset,
+  parsePlannedTime,
+  resolveTime,
+} from '../../../src/dtg.js';
 import { subscribe } from '../../../src/live.js';
 import { can } from '../../../src/session.js';
 import {
@@ -124,7 +131,8 @@ export function layoutTimeline({
     .map((phase) => {
       const startMs = resolveTime({ offset: phase.start_offset }, hHour);
       if (startMs == null) return null;
-      const endMs = phase.end_offset != null ? resolveTime({ offset: phase.end_offset }, hHour) : maxMs;
+      const endMs =
+        phase.end_offset != null ? resolveTime({ offset: phase.end_offset }, hHour) : maxMs;
       const x = clampX(xScale(startMs));
       const endX = clampX(xScale(endMs ?? maxMs));
       return { id: phase.id, name: phase.name, x, width: Math.max(1, endX - x) };
@@ -158,7 +166,12 @@ export function layoutTimeline({
       .map((event) => {
         const ms = resolveTime({ at: event.expected_at, offset: event.expected_offset }, hHour);
         if (ms == null) return null;
-        return { id: event.id, indicator: event.indicator, naiFeatureId: event.nai_feature_id, x: clampX(xScale(ms)) };
+        return {
+          id: event.id,
+          indicator: event.indicator,
+          naiFeatureId: event.nai_feature_id,
+          x: clampX(xScale(ms)),
+        };
       })
       .filter(Boolean);
     return { coaId: coa.id, coaName: coa.name, y, events: rowEvents };
@@ -276,7 +289,10 @@ async function patchPhase(phase, body) {
   try {
     Object.assign(
       phase,
-      await requestJson(`${API}/studies/${phase.study_id}/phases/${phase.id}`, { method: 'PATCH', body }),
+      await requestJson(`${API}/studies/${phase.study_id}/phases/${phase.id}`, {
+        method: 'PATCH',
+        body,
+      }),
     );
   } catch (error) {
     showError(elements.worksheet4, error.message);
@@ -325,7 +341,9 @@ function renderPhaseRow(phase, index, total, canEdit) {
   row.append(nameCell);
 
   const startCell = document.createElement('td');
-  const startField = offsetField(phase.start_offset, (minutes) => patchPhase(phase, { start_offset: minutes }));
+  const startField = offsetField(phase.start_offset, (minutes) =>
+    patchPhase(phase, { start_offset: minutes }),
+  );
   if (!canEdit) editable(startField.querySelector('input'));
   startCell.append(startField);
   row.append(startCell);
@@ -342,7 +360,16 @@ function renderPhaseRow(phase, index, total, canEdit) {
 
   const actionsCell = document.createElement('td');
   if (canEdit) {
-    actionsCell.append(renderReorderButtons('phases', phase, index, total, elements.worksheet4, renderStep4Worksheet));
+    actionsCell.append(
+      renderReorderButtons(
+        'phases',
+        phase,
+        index,
+        total,
+        elements.worksheet4,
+        renderStep4Worksheet,
+      ),
+    );
     const del = createElement('button', 'icon-button danger', 'Delete');
     del.type = 'button';
     del.addEventListener('click', () => deletePhase(phase));
@@ -372,10 +399,14 @@ export function renderPhasesSection(canEdit) {
   table.className = 'data-table';
   const head = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['Name', 'Start (H±)', 'End (H±)', ''].forEach((label) => headRow.append(createElement('th', null, label)));
+  ['Name', 'Start (H±)', 'End (H±)', ''].forEach((label) =>
+    headRow.append(createElement('th', null, label)),
+  );
   head.append(headRow);
   const body = document.createElement('tbody');
-  phases.forEach((phase, index) => body.append(renderPhaseRow(phase, index, phases.length, canEdit)));
+  phases.forEach((phase, index) =>
+    body.append(renderPhaseRow(phase, index, phases.length, canEdit)),
+  );
   table.append(head, body);
   section.append(table);
   return section;
@@ -403,7 +434,9 @@ async function deleteDecisionPoint(dp) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete decision point "${dp.name}"?`))) return;
   try {
-    await requestJson(`${API}/studies/${dp.study_id}/decision-points/${dp.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${dp.study_id}/decision-points/${dp.id}`, {
+      method: 'DELETE',
+    });
     state.study.decision_points = state.study.decision_points.filter((entry) => entry.id !== dp.id);
     renderStep4Worksheet();
   } catch (error) {
@@ -456,7 +489,11 @@ function plannedTimeField(label, at, offset, onChange, disabled) {
   input.type = 'text';
   input.placeholder = 'DTG or H±offset';
   input.disabled = disabled;
-  input.value = at ? formatDtg(new Date(at).getTime()) : offset != null ? formatHOffset(offset) : '';
+  input.value = at
+    ? formatDtg(new Date(at).getTime())
+    : offset != null
+      ? formatHOffset(offset)
+      : '';
   const error = createElement('p', 'inline-error');
   error.hidden = true;
   const commit = async () => {
@@ -492,7 +529,16 @@ function renderDecisionPointCard(dp, index, total, canEdit) {
   const header = createElement('div', 'coa-card-header');
   header.append(createElement('span', 'coa-kind', `Decision point ${index + 1}`));
   if (canEdit) {
-    header.append(renderReorderButtons('decision-points', dp, index, total, elements.worksheet4, renderStep4Worksheet));
+    header.append(
+      renderReorderButtons(
+        'decision-points',
+        dp,
+        index,
+        total,
+        elements.worksheet4,
+        renderStep4Worksheet,
+      ),
+    );
     const del = createElement('button', 'icon-button danger', 'Delete');
     del.type = 'button';
     del.addEventListener('click', () => deleteDecisionPoint(dp));
@@ -555,7 +601,9 @@ function renderDecisionPointCard(dp, index, total, canEdit) {
   description.rows = 2;
   description.value = dp.description || '';
   description.disabled = !canEdit;
-  bindDebouncedCommit(description, `dp:${dp.id}:description`, (value) => patchDecisionPoint(dp, { description: value || null }));
+  bindDebouncedCommit(description, `dp:${dp.id}:description`, (value) =>
+    patchDecisionPoint(dp, { description: value || null }),
+  );
   card.append(description);
 
   card.append(createElement('label', 'field-label', 'Decision'));
@@ -563,7 +611,9 @@ function renderDecisionPointCard(dp, index, total, canEdit) {
   decision.rows = 2;
   decision.value = dp.decision || '';
   decision.disabled = !canEdit;
-  bindDebouncedCommit(decision, `dp:${dp.id}:decision`, (value) => patchDecisionPoint(dp, { decision: value || null }));
+  bindDebouncedCommit(decision, `dp:${dp.id}:decision`, (value) =>
+    patchDecisionPoint(dp, { decision: value || null }),
+  );
   card.append(decision);
 
   return card;
@@ -695,7 +745,10 @@ function openEventEditor({ event, tais, decisionPoints, hHour }) {
           timeError.textContent = `Could not read "${text}" as a DTG or H±offset.`;
           return;
         }
-        time = 'at' in planned ? { at: new Date(planned.at).toISOString(), offset: null } : { at: null, offset: planned.offset };
+        time =
+          'at' in planned
+            ? { at: new Date(planned.at).toISOString(), offset: null }
+            : { at: null, offset: planned.offset };
       }
       pending = {
         expected_at: time.at,
@@ -727,7 +780,12 @@ async function openEventEditorFor(event) {
   if (!(can('analyst') && canEditStudy())) return;
   const tais = state.study.features.filter((feature) => feature.layer === 'tai');
   const decisionPoints = state.study.decision_points ?? [];
-  const result = await openEventEditor({ event, tais, decisionPoints, hHour: state.study.study.h_hour });
+  const result = await openEventEditor({
+    event,
+    tais,
+    decisionPoints,
+    hHour: state.study.study.h_hour,
+  });
   if (!result) return;
   try {
     Object.assign(
@@ -805,7 +863,13 @@ function renderTimelineSvg(layout, { nowX, onSelectEvent, onSelectDp } = {}) {
 
   layout.rows.forEach((row) => {
     svg.append(
-      svgEl('line', { x1: 0, y1: row.y + 14, x2: layout.width, y2: row.y + 14, class: 'timeline-row-line' }),
+      svgEl('line', {
+        x1: 0,
+        y1: row.y + 14,
+        x2: layout.width,
+        y2: row.y + 14,
+        class: 'timeline-row-line',
+      }),
     );
     const label = svgEl('text', { x: 4, y: row.y - 8, class: 'timeline-row-label' });
     label.textContent = row.coaName;
@@ -836,7 +900,13 @@ function renderTimelineSvg(layout, { nowX, onSelectEvent, onSelectDp } = {}) {
   layout.decisionPoints.forEach((dp) => {
     if (dp.xStart != null && dp.xEnd != null) {
       svg.append(
-        svgEl('line', { x1: dp.xStart, y1: dp.y, x2: dp.xEnd, y2: dp.y, class: 'timeline-dp-window' }),
+        svgEl('line', {
+          x1: dp.xStart,
+          y1: dp.y,
+          x2: dp.xEnd,
+          y2: dp.y,
+          class: 'timeline-dp-window',
+        }),
       );
     }
     const diamond = svgEl('polygon', {
@@ -859,7 +929,9 @@ function renderTimelineSvg(layout, { nowX, onSelectEvent, onSelectDp } = {}) {
   });
 
   if (Number.isFinite(nowX)) {
-    svg.append(svgEl('line', { x1: nowX, y1: 0, x2: nowX, y2: layout.height, class: 'timeline-now-line' }));
+    svg.append(
+      svgEl('line', { x1: nowX, y1: 0, x2: nowX, y2: layout.height, class: 'timeline-now-line' }),
+    );
     const label = svgEl('text', { x: nowX + 3, y: 12, class: 'timeline-now-label' });
     label.textContent = 'NOW';
     svg.append(label);
@@ -955,7 +1027,9 @@ export function renderTimelineSection(container) {
     onSelectDp: () => {
       // Decision points are already editable as cards just above the strip;
       // selecting one on the timeline scrolls the worksheet to them.
-      elements.worksheet4.querySelector('.dp-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      elements.worksheet4
+        .querySelector('.dp-card')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     },
   });
   container.replaceChildren(svg);

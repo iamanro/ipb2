@@ -103,7 +103,10 @@ function client(name) {
 
 async function openLive(user) {
   const controller = new AbortController();
-  const response = await fetch(`${BASE}/api/live`, { headers: { Cookie: user.client.cookie() }, signal: controller.signal });
+  const response = await fetch(`${BASE}/api/live`, {
+    headers: { Cookie: user.client.cookie() },
+    signal: controller.signal,
+  });
   if (!response.ok) throw new Error(`live stream for ${user.name}: ${response.status}`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -124,7 +127,11 @@ async function openLive(user) {
           user.events += 1;
           if (event.route === 'reports' && event.method === 'POST' && event.user !== user.name) {
             for (const [text, sent] of pendingReports) {
-              if (sent.from === event.user && sent.cell === user.cell && !sent.seenBy.has(user.name)) {
+              if (
+                sent.from === event.user &&
+                sent.cell === user.cell &&
+                !sent.seenBy.has(user.name)
+              ) {
                 sent.seenBy.add(user.name);
                 liveLatency.push(Date.now() - sent.at);
                 if (sent.seenBy.size >= sent.expected) pendingReports.delete(text);
@@ -145,22 +152,44 @@ async function panMap(user) {
   const centre = { lon: CENTRE.lon + jitter(-0.12, 0.12), lat: CENTRE.lat + jitter(-0.08, 0.08) };
   const jobs = [];
   // Vector basemap: the header, then scattered range reads like OpenLayers makes.
-  jobs.push(user.client.request('pmtiles', '/api/terrain/tiles/vector.pmtiles', { headers: { Range: 'bytes=0-16383' }, raw: true }));
+  jobs.push(
+    user.client.request('pmtiles', '/api/terrain/tiles/vector.pmtiles', {
+      headers: { Range: 'bytes=0-16383' },
+      raw: true,
+    }),
+  );
   for (let index = 0; index < 8; index += 1) {
     const start = Math.floor(Math.random() * Math.max(1, basemapBytes - 65536));
-    jobs.push(user.client.request('pmtiles', '/api/terrain/tiles/vector.pmtiles', { headers: { Range: `bytes=${start}-${start + 65535}` }, raw: true }));
+    jobs.push(
+      user.client.request('pmtiles', '/api/terrain/tiles/vector.pmtiles', {
+        headers: { Range: `bytes=${start}-${start + 65535}` },
+        raw: true,
+      }),
+    );
   }
   const satellite = tileOf(centre.lon, centre.lat, 14);
   for (let dx = -2; dx <= 1; dx += 1) {
     for (let dy = -1; dy <= 1; dy += 1) {
-      jobs.push(user.client.request('satellite', `/api/terrain/satellite/14/${satellite.x + dx}/${satellite.y + dy}.jpg`, { raw: true }));
+      jobs.push(
+        user.client.request(
+          'satellite',
+          `/api/terrain/satellite/14/${satellite.x + dx}/${satellite.y + dy}.jpg`,
+          { raw: true },
+        ),
+      );
     }
   }
   const z = 13 + Math.floor(Math.random() * 3);
   const hill = tileOf(centre.lon, centre.lat, z);
   for (let dx = -2; dx <= 1; dx += 1) {
     for (let dy = -1; dy <= 1; dy += 1) {
-      jobs.push(user.client.request('hillshade', `/api/terrain/hillshade/${z}/${hill.x + dx}/${hill.y + dy}.png`, { raw: true }));
+      jobs.push(
+        user.client.request(
+          'hillshade',
+          `/api/terrain/hillshade/${z}/${hill.x + dx}/${hill.y + dy}.png`,
+          { raw: true },
+        ),
+      );
     }
   }
   await Promise.all(jobs);
@@ -178,9 +207,17 @@ async function refreshLists(user) {
 
 async function fileReport(user, cellSizes) {
   const text = `load report ${user.name} ${Date.now()} ${Math.random().toString(36).slice(2, 8)}`;
-  const sent = { at: Date.now(), cell: user.cell, from: user.name, seenBy: new Set(), expected: cellSizes[user.cell] - 1 };
+  const sent = {
+    at: Date.now(),
+    cell: user.cell,
+    from: user.name,
+    seenBy: new Set(),
+    expected: cellSizes[user.cell] - 1,
+  };
   pendingReports.set(text, sent);
-  const result = await user.client.request('write', '/api/exercise/reports', { body: { text, reliability: 'B', credibility: 2 } });
+  const result = await user.client.request('write', '/api/exercise/reports', {
+    body: { text, reliability: 'B', credibility: 2 },
+  });
   if (result.status === 200) user.reports.push(result.json.id);
   else pendingReports.delete(text);
 }
@@ -188,7 +225,10 @@ async function fileReport(user, cellSizes) {
 async function viewshed(user) {
   const at = `${(CENTRE.lon + jitter(-0.1, 0.1)).toFixed(5)},${(CENTRE.lat + jitter(-0.06, 0.06)).toFixed(5)}`;
   const radius = Math.round(jitter(3000, 10000));
-  await user.client.request('viewshed', `/api/terrain/viewshed?at=${at}&radius=${radius}&observer=2&target=2&cell=50`);
+  await user.client.request(
+    'viewshed',
+    `/api/terrain/viewshed?at=${at}&radius=${radius}&observer=2&target=2&cell=50`,
+  );
 }
 
 async function simulate(user, deadline, cellSizes) {
@@ -245,8 +285,11 @@ function report(users, seconds) {
 
 async function main() {
   const admin = client(ADMIN);
-  const login = await admin.request('setup', '/api/auth/login', { body: { name: ADMIN, password: ADMIN_PASSWORD } });
-  if (login.status !== 200) throw new Error(`admin sign-in failed: ${login.status} ${JSON.stringify(login.json)}`);
+  const login = await admin.request('setup', '/api/auth/login', {
+    body: { name: ADMIN, password: ADMIN_PASSWORD },
+  });
+  if (login.status !== 200)
+    throw new Error(`admin sign-in failed: ${login.status} ${JSON.stringify(login.json)}`);
 
   await admin.request('setup', '/api/terrain/tiles/vector.pmtiles', {
     headers: { Range: 'bytes=0-0' },
@@ -266,27 +309,41 @@ async function main() {
     const role = index <= 2 ? 'game-master' : index % 7 === 0 ? 'observer' : 'analyst';
     const temporary = `temporary-${name}-${Date.now()}`;
     await admin.request('setup', `/api/auth/users/${name}`, { method: 'DELETE' });
-    const created = await admin.request('setup', '/api/auth/users', { body: { name, password: temporary } });
-    if (created.status !== 200) throw new Error(`creating ${name}: ${created.status} ${JSON.stringify(created.json)}`);
-    const member = await admin.request('setup', `/api/auth/members/${name}`, { method: 'PUT', body: { cell, role } });
-    if (member.status !== 200) throw new Error(`membership for ${name}: ${member.status} ${JSON.stringify(member.json)}`);
+    const created = await admin.request('setup', '/api/auth/users', {
+      body: { name, password: temporary },
+    });
+    if (created.status !== 200)
+      throw new Error(`creating ${name}: ${created.status} ${JSON.stringify(created.json)}`);
+    const member = await admin.request('setup', `/api/auth/members/${name}`, {
+      method: 'PUT',
+      body: { cell, role },
+    });
+    if (member.status !== 200)
+      throw new Error(`membership for ${name}: ${member.status} ${JSON.stringify(member.json)}`);
     users.push({ name, cell, role, temporary, client: client(name), events: 0, reports: [] });
   }
-  const cellSizes = Object.fromEntries(cells.map((cell) => [cell, users.filter((user) => user.cell === cell).length]));
+  const cellSizes = Object.fromEntries(
+    cells.map((cell) => [cell, users.filter((user) => user.cell === cell).length]),
+  );
   console.log(`Created ${users.length} users: ${JSON.stringify(cellSizes)}. Signing in...`);
 
   for (const user of users) {
-    await user.client.request('login', '/api/auth/login', { body: { name: user.name, password: user.temporary } });
+    await user.client.request('login', '/api/auth/login', {
+      body: { name: user.name, password: user.temporary },
+    });
     const changed = await user.client.request('login', '/api/auth/password', {
       body: { current: user.temporary, next: `${user.temporary}-own` },
     });
-    if (changed.status !== 200) throw new Error(`password change for ${user.name}: ${changed.status}`);
+    if (changed.status !== 200)
+      throw new Error(`password change for ${user.name}: ${changed.status}`);
   }
   const streams = await Promise.all(users.map((user) => openLive(user)));
   // Every user's first map load at once: the worst moment of a classroom start.
   const started = Date.now();
   await Promise.all(users.map((user) => panMap(user)));
-  console.log(`All ${users.length} first map loads done in ${Date.now() - started} ms. Running for ${MINUTES} min...`);
+  console.log(
+    `All ${users.length} first map loads done in ${Date.now() - started} ms. Running for ${MINUTES} min...`,
+  );
 
   const deadline = Date.now() + MINUTES * 60_000;
   const runStart = Date.now();
@@ -298,7 +355,8 @@ async function main() {
 
   // Clean up: each user's own reports, then the users themselves.
   for (const user of users) {
-    for (const id of user.reports) await user.client.request('cleanup', `/api/exercise/reports/${id}`, { method: 'DELETE' });
+    for (const id of user.reports)
+      await user.client.request('cleanup', `/api/exercise/reports/${id}`, { method: 'DELETE' });
     await admin.request('cleanup', `/api/auth/users/${user.name}`, { method: 'DELETE' });
   }
   console.log('Removed the load-test users and their reports.');

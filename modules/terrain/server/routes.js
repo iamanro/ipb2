@@ -1,9 +1,4 @@
-import {
-  HttpError,
-  numberParameter,
-  sendBytes,
-  serveFile,
-} from '../../../server/http.js';
+import { HttpError, numberParameter, sendBytes, serveFile } from '../../../server/http.js';
 import { currentElevationModel, openElevationSource } from './elevationSource.js';
 import { BASEMAP, ID, IMAGERY_DATABASE, ORTHO_DATABASE } from './paths.js';
 import { SLOPE_LEGEND } from './rasterTiles.js';
@@ -77,7 +72,9 @@ function gridPayload(grid) {
 
 /** Version string for tile URLs and cache keys: both built_at times, so either rebuild busts them. */
 function elevationVersion(model) {
-  return model.meta.detail ? `${model.meta.built_at}+${model.meta.detail.built_at}` : model.meta.built_at;
+  return model.meta.detail
+    ? `${model.meta.built_at}+${model.meta.detail.built_at}`
+    : model.meta.built_at;
 }
 
 // The main thread keeps its own elevation-model handle for cheap point
@@ -251,7 +248,10 @@ export default {
       handler: async ({ params, response }) => {
         const archive = imageryArchive();
         if (!archive) {
-          throw new HttpError(404, 'No satellite imagery. Build it with tools/build_satellite.mjs.');
+          throw new HttpError(
+            404,
+            'No satellite imagery. Build it with tools/build_satellite.mjs.',
+          );
         }
         const { z, x, y } = tileAddress(params);
         const tile = archive.tile(z, x, y);
@@ -365,7 +365,8 @@ export default {
       verb: 'none',
       role: 'observer',
       changes: false,
-      handler: ({ body, request, response }) => poolJob('extremes', { area: body?.area }, request, response),
+      handler: ({ body, request, response }) =>
+        poolJob('extremes', { area: body?.area }, request, response),
     },
     {
       method: 'GET',

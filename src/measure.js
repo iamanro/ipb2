@@ -109,7 +109,10 @@ function distanceResult(geometry, done) {
   const { segments, total } = segmentsOf(lonLat);
   const result = {
     mode: 'distance',
-    segments: segments.map((segment) => ({ ...segment, label: formatDistanceLabel(segment.distance) })),
+    segments: segments.map((segment) => ({
+      ...segment,
+      label: formatDistanceLabel(segment.distance),
+    })),
     total,
     totalLabel: formatDistanceLabel(total),
     done,
@@ -240,7 +243,10 @@ export function createMeasureController(map) {
     const line = new Feature(new LineString([fromLonLat(from), toMapCoordinate]));
     line.setStyle([
       ...lineStyles(line.getGeometry()),
-      boxedLabel(toMapCoordinate, `${result.degreesLabel}° / ${result.milsLabel} mils — ${result.distanceLabel}`),
+      boxedLabel(
+        toMapCoordinate,
+        `${result.degreesLabel}° / ${result.milsLabel} mils — ${result.distanceLabel}`,
+      ),
     ]);
     return { result, line };
   }

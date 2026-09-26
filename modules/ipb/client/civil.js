@@ -66,7 +66,11 @@ export function renderCivilConsiderationsMatrix({
   const block = createElement('section', 'worksheet-block civil-matrix-block');
   block.append(createElement('h4', null, 'Civil considerations (ASCOPE × PMESII-PT)'));
   const total = ASCOPE_ROWS.length * PMESII_COLUMNS.length;
-  const countNote = createElement('p', 'panel-note', `${countFilledCells(rows)} of ${total} cells filled.`);
+  const countNote = createElement(
+    'p',
+    'panel-note',
+    `${countFilledCells(rows)} of ${total} cells filled.`,
+  );
   block.append(countNote);
 
   const timers = new Map();
@@ -109,7 +113,9 @@ export function renderCivilConsiderationsMatrix({
                 body: { ascope: ascope.id, pmesii: pmesii.id, text: textarea.value },
               });
               if (getStudyId && getStudyId() !== studyId) return;
-              const existingIndex = rows.findIndex((row) => row.ascope === ascope.id && row.pmesii === pmesii.id);
+              const existingIndex = rows.findIndex(
+                (row) => row.ascope === ascope.id && row.pmesii === pmesii.id,
+              );
               if (existingIndex === -1) rows.push(saved);
               else rows[existingIndex] = saved;
               countNote.textContent = `${countFilledCells(rows)} of ${total} cells filled.`;

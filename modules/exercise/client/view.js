@@ -5,7 +5,13 @@ import { createDtgInput, readDtgValue } from '../../../src/dtgField.js';
 import { clientId, subscribe } from '../../../src/live.js';
 import { buildScenarioNameIndex, createMap, matchScenarioPlace } from '../../../src/map.js';
 import { canEditClient, renderCellBadge, renderReleaseControl } from '../../../src/release.js';
-import { can, currentUser, handleUnauthorized, isWhite, sessionMode } from '../../../src/session.js';
+import {
+  can,
+  currentUser,
+  handleUnauthorized,
+  isWhite,
+  sessionMode,
+} from '../../../src/session.js';
 
 import { createCollectionController } from './collection.js';
 import { appendOwnerReassign } from './ownerReassign.js';
@@ -264,15 +270,16 @@ async function loadAll() {
   // to read them (server/access.js), so a training-audience role never even
   // asks; the Scenario tab shows only the clock to them (renderScenarioPanel).
   const canSeeInjects = can('game-master');
-  const [requirements, reports, rfis, messages, clock, scenarioEvents, activity] = await Promise.all([
-    requestJson(`${API}/requirements`),
-    requestJson(`${API}/reports`),
-    requestJson(`${API}/rfis`),
-    requestJson(`${API}/messages`),
-    requestJson(`${API}/clock`),
-    canSeeInjects ? requestJson(`${API}/scenario-events`) : Promise.resolve([]),
-    requestJson(`${API}/activity`),
-  ]);
+  const [requirements, reports, rfis, messages, clock, scenarioEvents, activity] =
+    await Promise.all([
+      requestJson(`${API}/requirements`),
+      requestJson(`${API}/reports`),
+      requestJson(`${API}/rfis`),
+      requestJson(`${API}/messages`),
+      requestJson(`${API}/clock`),
+      canSeeInjects ? requestJson(`${API}/scenario-events`) : Promise.resolve([]),
+      requestJson(`${API}/activity`),
+    ]);
   state.requirements = requirements;
   state.reports = reports;
   state.rfis = rfis;
@@ -1439,7 +1446,9 @@ function renderEvidenceLinks(container, requirement, links) {
       remove.title = 'Remove evidence link';
       remove.setAttribute('aria-label', 'Remove evidence link');
       remove.addEventListener('click', async () => {
-        await requestJson(`${API}/requirements/${link.requirement_id}/evidence/${link.id}`, { method: 'DELETE' });
+        await requestJson(`${API}/requirements/${link.requirement_id}/evidence/${link.id}`, {
+          method: 'DELETE',
+        });
         await loadAll();
         renderPanel();
       });
@@ -1542,7 +1551,9 @@ function renderRequirementCard(requirement) {
       onRelease: (cells) => releaseRequirement(requirement.id, cells),
     }),
   );
-  appendOwnerReassign(card, requirement.owner_cell, (cell) => reassignRequirementOwner(requirement.id, cell));
+  appendOwnerReassign(card, requirement.owner_cell, (cell) =>
+    reassignRequirementOwner(requirement.id, cell),
+  );
   card.append(createElement('h3', null, requirement.text));
   const meta = createElement('p', 'panel-note');
   meta.textContent = `Decision point: ${requirement.decision_point || '—'} · LTIOV: ${formatDate(requirement.ltiov)}`;
@@ -1574,7 +1585,10 @@ function renderRequirementCard(requirement) {
 }
 
 async function reassignRequirementOwner(id, ownerCell) {
-  await requestJson(`${API}/requirements/${id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+  await requestJson(`${API}/requirements/${id}/owner`, {
+    method: 'PATCH',
+    body: { owner_cell: ownerCell },
+  });
   await loadAll();
   renderPanel();
 }
@@ -1623,9 +1637,7 @@ async function createRequirement(form, container) {
 async function importIpbStudy(studyId, container) {
   try {
     const { study, coas, events, features } = await requestJson(`${IPB_API}/studies/${studyId}`);
-    const nais = features.filter(
-      (feature) => feature.layer === 'nai' || feature.layer === 'tai',
-    );
+    const nais = features.filter((feature) => feature.layer === 'nai' || feature.layer === 'tai');
     const counts = await requestJson(`${API}/import/ipb`, {
       method: 'POST',
       body: {
@@ -1661,7 +1673,8 @@ async function importIpbStudy(studyId, container) {
 function describeImport({ study, counts, naiCount }) {
   const part = (label, { created, updated, stale }) =>
     `${label} ${created} new, ${updated} updated${stale.length ? `, ${stale.length} no longer in IPB (kept)` : ''}`;
-  const naiPart = naiCount === undefined ? '' : ` · ${naiCount} NAI/TAI feature${naiCount === 1 ? '' : 's'}`;
+  const naiPart =
+    naiCount === undefined ? '' : ` · ${naiCount} NAI/TAI feature${naiCount === 1 ? '' : 's'}`;
   return `Imported “${study}”: ${part('PIRs', counts.requirements)} · ${part('SIRs', counts.sirs)} · ${part('indicators', counts.indicators)}${naiPart}.`;
 }
 
@@ -1726,7 +1739,9 @@ function renderRequirementsPanel() {
   renderIpbImport(container);
 
   if (!can('analyst') || !hasCell()) {
-    container.append(createElement('p', 'panel-note', 'Adding requirements needs the analyst role.'));
+    container.append(
+      createElement('p', 'panel-note', 'Adding requirements needs the analyst role.'),
+    );
   } else {
     const formSection = createElement('section', 'field-group');
     formSection.append(createElement('h3', null, 'New requirement'));
@@ -1859,7 +1874,10 @@ async function releaseRfi(id, cells) {
 }
 
 async function reassignRfiOwner(id, ownerCell) {
-  await requestJson(`${API}/rfis/${id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+  await requestJson(`${API}/rfis/${id}/owner`, {
+    method: 'PATCH',
+    body: { owner_cell: ownerCell },
+  });
   await loadAll();
   renderPanel();
 }
@@ -2143,14 +2161,20 @@ function renderScenarioPanel() {
   const formSection = createElement('section', 'field-group');
   formSection.append(createElement('h3', null, 'Schedule an inject'));
   if (!can('game-master')) {
-    formSection.append(createElement('p', 'panel-note', 'Game Master role required to schedule injects.'));
+    formSection.append(
+      createElement('p', 'panel-note', 'Game Master role required to schedule injects.'),
+    );
     container.append(formSection);
   } else {
     const form = createElement('div', 'requirement-form inject-form');
     const kindSelect = document.createElement('select');
     kindSelect.setAttribute('aria-label', 'Inject kind');
     kindSelect.append(new Option('Message', 'message'), new Option('Report', 'report'));
-    const triggerInput = createDtgInput({ name: 'trigger_at', label: 'Trigger time', reference: scenarioNow });
+    const triggerInput = createDtgInput({
+      name: 'trigger_at',
+      label: 'Trigger time',
+      reference: scenarioNow,
+    });
     const textInput = document.createElement('input');
     textInput.type = 'text';
     textInput.placeholder = 'Inject text…';
@@ -2280,7 +2304,13 @@ function exportActivity() {
 async function loadAudit(offset = 0) {
   try {
     const result = await requestJson(`/api/auth/audit?limit=${state.audit.limit}&offset=${offset}`);
-    state.audit = { ...state.audit, items: result.items, total: result.total, offset, loaded: true };
+    state.audit = {
+      ...state.audit,
+      items: result.items,
+      total: result.total,
+      offset,
+      loaded: true,
+    };
     if (state.tab === 'activity') renderPanel();
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -2308,7 +2338,9 @@ function renderAuditSection(container) {
   table.className = 'data-table';
   const head = document.createElement('thead');
   const headRow = document.createElement('tr');
-  ['At', 'User', 'Method', 'Path', 'Status'].forEach((label) => headRow.append(createElement('th', null, label)));
+  ['At', 'User', 'Method', 'Path', 'Status'].forEach((label) =>
+    headRow.append(createElement('th', null, label)),
+  );
   head.append(headRow);
   table.append(head);
   const body = document.createElement('tbody');
@@ -2330,14 +2362,20 @@ function renderAuditSection(container) {
   const prevButton = createElement('button', 'chip-button', 'Newer');
   prevButton.type = 'button';
   prevButton.disabled = state.audit.offset <= 0;
-  prevButton.addEventListener('click', () => loadAudit(Math.max(0, state.audit.offset - state.audit.limit)));
+  prevButton.addEventListener('click', () =>
+    loadAudit(Math.max(0, state.audit.offset - state.audit.limit)),
+  );
   const nextButton = createElement('button', 'chip-button', 'Older');
   nextButton.type = 'button';
   nextButton.disabled = state.audit.offset + state.audit.limit >= state.audit.total;
   nextButton.addEventListener('click', () => loadAudit(state.audit.offset + state.audit.limit));
   pager.append(
     prevButton,
-    createElement('span', 'panel-note', `${state.audit.offset + 1}\u2013${Math.min(state.audit.offset + state.audit.limit, state.audit.total)} of ${state.audit.total}`),
+    createElement(
+      'span',
+      'panel-note',
+      `${state.audit.offset + 1}\u2013${Math.min(state.audit.offset + state.audit.limit, state.audit.total)} of ${state.audit.total}`,
+    ),
     nextButton,
   );
   section.append(pager);

@@ -49,12 +49,27 @@ const TRACK_STATUSES = ['confirmed', 'suspected', 'destroyed', 'lost'];
 
 // -- collection plan -----------------------------------------------------------
 const DISCIPLINES = [
-  'HUMINT', 'SIGINT', 'IMINT', 'GEOINT', 'OSINT', 'MASINT', 'UAS', 'RECCE', 'OP', 'OTHER',
+  'HUMINT',
+  'SIGINT',
+  'IMINT',
+  'GEOINT',
+  'OSINT',
+  'MASINT',
+  'UAS',
+  'RECCE',
+  'OP',
+  'OTHER',
 ];
 const TASKING_STATUSES = ['planned', 'tasked', 'active', 'complete', 'cancelled'];
 
 // -- products -------------------------------------------------------------------
-const INTSUM_SECTIONS = ['situation', 'significant_activity', 'pir_status', 'assessment', 'outlook'];
+const INTSUM_SECTIONS = [
+  'situation',
+  'significant_activity',
+  'pir_status',
+  'assessment',
+  'outlook',
+];
 
 let database;
 let regionsReference;
@@ -296,7 +311,9 @@ function cellsOf(source) {
   if (!source) return null;
   return {
     owner_cell: source.owner_cell,
-    releasable_to: Array.isArray(source.releasable_to) ? source.releasable_to : JSON.parse(source.releasable_to),
+    releasable_to: Array.isArray(source.releasable_to)
+      ? source.releasable_to
+      : JSON.parse(source.releasable_to),
   };
 }
 
@@ -315,7 +332,13 @@ function mutate(action, target, cells, work) {
       .prepare(
         'INSERT INTO activity (at, action, target, detail, owner_cell, releasable_to) VALUES (?, ?, ?, NULL, ?, ?)',
       )
-      .run(now(), action, targetLabel, cells ? cells.owner_cell : null, JSON.stringify(cells ? cells.releasable_to : []));
+      .run(
+        now(),
+        action,
+        targetLabel,
+        cells ? cells.owner_cell : null,
+        JSON.stringify(cells ? cells.releasable_to : []),
+      );
     return result;
   });
 }
@@ -410,7 +433,9 @@ function shapeSir(row, access) {
     .all(row.id)
     .map(shapeIndicator);
   const links = database
-    .prepare("SELECT * FROM evidence_links WHERE target_kind = 'sir' AND target_id = ? ORDER BY created_at, id")
+    .prepare(
+      "SELECT * FROM evidence_links WHERE target_kind = 'sir' AND target_id = ? ORDER BY created_at, id",
+    )
     .all(row.id)
     .map((link) => shapeEvidenceLinkWithReport(link, access));
   return {
@@ -458,7 +483,9 @@ function shapeRequirement(row, { access }) {
     .all(row.id)
     .map((sir) => shapeSir(sir, access));
   const links = database
-    .prepare("SELECT * FROM evidence_links WHERE target_kind = 'requirement' AND target_id = ? ORDER BY created_at, id")
+    .prepare(
+      "SELECT * FROM evidence_links WHERE target_kind = 'requirement' AND target_id = ? ORDER BY created_at, id",
+    )
     .all(row.id)
     .map((link) => shapeEvidenceLinkWithReport(link, access));
   return {
@@ -484,34 +511,43 @@ function shapeRequirement(row, { access }) {
 }
 
 function listRequirements(access) {
-  return visibleRows(access, 'requirement', 'requirements', 'priority DESC, created_at, id').map((row) =>
-    shapeRequirement(row, { access }),
+  return visibleRows(access, 'requirement', 'requirements', 'priority DESC, created_at, id').map(
+    (row) => shapeRequirement(row, { access }),
   );
 }
 
-function createRequirement(owner, { kind, text, decision_point: decisionPoint, ltiov, priority }, access) {
+function createRequirement(
+  owner,
+  { kind, text, decision_point: decisionPoint, ltiov, priority },
+  access,
+) {
   requireEnum(kind, 'kind', REQUIREMENT_KINDS);
   const cleanText = requireString(text, 'text');
   const timestamp = now();
-  return mutate('requirement:create', () => cleanText, cellsOf(owner), () => {
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO requirements (kind, text, decision_point, ltiov, priority, owner_cell, releasable_to, created_at, updated_at)
+  return mutate(
+    'requirement:create',
+    () => cleanText,
+    cellsOf(owner),
+    () => {
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO requirements (kind, text, decision_point, ltiov, priority, owner_cell, releasable_to, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        kind,
-        cleanText,
-        optionalString(decisionPoint, 'decision_point'),
-        optionalString(ltiov, 'ltiov'),
-        Number.isInteger(priority) ? priority : 0,
-        owner.owner_cell,
-        JSON.stringify(owner.releasable_to),
-        timestamp,
-        timestamp,
-      );
-    return shapeRequirement(fetchRow('requirements', Number(lastInsertRowid)), { access });
-  });
+        )
+        .run(
+          kind,
+          cleanText,
+          optionalString(decisionPoint, 'decision_point'),
+          optionalString(ltiov, 'ltiov'),
+          Number.isInteger(priority) ? priority : 0,
+          owner.owner_cell,
+          JSON.stringify(owner.releasable_to),
+          timestamp,
+          timestamp,
+        );
+      return shapeRequirement(fetchRow('requirements', Number(lastInsertRowid)), { access });
+    },
+  );
 }
 
 function updateRequirement(item, patch, access) {
@@ -538,7 +574,9 @@ function updateRequirement(item, patch, access) {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE requirements SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
+      database
+        .prepare(`UPDATE requirements SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, item.id);
     }
     return shapeRequirement(fetchRow('requirements', item.id), { access });
   });
@@ -551,27 +589,36 @@ function deleteRequirement(item) {
   });
 }
 
-function createSir(item, { text, time_window_start: start, time_window_end: end, nai_id: naiId }, access) {
+function createSir(
+  item,
+  { text, time_window_start: start, time_window_end: end, nai_id: naiId },
+  access,
+) {
   const cleanText = requireString(text, 'text');
   const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null, access);
   const timestamp = now();
-  return mutate('sir:create', () => cleanText, cellsOf(item), () => {
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO sirs (requirement_id, text, time_window_start, time_window_end, nai_id, created_at, updated_at)
+  return mutate(
+    'sir:create',
+    () => cleanText,
+    cellsOf(item),
+    () => {
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO sirs (requirement_id, text, time_window_start, time_window_end, nai_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        item.id,
-        cleanText,
-        optionalString(start, 'time_window_start'),
-        optionalString(end, 'time_window_end'),
-        validNaiId,
-        timestamp,
-        timestamp,
-      );
-    return shapeSir(fetchRow('sirs', Number(lastInsertRowid)), access);
-  });
+        )
+        .run(
+          item.id,
+          cleanText,
+          optionalString(start, 'time_window_start'),
+          optionalString(end, 'time_window_end'),
+          validNaiId,
+          timestamp,
+          timestamp,
+        );
+      return shapeSir(fetchRow('sirs', Number(lastInsertRowid)), access);
+    },
+  );
 }
 
 function updateSir(item, part, patch, access) {
@@ -618,14 +665,19 @@ function createIndicator(item, { sir_id: sirId, description }) {
   }
   const cleanDescription = requireString(description, 'description');
   const timestamp = now();
-  return mutate('indicator:create', () => cleanDescription, cellsOf(item), () => {
-    const { lastInsertRowid } = database
-      .prepare(
-        'INSERT INTO indicators (sir_id, requirement_id, description, observed, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)',
-      )
-      .run(sirId, item.id, cleanDescription, timestamp, timestamp);
-    return shapeIndicator(fetchRow('indicators', Number(lastInsertRowid)));
-  });
+  return mutate(
+    'indicator:create',
+    () => cleanDescription,
+    cellsOf(item),
+    () => {
+      const { lastInsertRowid } = database
+        .prepare(
+          'INSERT INTO indicators (sir_id, requirement_id, description, observed, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)',
+        )
+        .run(sirId, item.id, cleanDescription, timestamp, timestamp);
+      return shapeIndicator(fetchRow('indicators', Number(lastInsertRowid)));
+    },
+  );
 }
 
 function updateIndicator(item, part, patch) {
@@ -643,7 +695,9 @@ function updateIndicator(item, part, patch) {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE indicators SET ${fields.join(', ')} WHERE id = ?`).run(...params, part.id);
+      database
+        .prepare(`UPDATE indicators SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, part.id);
     }
     return shapeIndicator(fetchRow('indicators', part.id));
   });
@@ -662,7 +716,11 @@ function deleteIndicator(item, part) {
  * itself; `'sir'` needs a `target_id` that is actually one of its SIRs. The
  * cited report is read with `access.see`, exactly the contract's "creating
  * a link changes its target, not the report" rule. */
-function createEvidenceLink(item, { report_id: reportId, target_kind: targetKind, target_id: targetId, relation, note }, access) {
+function createEvidenceLink(
+  item,
+  { report_id: reportId, target_kind: targetKind, target_id: targetId, relation, note },
+  access,
+) {
   requireEnum(targetKind, 'target_kind', TARGET_KINDS);
   let cleanTargetId;
   if (targetKind === 'requirement') {
@@ -685,7 +743,15 @@ function createEvidenceLink(item, { report_id: reportId, target_kind: targetKind
         `INSERT INTO evidence_links (report_id, requirement_id, target_kind, target_id, relation, note, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(report.id, item.id, targetKind, cleanTargetId, relation, optionalString(note, 'note'), now());
+      .run(
+        report.id,
+        item.id,
+        targetKind,
+        cleanTargetId,
+        relation,
+        optionalString(note, 'note'),
+        now(),
+      );
     return shapeEvidenceLinkWithReport(fetchRow('evidence_links', Number(lastInsertRowid)), access);
   });
 }
@@ -777,7 +843,12 @@ function importIpbStudy(owner, input) {
         'requirements',
         requirement.source,
         { text: requirement.text },
-        { kind: 'PIR', priority: 0, owner_cell: owner.owner_cell, releasable_to: JSON.stringify(owner.releasable_to) },
+        {
+          kind: 'PIR',
+          priority: 0,
+          owner_cell: owner.owner_cell,
+          releasable_to: JSON.stringify(owner.releasable_to),
+        },
       );
       requirementIds.set(requirement.source, id);
       tally('requirements', outcome);
@@ -797,7 +868,13 @@ function importIpbStudy(owner, input) {
       const { outcome } = upsertBySource(
         'indicators',
         indicator.source,
-        { sir_id: sirId, requirement_id: database.prepare('SELECT requirement_id FROM sirs WHERE id = ?').get(sirId)?.requirement_id ?? null, description: indicator.description },
+        {
+          sir_id: sirId,
+          requirement_id:
+            database.prepare('SELECT requirement_id FROM sirs WHERE id = ?').get(sirId)
+              ?.requirement_id ?? null,
+          description: indicator.description,
+        },
         { observed: indicator.observed ? 1 : 0 },
       );
       tally('indicators', outcome);
@@ -967,8 +1044,11 @@ function insertReportRow(fields, ownerCell, releasableTo) {
 
 function createReport(owner, input, access) {
   const fields = prepareReportFields(input, access);
-  return mutate('report:create', () => fields.text, cellsOf(owner), () =>
-    insertReportRow(fields, owner.owner_cell, owner.releasable_to),
+  return mutate(
+    'report:create',
+    () => fields.text,
+    cellsOf(owner),
+    () => insertReportRow(fields, owner.owner_cell, owner.releasable_to),
   );
 }
 
@@ -1011,7 +1091,10 @@ function updateReport(item, patch, access) {
   let lon = item.lon;
   let lat = item.lat;
   if (locationChanged) {
-    const location = validateLocation('lon' in patch ? patch.lon : item.lon, 'lat' in patch ? patch.lat : item.lat);
+    const location = validateLocation(
+      'lon' in patch ? patch.lon : item.lon,
+      'lat' in patch ? patch.lat : item.lat,
+    );
     lon = location.lon;
     lat = location.lat;
     fields.push('lon = ?', 'lat = ?');
@@ -1037,7 +1120,9 @@ function updateReport(item, patch, access) {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE reports SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
+      database
+        .prepare(`UPDATE reports SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, item.id);
     }
     return shapeReport(fetchRow('reports', item.id));
   });
@@ -1110,7 +1195,10 @@ function requireTimestamp(value, name) {
   return text;
 }
 
-function createTrack(owner, { sidc, designation, status, lon, lat, observed_at: observedAt, notes }) {
+function createTrack(
+  owner,
+  { sidc, designation, status, lon, lat, observed_at: observedAt, notes },
+) {
   const validSidc = requireSidc(sidc);
   const validStatus = requireEnum(status ?? 'confirmed', 'status', TRACK_STATUSES);
   const validLon = requireLongitude(lon);
@@ -1118,35 +1206,40 @@ function createTrack(owner, { sidc, designation, status, lon, lat, observed_at: 
   const validObserved = requireTimestamp(observedAt, 'observed_at');
   const validDesignation = optionalString(designation, 'designation');
   const validNotes = optionalString(notes, 'notes');
-  return mutate('track:create', () => validDesignation ?? validSidc, cellsOf(owner), () => {
-    const timestamp = now();
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO tracks (sidc, designation, status, lon, lat, observed_at, notes, owner_cell, releasable_to, created_at, updated_at)
+  return mutate(
+    'track:create',
+    () => validDesignation ?? validSidc,
+    cellsOf(owner),
+    () => {
+      const timestamp = now();
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO tracks (sidc, designation, status, lon, lat, observed_at, notes, owner_cell, releasable_to, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        validSidc,
-        validDesignation,
-        validStatus,
-        validLon,
-        validLat,
-        validObserved,
-        validNotes,
-        owner.owner_cell,
-        JSON.stringify(owner.releasable_to),
-        timestamp,
-        timestamp,
-      );
-    const id = Number(lastInsertRowid);
-    database
-      .prepare(
-        `INSERT INTO track_positions (track_id, lon, lat, observed_at, report_id, created_at)
+        )
+        .run(
+          validSidc,
+          validDesignation,
+          validStatus,
+          validLon,
+          validLat,
+          validObserved,
+          validNotes,
+          owner.owner_cell,
+          JSON.stringify(owner.releasable_to),
+          timestamp,
+          timestamp,
+        );
+      const id = Number(lastInsertRowid);
+      database
+        .prepare(
+          `INSERT INTO track_positions (track_id, lon, lat, observed_at, report_id, created_at)
          VALUES (?, ?, ?, ?, NULL, ?)`,
-      )
-      .run(id, validLon, validLat, validObserved, timestamp);
-    return getTrack(id);
-  });
+        )
+        .run(id, validLon, validLat, validObserved, timestamp);
+      return getTrack(id);
+    },
+  );
 }
 
 function updateTrack(item, patch) {
@@ -1172,7 +1265,9 @@ function updateTrack(item, patch) {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE tracks SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
+      database
+        .prepare(`UPDATE tracks SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, item.id);
     }
     return getTrack(item.id);
   });
@@ -1192,11 +1287,16 @@ function deleteTrack(item) {
  * dragging the map picture backwards. When `report_id` is given, that
  * report is linked back to this track.
  */
-function addTrackPosition(item, { lon, lat, observed_at: observedAt, report_id: reportId }, access) {
+function addTrackPosition(
+  item,
+  { lon, lat, observed_at: observedAt, report_id: reportId },
+  access,
+) {
   const validLon = requireLongitude(lon);
   const validLat = requireLatitude(lat);
   const validObserved = requireTimestamp(observedAt, 'observed_at');
-  const validReportId = reportId === undefined || reportId === null ? null : resolveTrackReportId(reportId, access);
+  const validReportId =
+    reportId === undefined || reportId === null ? null : resolveTrackReportId(reportId, access);
   return mutate('track:position', String(item.id), cellsOf(item), () => {
     const timestamp = now();
     database
@@ -1251,43 +1351,51 @@ function validateAvailability(from, to) {
   return { validFrom, validTo };
 }
 
-function createCollector(owner, {
-  name,
-  discipline,
-  unit,
-  range_km: rangeKm,
-  available_from: availableFrom,
-  available_to: availableTo,
-  notes,
-}) {
+function createCollector(
+  owner,
+  {
+    name,
+    discipline,
+    unit,
+    range_km: rangeKm,
+    available_from: availableFrom,
+    available_to: availableTo,
+    notes,
+  },
+) {
   const validName = requireString(name, 'name');
   const validDiscipline = requireEnum(discipline, 'discipline', DISCIPLINES);
   const validUnit = optionalString(unit, 'unit');
   const validRange = requirePositiveNumberOrNull(rangeKm, 'range_km');
   const { validFrom, validTo } = validateAvailability(availableFrom, availableTo);
   const validNotes = optionalString(notes, 'notes');
-  return mutate('collector:create', () => validName, cellsOf(owner), () => {
-    const timestamp = now();
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO collectors (name, discipline, unit, range_km, available_from, available_to, notes, owner_cell, releasable_to, created_at, updated_at)
+  return mutate(
+    'collector:create',
+    () => validName,
+    cellsOf(owner),
+    () => {
+      const timestamp = now();
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO collectors (name, discipline, unit, range_km, available_from, available_to, notes, owner_cell, releasable_to, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        validName,
-        validDiscipline,
-        validUnit,
-        validRange,
-        validFrom,
-        validTo,
-        validNotes,
-        owner.owner_cell,
-        JSON.stringify(owner.releasable_to),
-        timestamp,
-        timestamp,
-      );
-    return shapeCollector(fetchRow('collectors', Number(lastInsertRowid)));
-  });
+        )
+        .run(
+          validName,
+          validDiscipline,
+          validUnit,
+          validRange,
+          validFrom,
+          validTo,
+          validNotes,
+          owner.owner_cell,
+          JSON.stringify(owner.releasable_to),
+          timestamp,
+          timestamp,
+        );
+      return shapeCollector(fetchRow('collectors', Number(lastInsertRowid)));
+    },
+  );
 }
 
 function updateCollector(item, patch) {
@@ -1330,7 +1438,9 @@ function updateCollector(item, patch) {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE collectors SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
+      database
+        .prepare(`UPDATE collectors SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, item.id);
     }
     return shapeCollector(fetchRow('collectors', item.id));
   });
@@ -1411,16 +1521,20 @@ function resolveTaskingReportId(value, access) {
   return value;
 }
 
-function createTasking(owner, {
-  collector_id: collectorId,
-  sir_id: sirId,
-  nai_id: naiId,
-  start_at: startAt,
-  end_at: endAt,
-  status,
-  report_id: reportId,
-  notes,
-}, access) {
+function createTasking(
+  owner,
+  {
+    collector_id: collectorId,
+    sir_id: sirId,
+    nai_id: naiId,
+    start_at: startAt,
+    end_at: endAt,
+    status,
+    report_id: reportId,
+    notes,
+  },
+  access,
+) {
   const validCollectorId = requireCollectorId(collectorId, access);
   const validSirId = requireSirId(sirId, access);
   const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null, access);
@@ -1428,29 +1542,34 @@ function createTasking(owner, {
   const validStatus = requireEnum(status ?? 'planned', 'status', TASKING_STATUSES);
   const validReportId = resolveTaskingReportId(reportId, access);
   const validNotes = optionalString(notes, 'notes');
-  return mutate('tasking:create', () => `collector:${validCollectorId} sir:${validSirId}`, cellsOf(owner), () => {
-    const timestamp = now();
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO taskings (collector_id, sir_id, nai_id, start_at, end_at, status, report_id, notes, owner_cell, releasable_to, created_at, updated_at)
+  return mutate(
+    'tasking:create',
+    () => `collector:${validCollectorId} sir:${validSirId}`,
+    cellsOf(owner),
+    () => {
+      const timestamp = now();
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO taskings (collector_id, sir_id, nai_id, start_at, end_at, status, report_id, notes, owner_cell, releasable_to, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        validCollectorId,
-        validSirId,
-        validNaiId,
-        start,
-        end,
-        validStatus,
-        validReportId,
-        validNotes,
-        owner.owner_cell,
-        JSON.stringify(owner.releasable_to),
-        timestamp,
-        timestamp,
-      );
-    return shapeTasking(fetchRow('taskings', Number(lastInsertRowid)));
-  });
+        )
+        .run(
+          validCollectorId,
+          validSirId,
+          validNaiId,
+          start,
+          end,
+          validStatus,
+          validReportId,
+          validNotes,
+          owner.owner_cell,
+          JSON.stringify(owner.releasable_to),
+          timestamp,
+          timestamp,
+        );
+      return shapeTasking(fetchRow('taskings', Number(lastInsertRowid)));
+    },
+  );
 }
 
 function updateTasking(item, patch, access) {
@@ -1497,7 +1616,9 @@ function updateTasking(item, patch, access) {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE taskings SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
+      database
+        .prepare(`UPDATE taskings SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, item.id);
     }
     return shapeTasking(fetchRow('taskings', item.id));
   });
@@ -1517,8 +1638,12 @@ function deleteTasking(item) {
  * the requester can currently see (docs/adr/0002: per-viewer reads).
  */
 function listCollectionConflicts(access) {
-  const taskings = visibleRows(access, 'tasking', 'taskings', 'collector_id, start_at').map(shapeTasking);
-  const collectors = new Map(visibleRows(access, 'collector', 'collectors', 'id').map((c) => [c.id, c]));
+  const taskings = visibleRows(access, 'tasking', 'taskings', 'collector_id, start_at').map(
+    shapeTasking,
+  );
+  const collectors = new Map(
+    visibleRows(access, 'collector', 'collectors', 'id').map((c) => [c.id, c]),
+  );
 
   const byCollector = new Map();
   for (const tasking of taskings) {
@@ -1531,7 +1656,10 @@ function listCollectionConflicts(access) {
       for (let j = i + 1; j < list.length; j += 1) {
         const a = list[i];
         const b = list[j];
-        if (new Date(a.start_at) < new Date(b.end_at) && new Date(b.start_at) < new Date(a.end_at)) {
+        if (
+          new Date(a.start_at) < new Date(b.end_at) &&
+          new Date(b.start_at) < new Date(a.end_at)
+        ) {
           overlaps.push({ kind: 'overlap', collector_id: collectorId, tasking_ids: [a.id, b.id] });
         }
       }
@@ -1547,7 +1675,11 @@ function listCollectionConflicts(access) {
     const start = new Date(tasking.start_at);
     const end = new Date(tasking.end_at);
     if ((from && start < from) || (to && end > to)) {
-      outside.push({ kind: 'unavailable', collector_id: tasking.collector_id, tasking_id: tasking.id });
+      outside.push({
+        kind: 'unavailable',
+        collector_id: tasking.collector_id,
+        tasking_id: tasking.id,
+      });
     }
   }
 
@@ -1557,7 +1689,11 @@ function listCollectionConflicts(access) {
 // -- products: INTSUM -----------------------------------------------------------
 
 function shapeIntsum(row) {
-  return { ...row, sections: JSON.parse(row.sections), releasable_to: JSON.parse(row.releasable_to) };
+  return {
+    ...row,
+    sections: JSON.parse(row.sections),
+    releasable_to: JSON.parse(row.releasable_to),
+  };
 }
 
 function listIntsums(access) {
@@ -1592,22 +1728,40 @@ function mergeSections(existing, patchSections) {
   return merged;
 }
 
-function createIntsum(owner, { period_start: periodStart, period_end: periodEnd, dtg, author, sections }) {
+function createIntsum(
+  owner,
+  { period_start: periodStart, period_end: periodEnd, dtg, author, sections },
+) {
   const start = requireTimestamp(periodStart, 'period_start');
   const end = requireTimestamp(periodEnd, 'period_end');
   const validDtg = optionalString(dtg, 'dtg') ?? formatDtg(Date.now());
   const validAuthor = optionalString(author, 'author');
   const validSections = validateSections(sections);
-  return mutate('intsum:create', () => validDtg, cellsOf(owner), () => {
-    const timestamp = now();
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO intsums (period_start, period_end, dtg, author, sections, owner_cell, releasable_to, created_at, updated_at)
+  return mutate(
+    'intsum:create',
+    () => validDtg,
+    cellsOf(owner),
+    () => {
+      const timestamp = now();
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO intsums (period_start, period_end, dtg, author, sections, owner_cell, releasable_to, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(start, end, validDtg, validAuthor, JSON.stringify(validSections), owner.owner_cell, JSON.stringify(owner.releasable_to), timestamp, timestamp);
-    return shapeIntsum(fetchRow('intsums', Number(lastInsertRowid)));
-  });
+        )
+        .run(
+          start,
+          end,
+          validDtg,
+          validAuthor,
+          JSON.stringify(validSections),
+          owner.owner_cell,
+          JSON.stringify(owner.releasable_to),
+          timestamp,
+          timestamp,
+        );
+      return shapeIntsum(fetchRow('intsums', Number(lastInsertRowid)));
+    },
+  );
 }
 
 function updateIntsum(item, patch) {
@@ -1637,7 +1791,9 @@ function updateIntsum(item, patch) {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE intsums SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
+      database
+        .prepare(`UPDATE intsums SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, item.id);
     }
     return shapeIntsum(fetchRow('intsums', item.id));
   });
@@ -1687,14 +1843,16 @@ function draftIntsum(access, fromIso, toIso) {
       return `${dtg} \u2013 ${report.report_type.toUpperCase()} \u2013 ${mgrs} \u2013 ${report.text} (Admiralty ${report.reliability}${report.credibility})`;
     });
 
-  const pirStatus = visibleRows(access, 'requirement', 'requirements', 'priority DESC, id').map((requirement) => {
-    const sirIds = database
-      .prepare('SELECT id FROM sirs WHERE requirement_id = ?')
-      .all(requirement.id)
-      .map((sir) => sir.id);
-    const fulfillment = requirementFulfillment(requirement.id, sirIds, access);
-    return { requirement_id: requirement.id, text: requirement.text, ...fulfillment };
-  });
+  const pirStatus = visibleRows(access, 'requirement', 'requirements', 'priority DESC, id').map(
+    (requirement) => {
+      const sirIds = database
+        .prepare('SELECT id FROM sirs WHERE requirement_id = ?')
+        .all(requirement.id)
+        .map((sir) => sir.id);
+      const fulfillment = requirementFulfillment(requirement.id, sirIds, access);
+      return { requirement_id: requirement.id, text: requirement.text, ...fulfillment };
+    },
+  );
 
   return {
     period_start: from,
@@ -1719,14 +1877,11 @@ function listRfis(access) {
   return visibleRows(access, 'rfi', 'rfis', 'created_at DESC, id DESC').map(shapeRfi);
 }
 
-function createRfi(owner, {
-  requester,
-  requirement_id: requirementId,
-  sir_id: sirId,
-  question,
-  priority,
-  nlt,
-}, access) {
+function createRfi(
+  owner,
+  { requester, requirement_id: requirementId, sir_id: sirId, question, priority, nlt },
+  access,
+) {
   const cleanQuestion = requireString(question, 'question');
   const cleanPriority =
     priority === undefined ? 'routine' : requireEnum(priority, 'priority', RFI_PRIORITIES);
@@ -1737,26 +1892,31 @@ function createRfi(owner, {
     access.see('sir', sirId);
   }
   const timestamp = now();
-  return mutate('rfi:create', () => cleanQuestion, cellsOf(owner), () => {
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO rfis (requester, requirement_id, sir_id, question, priority, nlt, state, owner_cell, releasable_to, created_at, updated_at)
+  return mutate(
+    'rfi:create',
+    () => cleanQuestion,
+    cellsOf(owner),
+    () => {
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO rfis (requester, requirement_id, sir_id, question, priority, nlt, state, owner_cell, releasable_to, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
-      )
-      .run(
-        optionalString(requester, 'requester'),
-        requirementId ?? null,
-        sirId ?? null,
-        cleanQuestion,
-        cleanPriority,
-        optionalString(nlt, 'nlt'),
-        owner.owner_cell,
-        JSON.stringify(owner.releasable_to),
-        timestamp,
-        timestamp,
-      );
-    return shapeRfi(fetchRow('rfis', Number(lastInsertRowid)));
-  });
+        )
+        .run(
+          optionalString(requester, 'requester'),
+          requirementId ?? null,
+          sirId ?? null,
+          cleanQuestion,
+          cleanPriority,
+          optionalString(nlt, 'nlt'),
+          owner.owner_cell,
+          JSON.stringify(owner.releasable_to),
+          timestamp,
+          timestamp,
+        );
+      return shapeRfi(fetchRow('rfis', Number(lastInsertRowid)));
+    },
+  );
 }
 
 function updateRfi(item, patch) {
@@ -1798,7 +1958,11 @@ function updateRfi(item, patch) {
  * non-White RFI, the answer report is automatically released to the
  * requesting cell — otherwise the requester couldn't see their own answer.
  */
-function transitionRfi(item, { state: toState, answer_report_id: answerReportId, relation }, access) {
+function transitionRfi(
+  item,
+  { state: toState, answer_report_id: answerReportId, relation },
+  access,
+) {
   if (!canTransition(item.state, toState)) {
     throw new HttpError(409, `Cannot move an RFI from ${item.state} to ${toState}.`);
   }
@@ -1821,7 +1985,9 @@ function transitionRfi(item, { state: toState, answer_report_id: answerReportId,
     if (toState === 'answered' && (item.requirement_id || item.sir_id)) {
       const targetKind = item.sir_id ? 'sir' : 'requirement';
       const targetId = item.sir_id ?? item.requirement_id;
-      const requirementId = item.sir_id ? fetchRow('sirs', item.sir_id).requirement_id : item.requirement_id;
+      const requirementId = item.sir_id
+        ? fetchRow('sirs', item.sir_id).requirement_id
+        : item.requirement_id;
       database
         .prepare(
           `INSERT INTO evidence_links (report_id, requirement_id, target_kind, target_id, relation, note, created_at)
@@ -1838,7 +2004,10 @@ function transitionRfi(item, { state: toState, answer_report_id: answerReportId,
         );
     }
     if (toState === 'answered' && answerReport && answerReport.owner_cell !== item.owner_cell) {
-      const released = normalizeRelease([...JSON.parse(answerReport.releasable_to), item.owner_cell], answerReport.owner_cell);
+      const released = normalizeRelease(
+        [...JSON.parse(answerReport.releasable_to), item.owner_cell],
+        answerReport.owner_cell,
+      );
       database
         .prepare('UPDATE reports SET releasable_to = ?, updated_at = ? WHERE id = ?')
         .run(JSON.stringify(released), now(), answerReportId);
@@ -1946,21 +2115,26 @@ function createScenarioEvent({ trigger_at: triggerAt, kind, payload }) {
   // so nobody else sees "something is coming" in the activity log.
   const releaseTo = injectReleaseTo(payload.release_to);
   const timestamp = now();
-  return mutate('scenario:schedule', () => kind, { owner_cell: 'white', releasable_to: [] }, () => {
-    const { lastInsertRowid } = database
-      .prepare(
-        `INSERT INTO scenario_events (trigger_at, kind, payload, state, created_at, updated_at)
+  return mutate(
+    'scenario:schedule',
+    () => kind,
+    { owner_cell: 'white', releasable_to: [] },
+    () => {
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO scenario_events (trigger_at, kind, payload, state, created_at, updated_at)
          VALUES (?, ?, ?, 'pending', ?, ?)`,
-      )
-      .run(
-        new Date(triggerMs).toISOString(),
-        kind,
-        JSON.stringify({ ...payload, release_to: releaseTo }),
-        timestamp,
-        timestamp,
-      );
-    return shapeScenarioEvent(fetchRow('scenario_events', Number(lastInsertRowid)));
-  });
+        )
+        .run(
+          new Date(triggerMs).toISOString(),
+          kind,
+          JSON.stringify({ ...payload, release_to: releaseTo }),
+          timestamp,
+          timestamp,
+        );
+      return shapeScenarioEvent(fetchRow('scenario_events', Number(lastInsertRowid)));
+    },
+  );
 }
 
 function assertPendingEvent(id) {
@@ -2262,10 +2436,15 @@ function listScenarios() {
 
 function createScenario({ name }) {
   const cleanName = requireBoundedString(name, 'name', 120);
-  return mutate('scenario:create', () => cleanName, null, () => {
-    const id = insertScenarioRow({ name: cleanName, example: false });
-    return shapeScenario(fetchRow('scenarios', id));
-  });
+  return mutate(
+    'scenario:create',
+    () => cleanName,
+    null,
+    () => {
+      const id = insertScenarioRow({ name: cleanName, example: false });
+      return shapeScenario(fetchRow('scenarios', id));
+    },
+  );
 }
 
 function getScenario(id) {
@@ -2342,20 +2521,25 @@ function createCountry(scenarioId, { name, affiliation, color, regions, geometry
     color === undefined || color === null ? DEFAULT_COLORS[cleanAffiliation] : requireColor(color);
   const cleanRegions = normalizeRegionIds(regions);
   const cleanGeometry = normalizeGeometry(geometry);
-  return mutate('scenario-country:create', () => cleanName, null, () => {
-    const position = database
-      .prepare('SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?')
-      .get(scenarioId).n;
-    const id = insertCountryRow(scenarioId, position, {
-      name: cleanName,
-      affiliation: cleanAffiliation,
-      color: cleanColor,
-      regions: cleanRegions,
-      geometry: cleanGeometry,
-    });
-    touchScenario(scenarioId);
-    return shapeCountry(fetchRow('scenario_countries', id));
-  });
+  return mutate(
+    'scenario-country:create',
+    () => cleanName,
+    null,
+    () => {
+      const position = database
+        .prepare('SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?')
+        .get(scenarioId).n;
+      const id = insertCountryRow(scenarioId, position, {
+        name: cleanName,
+        affiliation: cleanAffiliation,
+        color: cleanColor,
+        regions: cleanRegions,
+        geometry: cleanGeometry,
+      });
+      touchScenario(scenarioId);
+      return shapeCountry(fetchRow('scenario_countries', id));
+    },
+  );
 }
 
 function updateCountry(id, patch) {
@@ -2419,17 +2603,22 @@ function createPlace(scenarioId, { real_name: realName, kind, lon, lat, name }) 
   const cleanLon = requireLongitude(lon);
   const cleanLat = requireLatitude(lat);
   const cleanName = requireBoundedString(name, 'name', 120);
-  return mutate('scenario-place:create', () => cleanName, null, () => {
-    const id = insertPlaceRow(scenarioId, {
-      real_name: cleanRealName,
-      kind: cleanKind,
-      lon: cleanLon,
-      lat: cleanLat,
-      name: cleanName,
-    });
-    touchScenario(scenarioId);
-    return shapePlace(fetchRow('scenario_places', id));
-  });
+  return mutate(
+    'scenario-place:create',
+    () => cleanName,
+    null,
+    () => {
+      const id = insertPlaceRow(scenarioId, {
+        real_name: cleanRealName,
+        kind: cleanKind,
+        lon: cleanLon,
+        lat: cleanLat,
+        name: cleanName,
+      });
+      touchScenario(scenarioId);
+      return shapePlace(fetchRow('scenario_places', id));
+    },
+  );
 }
 
 function updatePlace(id, patch) {

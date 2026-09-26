@@ -51,7 +51,13 @@ function onOwnership({ kind, action, after }) {
     .database.prepare(
       'INSERT INTO activity (at, action, target, detail, owner_cell, releasable_to) VALUES (?, ?, ?, NULL, ?, ?)',
     )
-    .run(new Date().toISOString(), `${kind}:${action}`, String(after.id), after.owner_cell, after.releasable_to);
+    .run(
+      new Date().toISOString(),
+      `${kind}:${action}`,
+      String(after.id),
+      after.owner_cell,
+      after.releasable_to,
+    );
 }
 
 export default {
@@ -66,29 +72,90 @@ export default {
   database: () => ensureStore().database,
 
   items: {
-    requirement: { table: 'requirements', path: 'requirements', label: 'Requirement', shape: (row, { access }) => ensureStore().shapeRequirement(row, { access }), onOwnership },
-    report: { table: 'reports', path: 'reports', label: 'Report', shape: (row) => ensureStore().shapeReport(row), onOwnership },
-    rfi: { table: 'rfis', path: 'rfis', label: 'RFI', shape: (row) => ensureStore().shapeRfi(row), onOwnership },
-    track: { table: 'tracks', path: 'tracks', label: 'Track', shape: (row) => ensureStore().shapeTrack(row), onOwnership },
-    collector: { table: 'collectors', path: 'collectors', label: 'Collector', shape: (row) => ensureStore().shapeCollector(row), onOwnership },
-    tasking: { table: 'taskings', path: 'taskings', label: 'Tasking', shape: (row) => ensureStore().shapeTasking(row), onOwnership },
-    intsum: { table: 'intsums', path: 'intsums', label: 'INTSUM', shape: (row) => ensureStore().shapeIntsum(row), onOwnership },
+    requirement: {
+      table: 'requirements',
+      path: 'requirements',
+      label: 'Requirement',
+      shape: (row, { access }) => ensureStore().shapeRequirement(row, { access }),
+      onOwnership,
+    },
+    report: {
+      table: 'reports',
+      path: 'reports',
+      label: 'Report',
+      shape: (row) => ensureStore().shapeReport(row),
+      onOwnership,
+    },
+    rfi: {
+      table: 'rfis',
+      path: 'rfis',
+      label: 'RFI',
+      shape: (row) => ensureStore().shapeRfi(row),
+      onOwnership,
+    },
+    track: {
+      table: 'tracks',
+      path: 'tracks',
+      label: 'Track',
+      shape: (row) => ensureStore().shapeTrack(row),
+      onOwnership,
+    },
+    collector: {
+      table: 'collectors',
+      path: 'collectors',
+      label: 'Collector',
+      shape: (row) => ensureStore().shapeCollector(row),
+      onOwnership,
+    },
+    tasking: {
+      table: 'taskings',
+      path: 'taskings',
+      label: 'Tasking',
+      shape: (row) => ensureStore().shapeTasking(row),
+      onOwnership,
+    },
+    intsum: {
+      table: 'intsums',
+      path: 'intsums',
+      label: 'INTSUM',
+      shape: (row) => ensureStore().shapeIntsum(row),
+      onOwnership,
+    },
     // List-only (docs/adr/0002-item-scoped-requests.md contract): no `path`,
     // so no release/reassign is generated — matches the surface these two
     // already had (imported/fired, never released or reassigned by hand).
     nai: { table: 'nais', label: 'NAI', shape: (row) => ensureStore().shapeNai(row) },
-    message: { table: 'messages', label: 'Message', shape: (row) => ensureStore().shapeMessage(row) },
+    message: {
+      table: 'messages',
+      label: 'Message',
+      shape: (row) => ensureStore().shapeMessage(row),
+    },
   },
 
   parts: {
     sir: { table: 'sirs', item: 'requirement', column: 'requirement_id', label: 'SIR' },
-    indicator: { table: 'indicators', item: 'requirement', column: 'requirement_id', label: 'Indicator' },
-    evidence: { table: 'evidence_links', item: 'requirement', column: 'requirement_id', label: 'Evidence link' },
+    indicator: {
+      table: 'indicators',
+      item: 'requirement',
+      column: 'requirement_id',
+      label: 'Indicator',
+    },
+    evidence: {
+      table: 'evidence_links',
+      item: 'requirement',
+      column: 'requirement_id',
+      label: 'Evidence link',
+    },
   },
 
   routes: [
     // -- requirements tree: SIRs, indicators, evidence links ------------------
-    { method: 'GET', path: 'requirements', verb: 'list', handler: ({ access }) => ensureStore().listRequirements(access) },
+    {
+      method: 'GET',
+      path: 'requirements',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listRequirements(access),
+    },
     {
       method: 'POST',
       path: 'requirements',
@@ -96,7 +163,13 @@ export default {
       item: 'requirement',
       handler: ({ body, owner, access }) => ensureStore().createRequirement(owner, body, access),
     },
-    { method: 'GET', path: 'requirements/:item', verb: 'see', item: 'requirement', handler: ({ item, access }) => ensureStore().shapeRequirement(item, { access }) },
+    {
+      method: 'GET',
+      path: 'requirements/:item',
+      verb: 'see',
+      item: 'requirement',
+      handler: ({ item, access }) => ensureStore().shapeRequirement(item, { access }),
+    },
     {
       method: 'PATCH',
       path: 'requirements/:item',
@@ -104,7 +177,13 @@ export default {
       item: 'requirement',
       handler: ({ item, body, access }) => ensureStore().updateRequirement(item, body, access),
     },
-    { method: 'DELETE', path: 'requirements/:item', verb: 'change', item: 'requirement', handler: ({ item }) => ensureStore().deleteRequirement(item) },
+    {
+      method: 'DELETE',
+      path: 'requirements/:item',
+      verb: 'change',
+      item: 'requirement',
+      handler: ({ item }) => ensureStore().deleteRequirement(item),
+    },
 
     {
       method: 'POST',
@@ -178,10 +257,20 @@ export default {
       handler: ({ body, owner }) => ensureStore().importIpbStudy(owner, body),
     },
 
-    { method: 'GET', path: 'nais', verb: 'list', handler: ({ access }) => ensureStore().listNais(access) },
+    {
+      method: 'GET',
+      path: 'nais',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listNais(access),
+    },
 
     // -- reports & evidence ----------------------------------------------------
-    { method: 'GET', path: 'reports', verb: 'list', handler: ({ access }) => ensureStore().listReports(access) },
+    {
+      method: 'GET',
+      path: 'reports',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listReports(access),
+    },
     {
       method: 'POST',
       path: 'reports',
@@ -189,7 +278,13 @@ export default {
       item: 'report',
       handler: ({ body, owner, access }) => ensureStore().createReport(owner, body, access),
     },
-    { method: 'GET', path: 'reports/:item', verb: 'see', item: 'report', handler: ({ item }) => ensureStore().shapeReport(item) },
+    {
+      method: 'GET',
+      path: 'reports/:item',
+      verb: 'see',
+      item: 'report',
+      handler: ({ item }) => ensureStore().shapeReport(item),
+    },
     {
       method: 'PATCH',
       path: 'reports/:item',
@@ -197,10 +292,21 @@ export default {
       item: 'report',
       handler: ({ item, body, access }) => ensureStore().updateReport(item, body, access),
     },
-    { method: 'DELETE', path: 'reports/:item', verb: 'change', item: 'report', handler: ({ item }) => ensureStore().deleteReport(item) },
+    {
+      method: 'DELETE',
+      path: 'reports/:item',
+      verb: 'change',
+      item: 'report',
+      handler: ({ item }) => ensureStore().deleteReport(item),
+    },
 
     // -- current situation: tracks ----------------------------------------------
-    { method: 'GET', path: 'tracks', verb: 'list', handler: ({ access }) => ensureStore().listTracks(access) },
+    {
+      method: 'GET',
+      path: 'tracks',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listTracks(access),
+    },
     {
       method: 'POST',
       path: 'tracks',
@@ -208,9 +314,27 @@ export default {
       item: 'track',
       handler: ({ body, owner }) => ensureStore().createTrack(owner, body),
     },
-    { method: 'GET', path: 'tracks/:item', verb: 'see', item: 'track', handler: ({ item }) => ensureStore().shapeTrack(item) },
-    { method: 'PATCH', path: 'tracks/:item', verb: 'change', item: 'track', handler: ({ item, body }) => ensureStore().updateTrack(item, body) },
-    { method: 'DELETE', path: 'tracks/:item', verb: 'change', item: 'track', handler: ({ item }) => ensureStore().deleteTrack(item) },
+    {
+      method: 'GET',
+      path: 'tracks/:item',
+      verb: 'see',
+      item: 'track',
+      handler: ({ item }) => ensureStore().shapeTrack(item),
+    },
+    {
+      method: 'PATCH',
+      path: 'tracks/:item',
+      verb: 'change',
+      item: 'track',
+      handler: ({ item, body }) => ensureStore().updateTrack(item, body),
+    },
+    {
+      method: 'DELETE',
+      path: 'tracks/:item',
+      verb: 'change',
+      item: 'track',
+      handler: ({ item }) => ensureStore().deleteTrack(item),
+    },
     {
       method: 'POST',
       path: 'tracks/:item/positions',
@@ -220,7 +344,12 @@ export default {
     },
 
     // -- collection plan: collectors + taskings ---------------------------------
-    { method: 'GET', path: 'collectors', verb: 'list', handler: ({ access }) => ensureStore().listCollectors(access) },
+    {
+      method: 'GET',
+      path: 'collectors',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listCollectors(access),
+    },
     {
       method: 'POST',
       path: 'collectors',
@@ -229,7 +358,13 @@ export default {
       role: 'collection-manager',
       handler: ({ body, owner }) => ensureStore().createCollector(owner, body),
     },
-    { method: 'GET', path: 'collectors/:item', verb: 'see', item: 'collector', handler: ({ item }) => ensureStore().shapeCollector(item) },
+    {
+      method: 'GET',
+      path: 'collectors/:item',
+      verb: 'see',
+      item: 'collector',
+      handler: ({ item }) => ensureStore().shapeCollector(item),
+    },
     {
       method: 'PATCH',
       path: 'collectors/:item',
@@ -247,7 +382,12 @@ export default {
       handler: ({ item }) => ensureStore().deleteCollector(item),
     },
 
-    { method: 'GET', path: 'taskings', verb: 'list', handler: ({ access }) => ensureStore().listTaskings(access) },
+    {
+      method: 'GET',
+      path: 'taskings',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listTaskings(access),
+    },
     {
       method: 'POST',
       path: 'taskings',
@@ -256,7 +396,13 @@ export default {
       role: 'collection-manager',
       handler: ({ body, owner, access }) => ensureStore().createTasking(owner, body, access),
     },
-    { method: 'GET', path: 'taskings/:item', verb: 'see', item: 'tasking', handler: ({ item }) => ensureStore().shapeTasking(item) },
+    {
+      method: 'GET',
+      path: 'taskings/:item',
+      verb: 'see',
+      item: 'tasking',
+      handler: ({ item }) => ensureStore().shapeTasking(item),
+    },
     {
       method: 'PATCH',
       path: 'taskings/:item',
@@ -273,10 +419,20 @@ export default {
       role: 'collection-manager',
       handler: ({ item }) => ensureStore().deleteTasking(item),
     },
-    { method: 'GET', path: 'collection/conflicts', verb: 'list', handler: ({ access }) => ensureStore().listCollectionConflicts(access) },
+    {
+      method: 'GET',
+      path: 'collection/conflicts',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listCollectionConflicts(access),
+    },
 
     // -- products: INTSUM --------------------------------------------------------
-    { method: 'GET', path: 'intsums', verb: 'list', handler: ({ access }) => ensureStore().listIntsums(access) },
+    {
+      method: 'GET',
+      path: 'intsums',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listIntsums(access),
+    },
     {
       method: 'POST',
       path: 'intsums',
@@ -284,18 +440,42 @@ export default {
       item: 'intsum',
       handler: ({ body, owner }) => ensureStore().createIntsum(owner, body),
     },
-    { method: 'GET', path: 'intsums/:item', verb: 'see', item: 'intsum', handler: ({ item }) => ensureStore().shapeIntsum(item) },
-    { method: 'PATCH', path: 'intsums/:item', verb: 'change', item: 'intsum', handler: ({ item, body }) => ensureStore().updateIntsum(item, body) },
-    { method: 'DELETE', path: 'intsums/:item', verb: 'change', item: 'intsum', handler: ({ item }) => ensureStore().deleteIntsum(item) },
+    {
+      method: 'GET',
+      path: 'intsums/:item',
+      verb: 'see',
+      item: 'intsum',
+      handler: ({ item }) => ensureStore().shapeIntsum(item),
+    },
+    {
+      method: 'PATCH',
+      path: 'intsums/:item',
+      verb: 'change',
+      item: 'intsum',
+      handler: ({ item, body }) => ensureStore().updateIntsum(item, body),
+    },
+    {
+      method: 'DELETE',
+      path: 'intsums/:item',
+      verb: 'change',
+      item: 'intsum',
+      handler: ({ item }) => ensureStore().deleteIntsum(item),
+    },
     {
       method: 'GET',
       path: 'products/intsum-draft',
       verb: 'none',
-      handler: ({ query, access }) => ensureStore().draftIntsum(access, query.get('from'), query.get('to')),
+      handler: ({ query, access }) =>
+        ensureStore().draftIntsum(access, query.get('from'), query.get('to')),
     },
 
     // -- RFI ----------------------------------------------------------------------
-    { method: 'GET', path: 'rfis', verb: 'list', handler: ({ access }) => ensureStore().listRfis(access) },
+    {
+      method: 'GET',
+      path: 'rfis',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listRfis(access),
+    },
     {
       method: 'POST',
       path: 'rfis',
@@ -303,9 +483,27 @@ export default {
       item: 'rfi',
       handler: ({ body, owner, access }) => ensureStore().createRfi(owner, body, access),
     },
-    { method: 'GET', path: 'rfis/:item', verb: 'see', item: 'rfi', handler: ({ item }) => ensureStore().shapeRfi(item) },
-    { method: 'PATCH', path: 'rfis/:item', verb: 'change', item: 'rfi', handler: ({ item, body }) => ensureStore().updateRfi(item, body) },
-    { method: 'DELETE', path: 'rfis/:item', verb: 'change', item: 'rfi', handler: ({ item }) => ensureStore().deleteRfi(item) },
+    {
+      method: 'GET',
+      path: 'rfis/:item',
+      verb: 'see',
+      item: 'rfi',
+      handler: ({ item }) => ensureStore().shapeRfi(item),
+    },
+    {
+      method: 'PATCH',
+      path: 'rfis/:item',
+      verb: 'change',
+      item: 'rfi',
+      handler: ({ item, body }) => ensureStore().updateRfi(item, body),
+    },
+    {
+      method: 'DELETE',
+      path: 'rfis/:item',
+      verb: 'change',
+      item: 'rfi',
+      handler: ({ item }) => ensureStore().deleteRfi(item),
+    },
     {
       method: 'POST',
       path: 'rfis/:item/transition',
@@ -314,7 +512,12 @@ export default {
       handler: ({ item, body, access }) => ensureStore().transitionRfi(item, body, access),
     },
 
-    { method: 'GET', path: 'messages', verb: 'list', handler: ({ access }) => ensureStore().listMessages(access) },
+    {
+      method: 'GET',
+      path: 'messages',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listMessages(access),
+    },
 
     // -- scenario clock & events (White/game-master control) --------------------
     { method: 'GET', path: 'clock', verb: 'none', handler: () => ensureStore().readClock() },
@@ -330,7 +533,13 @@ export default {
     // Gated at game-master even for a plain GET (unlike every other
     // exercise read): inject text the training audience must not see ahead
     // of time, or cancelled, at all.
-    { method: 'GET', path: 'scenario-events', verb: 'none', role: 'game-master', handler: () => ensureStore().listScenarioEvents() },
+    {
+      method: 'GET',
+      path: 'scenario-events',
+      verb: 'none',
+      role: 'game-master',
+      handler: () => ensureStore().listScenarioEvents(),
+    },
     {
       method: 'POST',
       path: 'scenario-events',
@@ -362,7 +571,12 @@ export default {
 
     // -- the one active exercise scenario (fictional countries + renamed places) --
     { method: 'GET', path: 'regions', verb: 'none', handler: () => ensureStore().getRegions() },
-    { method: 'GET', path: 'scenarios', verb: 'none', handler: () => ({ items: ensureStore().listScenarios() }) },
+    {
+      method: 'GET',
+      path: 'scenarios',
+      verb: 'none',
+      handler: () => ({ items: ensureStore().listScenarios() }),
+    },
     {
       method: 'POST',
       path: 'scenarios',
@@ -379,7 +593,12 @@ export default {
       reach: 'everyone',
       handler: () => ensureStore().createExampleScenario(),
     },
-    { method: 'GET', path: 'scenarios/:id', verb: 'none', handler: ({ params }) => ensureStore().getScenario(parseId(params.id)) },
+    {
+      method: 'GET',
+      path: 'scenarios/:id',
+      verb: 'none',
+      handler: ({ params }) => ensureStore().getScenario(parseId(params.id)),
+    },
     {
       method: 'PATCH',
       path: 'scenarios/:id',
@@ -407,7 +626,12 @@ export default {
       reach: 'everyone',
       handler: ({ params }) => ensureStore().duplicateScenario(parseId(params.id)),
     },
-    { method: 'GET', path: 'scenario/active', verb: 'none', handler: () => ensureStore().getActiveScenario() },
+    {
+      method: 'GET',
+      path: 'scenario/active',
+      verb: 'none',
+      handler: () => ensureStore().getActiveScenario(),
+    },
     {
       method: 'POST',
       path: 'scenarios/:id/countries',
@@ -466,7 +690,12 @@ export default {
     },
 
     // -- AAR ------------------------------------------------------------------
-    { method: 'GET', path: 'activity', verb: 'list', handler: ({ access }) => ensureStore().listActivity(access) },
+    {
+      method: 'GET',
+      path: 'activity',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listActivity(access),
+    },
   ],
 
   connect({ runAs }) {

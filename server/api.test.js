@@ -277,7 +277,9 @@ describe('off mode', () => {
       headers: { 'X-Client-Id': huge },
     });
     const audit = await api.request('/api/auth/audit');
-    const row = audit.json.items.find((entry) => entry.path === '/api/orbat/orbats' && entry.client?.startsWith('xxxx'));
+    const row = audit.json.items.find(
+      (entry) => entry.path === '/api/orbat/orbats' && entry.client?.startsWith('xxxx'),
+    );
     expect(row.client.length).toBeLessThanOrEqual(64);
   });
 });
@@ -369,7 +371,9 @@ describe('on mode, with users', () => {
 
   test('an observer gets 403 on a mutation but 200 on a GET', async () => {
     const api = client(server.origin);
-    await api.request('/api/auth/login', { body: { name: 'observer1', password: 'observer pw 1234' } });
+    await api.request('/api/auth/login', {
+      body: { name: 'observer1', password: 'observer pw 1234' },
+    });
     const read = await api.request('/api/orbat/orbats');
     expect(read.status).toBe(200);
     const write = await api.request('/api/orbat/orbats', { body: { name: 'Nope' } });
@@ -378,7 +382,9 @@ describe('on mode, with users', () => {
 
   test('C1: a user with no membership gets 403 on every module route, but /api/auth/* still works', async () => {
     const api = client(server.origin);
-    await api.request('/api/auth/login', { body: { name: 'unassigned', password: 'unassigned pw 12345' } });
+    await api.request('/api/auth/login', {
+      body: { name: 'unassigned', password: 'unassigned pw 12345' },
+    });
     const read = await api.request('/api/orbat/orbats');
     expect(read.status).toBe(403);
     expect(read.json.error).toMatch(/not assigned/i);
@@ -397,7 +403,9 @@ describe('on mode, with users', () => {
 
   test('the audit endpoint needs game-master: an observer gets 403', async () => {
     const api = client(server.origin);
-    await api.request('/api/auth/login', { body: { name: 'observer1', password: 'observer pw 1234' } });
+    await api.request('/api/auth/login', {
+      body: { name: 'observer1', password: 'observer pw 1234' },
+    });
     const audit = await api.request('/api/auth/audit');
     expect(audit.status).toBe(403);
   });
@@ -468,7 +476,9 @@ describe('on mode, with users', () => {
     const gm = client(server.origin); // white
     await gm.request('/api/auth/login', { body: { name: 'gm', password: 'game master pw' } });
     const blue = client(server.origin);
-    await blue.request('/api/auth/login', { body: { name: 'observer1', password: 'observer pw 1234' } });
+    await blue.request('/api/auth/login', {
+      body: { name: 'observer1', password: 'observer pw 1234' },
+    });
 
     const created = await gm.request('/api/orbat/orbats', {
       body: { name: 'Red ORBAT', owner_cell: 'red' },
@@ -512,7 +522,9 @@ describe('on mode, with users', () => {
     const gm = client(server.origin); // white
     await gm.request('/api/auth/login', { body: { name: 'gm', password: 'game master pw' } });
     const blue = client(server.origin);
-    await blue.request('/api/auth/login', { body: { name: 'observer1', password: 'observer pw 1234' } });
+    await blue.request('/api/auth/login', {
+      body: { name: 'observer1', password: 'observer pw 1234' },
+    });
 
     let blueReceived = '';
     const blueStream = http.get(
@@ -524,16 +536,23 @@ describe('on mode, with users', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // A red-owned create, an IPB study create, and a White-only inject: none may reach Blue.
-    const orbat = await gm.request('/api/orbat/orbats', { body: { name: 'Red', owner_cell: 'red' } });
+    const orbat = await gm.request('/api/orbat/orbats', {
+      body: { name: 'Red', owner_cell: 'red' },
+    });
     expect(orbat.status).toBe(200);
-    const study = await gm.request('/api/ipb/studies', { body: { name: 'Red study', owner_cell: 'red' } });
+    const study = await gm.request('/api/ipb/studies', {
+      body: { name: 'Red study', owner_cell: 'red' },
+    });
     expect(study.status).toBe(200);
     const inject = await gm.request('/api/exercise/scenario-events', {
       body: { trigger_at: '2030-01-01T00:00:00Z', kind: 'message', payload: { text: 'Secret' } },
     });
     expect(inject.status).toBe(200);
     // The scenario clock is everyone's.
-    const clock = await gm.request('/api/exercise/clock', { method: 'PATCH', body: { paused: true } });
+    const clock = await gm.request('/api/exercise/clock', {
+      method: 'PATCH',
+      body: { paused: true },
+    });
     expect(clock.status).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -546,7 +565,9 @@ describe('on mode, with users', () => {
 
   test('IPB-AUTH-005: a signed-in user is capped at 8 concurrent /api/live streams', async () => {
     const api = client(server.origin);
-    await api.request('/api/auth/login', { body: { name: 'capuser', password: 'cap user password' } });
+    await api.request('/api/auth/login', {
+      body: { name: 'capuser', password: 'cap user password' },
+    });
     const cookie = api.getCookie();
     const streams = [];
     try {
@@ -562,17 +583,23 @@ describe('on mode, with users', () => {
     }
   });
 
-  test('IPB-AUTH-005: logging out ends that session\'s own live stream', async () => {
+  test("IPB-AUTH-005: logging out ends that session's own live stream", async () => {
     const api = client(server.origin);
-    await api.request('/api/auth/login', { body: { name: 'observer1', password: 'observer pw 1234' } });
+    await api.request('/api/auth/login', {
+      body: { name: 'observer1', password: 'observer pw 1234' },
+    });
     const cookie = api.getCookie();
     let ended = false;
-    const stream = http.get(`${server.origin}/api/live`, { headers: { Cookie: cookie } }, (response) => {
-      response.on('end', () => {
-        ended = true;
-      });
-      response.resume();
-    });
+    const stream = http.get(
+      `${server.origin}/api/live`,
+      { headers: { Cookie: cookie } },
+      (response) => {
+        response.on('end', () => {
+          ended = true;
+        });
+        response.resume();
+      },
+    );
     await new Promise((resolve) => stream.once('response', resolve));
 
     await api.request('/api/auth/logout', { method: 'POST' });
@@ -666,7 +693,9 @@ describe('admin bootstrap', () => {
     process.env.IPB_ADMIN_PASSWORD = 'first admin password';
     let server = await startServer('on', localCreateApiMiddleware);
     let api = client(server.origin);
-    await api.request('/api/auth/login', { body: { name: 'admin', password: 'first admin password' } });
+    await api.request('/api/auth/login', {
+      body: { name: 'admin', password: 'first admin password' },
+    });
     await server.stop();
 
     // A fresh middleware instance against the same (now non-empty) database.
@@ -771,7 +800,8 @@ describe('admin user management (C1 admin flag)', () => {
     const api = await loginAs('observer1', 'observer pw 1234');
     expect((await api.request('/api/auth/users')).status).toBe(403);
     expect(
-      (await api.request('/api/auth/users', { body: { name: 'x', password: 'whatever12345' } })).status,
+      (await api.request('/api/auth/users', { body: { name: 'x', password: 'whatever12345' } }))
+        .status,
     ).toBe(403);
   });
 
@@ -809,7 +839,9 @@ describe('admin user management (C1 admin flag)', () => {
     });
 
     const userApi = client(server.origin);
-    await userApi.request('/api/auth/login', { body: { name: 'newbie', password: 'a long enough password' } });
+    await userApi.request('/api/auth/login', {
+      body: { name: 'newbie', password: 'a long enough password' },
+    });
     await userApi.request('/api/auth/password', {
       body: { current: 'a long enough password', next: 'newbie picked this one' },
     });
@@ -846,7 +878,9 @@ describe('admin user management (C1 admin flag)', () => {
     expect(loginAfterReset.status).toBe(200);
     expect(loginAfterReset.json.user.must_change_password).toBe(true);
 
-    const revoke = await admin.request('/api/auth/users/newbie/revoke-sessions', { method: 'POST' });
+    const revoke = await admin.request('/api/auth/users/newbie/revoke-sessions', {
+      method: 'POST',
+    });
     expect(revoke.status).toBe(200);
     expect((await userApi.request('/api/orbat/orbats')).status).toBe(401);
 
@@ -968,7 +1002,9 @@ describe('exercise lifecycle + membership routes (C6)', () => {
     seed.close();
 
     admin = client(server.origin);
-    await admin.request('/api/auth/login', { body: { name: 'lifecycle-admin', password: 'lifecycle admin password' } });
+    await admin.request('/api/auth/login', {
+      body: { name: 'lifecycle-admin', password: 'lifecycle admin password' },
+    });
     blueMember = client(server.origin);
     await blueMember.request('/api/auth/login', {
       body: { name: 'lifecycle-blue', password: 'lifecycle blue password' },
@@ -1032,7 +1068,9 @@ describe('exercise lifecycle + membership routes (C6)', () => {
     expect((await blueMember.request('/api/auth/exercise/archives')).status).toBe(403);
     expect((await blueMember.request('/api/auth/exercise/archive', { body: {} })).status).toBe(403);
 
-    const archived = await admin.request('/api/auth/exercise/archive', { body: { note: 'checkpoint' } });
+    const archived = await admin.request('/api/auth/exercise/archive', {
+      body: { note: 'checkpoint' },
+    });
     expect(archived.status).toBe(200);
     expect(archived.json.id).toEqual(expect.any(String));
 
@@ -1043,7 +1081,8 @@ describe('exercise lifecycle + membership routes (C6)', () => {
 
   test('reset is admin-only and requires the typed confirmation to match the current exercise name', async () => {
     expect(
-      (await blueMember.request('/api/auth/exercise/reset', { body: { name: 'X', confirm: 'X' } })).status,
+      (await blueMember.request('/api/auth/exercise/reset', { body: { name: 'X', confirm: 'X' } }))
+        .status,
     ).toBe(403);
 
     const wrongConfirm = await admin.request('/api/auth/exercise/reset', {
@@ -1054,7 +1093,9 @@ describe('exercise lifecycle + membership routes (C6)', () => {
 
   test('reset empties ipb/exercise/orbat, clears memberships, renames the exercise, and every other /api request 503s meanwhile', async () => {
     // Seed something real to prove it gets wiped.
-    const seededOrbat = await admin.request('/api/orbat/orbats', { body: { name: 'Will be wiped' } });
+    const seededOrbat = await admin.request('/api/orbat/orbats', {
+      body: { name: 'Will be wiped' },
+    });
     expect(seededOrbat.status).toBe(200);
 
     const currentName = (await admin.request('/api/auth/exercise')).json.name;
@@ -1096,7 +1137,9 @@ describe('exercise lifecycle + membership routes (C6)', () => {
       body: { cell: 'blue', role: 'analyst' },
     });
     expect(reassign.status).toBe(200);
-    const seeded = await admin.request('/api/orbat/orbats', { body: { name: 'Present at archive time' } });
+    const seeded = await admin.request('/api/orbat/orbats', {
+      body: { name: 'Present at archive time' },
+    });
     expect(seeded.status).toBe(200);
     const archived = await admin.request('/api/auth/exercise/archive', { body: {} });
     expect(archived.status).toBe(200);
@@ -1120,7 +1163,9 @@ describe('exercise lifecycle + membership routes (C6)', () => {
   });
 
   test('restore 404s on an unknown archive', async () => {
-    const response = await admin.request('/api/auth/exercise/restore', { body: { archive: 'nope' } });
+    const response = await admin.request('/api/auth/exercise/restore', {
+      body: { archive: 'nope' },
+    });
     expect(response.status).toBe(404);
   });
 });

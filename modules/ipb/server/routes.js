@@ -101,7 +101,12 @@ export default {
     ]),
   ),
   routes: [
-    { method: 'GET', path: 'studies', verb: 'list', handler: ({ access }) => getStore().listStudies(access) },
+    {
+      method: 'GET',
+      path: 'studies',
+      verb: 'list',
+      handler: ({ access }) => getStore().listStudies(access),
+    },
     {
       method: 'POST',
       path: 'studies',

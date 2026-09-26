@@ -29,7 +29,10 @@ const EQUIPMENT_API = '/api/equipment';
 
 /** Palette grouping, in print/UI order. */
 export const GRAPHIC_GROUPS = [
-  { label: 'Control measures', keys: ['phase-line', 'boundary', 'axis-of-advance', 'direction-of-attack'] },
+  {
+    label: 'Control measures',
+    keys: ['phase-line', 'boundary', 'axis-of-advance', 'direction-of-attack'],
+  },
   { label: 'Areas', keys: ['objective', 'assembly-area', 'battle-position', 'engagement-area'] },
   { label: 'Obstacles', keys: ['minefield', 'obstacle-line', 'block', 'fix', 'turn', 'disrupt'] },
 ];
@@ -119,7 +122,13 @@ export function parseRadiiInput(text) {
   return { radii };
 }
 
-const RANGE_KIND_ABBR = { effective: 'eff', maximum: 'max', minimum: 'min', sight: 'sight', other: '' };
+const RANGE_KIND_ABBR = {
+  effective: 'eff',
+  maximum: 'max',
+  minimum: 'min',
+  sight: 'sight',
+  other: '',
+};
 
 /**
  * Selected WEG card range entries (`{ kind, min_m, max_m }`, from `GET
@@ -129,7 +138,10 @@ const RANGE_KIND_ABBR = { effective: 'eff', maximum: 'max', minimum: 'min', sigh
  */
 export function rangeRingsFromEntries(entries, systemName) {
   const withRadius = (entries ?? [])
-    .map((entry) => ({ ...entry, radius: Number.isFinite(entry.max_m) ? entry.max_m : entry.min_m }))
+    .map((entry) => ({
+      ...entry,
+      radius: Number.isFinite(entry.max_m) ? entry.max_m : entry.min_m,
+    }))
     .filter((entry) => Number.isFinite(entry.radius) && entry.radius > 0);
   const byRadius = new Map();
   for (const entry of withRadius) {
@@ -140,7 +152,8 @@ export function rangeRingsFromEntries(entries, systemName) {
   const radii = sorted.map(([radius]) => radius);
   const ringLabels = sorted.map(([radius, entry]) => {
     const abbr = RANGE_KIND_ABBR[entry.kind] ?? entry.kind;
-    const km = radius >= 10_000 ? `${Math.round(radius / 1000)} km` : `${(radius / 1000).toFixed(1)} km`;
+    const km =
+      radius >= 10_000 ? `${Math.round(radius / 1000)} km` : `${(radius / 1000).toFixed(1)} km`;
     return [systemName, abbr, km].filter(Boolean).join(' ');
   });
   return { radii, ringLabels };
@@ -266,7 +279,11 @@ export function initMapToolbar({
       readout.append(output, copy);
       panel.append(readout);
       panel.append(
-        createElement('p', 'tool-hint', 'Double-click (distance/area) or click twice (bearing) to finish; Escape cancels.'),
+        createElement(
+          'p',
+          'tool-hint',
+          'Double-click (distance/area) or click twice (bearing) to finish; Escape cancels.',
+        ),
       );
     }
     return panel;
@@ -338,7 +355,9 @@ export function initMapToolbar({
     const affiliationLabel = createElement('label', 'inline-field');
     affiliationLabel.append(createElement('span', null, 'Affiliation'));
     const affiliationSelect = document.createElement('select');
-    AFFILIATIONS.forEach((value) => affiliationSelect.append(new Option(value, value, false, value === graphicForm.affiliation)));
+    AFFILIATIONS.forEach((value) =>
+      affiliationSelect.append(new Option(value, value, false, value === graphicForm.affiliation)),
+    );
     affiliationSelect.addEventListener('change', () => {
       graphicForm.affiliation = affiliationSelect.value;
     });
@@ -349,7 +368,9 @@ export function initMapToolbar({
       const echelonLabel = createElement('label', 'inline-field');
       echelonLabel.append(createElement('span', null, 'Echelon'));
       const echelonSelect = document.createElement('select');
-      ECHELON_NAMES.forEach((name) => echelonSelect.append(new Option(name, name, false, name === graphicForm.echelon)));
+      ECHELON_NAMES.forEach((name) =>
+        echelonSelect.append(new Option(name, name, false, name === graphicForm.echelon)),
+      );
       echelonSelect.addEventListener('change', () => {
         graphicForm.echelon = echelonSelect.value;
       });
@@ -480,7 +501,9 @@ export function initMapToolbar({
       return;
     }
     try {
-      const result = await requestJson(`${EQUIPMENT_API}/cards?${new URLSearchParams({ q: query, limit: '15' })}`);
+      const result = await requestJson(
+        `${EQUIPMENT_API}/cards?${new URLSearchParams({ q: query, limit: '15' })}`,
+      );
       ringForm.searchResults = result.items;
     } catch (error) {
       if (error.name !== 'AbortError') showError(panelHost, error.message);
@@ -496,7 +519,9 @@ export function initMapToolbar({
     ringForm.selectedRangeIndexes = new Set();
     renderPanel();
     try {
-      ringForm.rangeEntries = await requestJson(`${EQUIPMENT_API}/cards/${encodeURIComponent(identifier)}/ranges`);
+      ringForm.rangeEntries = await requestJson(
+        `${EQUIPMENT_API}/cards/${encodeURIComponent(identifier)}/ranges`,
+      );
     } catch (error) {
       if (error.name !== 'AbortError') showError(panelHost, error.message);
     }
@@ -504,10 +529,14 @@ export function initMapToolbar({
   }
 
   function applySelectedRanges() {
-    const chosen = ringForm.rangeEntries.filter((_entry, index) => ringForm.selectedRangeIndexes.has(index));
+    const chosen = ringForm.rangeEntries.filter((_entry, index) =>
+      ringForm.selectedRangeIndexes.has(index),
+    );
     const { radii, ringLabels } = rangeRingsFromEntries(chosen, ringForm.selectedCardLabel);
     if (!radii.length) return;
-    ringForm.radiiText = radii.map((metres) => (metres >= 10_000 ? `${metres / 1000}km` : `${metres}m`)).join(', ');
+    ringForm.radiiText = radii
+      .map((metres) => (metres >= 10_000 ? `${metres / 1000}km` : `${metres}m`))
+      .join(', ');
     ringForm.ringLabels = ringLabels;
     ringForm.source = 'manual';
     renderPanel();
@@ -517,7 +546,9 @@ export function initMapToolbar({
     const panel = createElement('div', 'map-tool-panel');
     panel.append(createElement('h4', null, 'Range rings'));
     if (!can()) {
-      panel.append(createElement('p', 'panel-note', 'Read-only: your role cannot add range rings.'));
+      panel.append(
+        createElement('p', 'panel-note', 'Read-only: your role cannot add range rings.'),
+      );
       return panel;
     }
     if (!getStudyId()) {
@@ -540,7 +571,9 @@ export function initMapToolbar({
     const affiliationLabel = createElement('label', 'inline-field');
     affiliationLabel.append(createElement('span', null, 'Affiliation'));
     const affiliationSelect = document.createElement('select');
-    AFFILIATIONS.forEach((value) => affiliationSelect.append(new Option(value, value, false, value === ringForm.affiliation)));
+    AFFILIATIONS.forEach((value) =>
+      affiliationSelect.append(new Option(value, value, false, value === ringForm.affiliation)),
+    );
     affiliationSelect.addEventListener('change', () => {
       ringForm.affiliation = affiliationSelect.value;
     });
@@ -570,9 +603,16 @@ export function initMapToolbar({
       fromWeapon.append(createElement('p', 'graphic-group-label', 'From a threat'));
       const threatSelect = document.createElement('select');
       threatSelect.append(new Option('Choose a threat…', ''));
-      threats.forEach((threat) => threatSelect.append(new Option(threat.name, threat.equipment_identifier)));
+      threats.forEach((threat) =>
+        threatSelect.append(new Option(threat.name, threat.equipment_identifier)),
+      );
       threatSelect.addEventListener('change', () => {
-        if (threatSelect.value) loadRanges(threatSelect.value, threats.find((t) => t.equipment_identifier === threatSelect.value)?.name ?? threatSelect.value);
+        if (threatSelect.value)
+          loadRanges(
+            threatSelect.value,
+            threats.find((t) => t.equipment_identifier === threatSelect.value)?.name ??
+              threatSelect.value,
+          );
       });
       fromWeapon.append(threatSelect);
     }
@@ -600,7 +640,9 @@ export function initMapToolbar({
         const row = createElement('li', 'graphic-row');
         const button = createElement('button', 'text-button', item.display_name || item.name);
         button.type = 'button';
-        button.addEventListener('click', () => loadRanges(item.identifier, item.display_name || item.name));
+        button.addEventListener('click', () =>
+          loadRanges(item.identifier, item.display_name || item.name),
+        );
         row.append(button);
         results.append(row);
       });
@@ -608,9 +650,13 @@ export function initMapToolbar({
     }
 
     if (ringForm.selectedCardId) {
-      fromWeapon.append(createElement('p', 'graphic-group-label', `Ranges — ${ringForm.selectedCardLabel}`));
+      fromWeapon.append(
+        createElement('p', 'graphic-group-label', `Ranges — ${ringForm.selectedCardLabel}`),
+      );
       if (!ringForm.rangeEntries.length) {
-        fromWeapon.append(createElement('p', 'panel-note', 'No weapon ranges parsed for this card.'));
+        fromWeapon.append(
+          createElement('p', 'panel-note', 'No weapon ranges parsed for this card.'),
+        );
       } else {
         const list = createElement('ul', 'graphics-list');
         ringForm.rangeEntries.forEach((entry, index) => {
@@ -626,7 +672,10 @@ export function initMapToolbar({
           });
           const max = Number.isFinite(entry.max_m) ? `${Math.round(entry.max_m)} m` : '—';
           const min = Number.isFinite(entry.min_m) ? `${Math.round(entry.min_m)} m` : '—';
-          label.append(checkbox, createElement('span', null, ` ${entry.system} — ${entry.kind}: ${min}–${max}`));
+          label.append(
+            checkbox,
+            createElement('span', null, ` ${entry.system} — ${entry.kind}: ${min}–${max}`),
+          );
           row.append(label);
           list.append(row);
         });
@@ -680,7 +729,8 @@ export function initMapToolbar({
     }
     return {
       radii: parsed.radii,
-      ringLabels: ringForm.ringLabels?.length === parsed.radii.length ? ringForm.ringLabels : undefined,
+      ringLabels:
+        ringForm.ringLabels?.length === parsed.radii.length ? ringForm.ringLabels : undefined,
       affiliation: ringForm.affiliation,
       name: ringForm.name,
     };
@@ -822,10 +872,13 @@ export function renderGraphicsAndRingsList({
     const label = await askText('Rename', feature.label);
     if (!label || label === feature.label) return;
     try {
-      const updated = await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, {
-        method: 'PATCH',
-        body: { label },
-      });
+      const updated = await requestJson(
+        `${API}/studies/${feature.study_id}/features/${feature.id}`,
+        {
+          method: 'PATCH',
+          body: { label },
+        },
+      );
       Object.assign(feature, updated);
       onChanged();
     } catch (error) {
@@ -836,7 +889,9 @@ export function renderGraphicsAndRingsList({
   async function deleteFeature(feature) {
     if (!(await askConfirm(`Delete "${feature.label}"?`))) return;
     try {
-      await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, { method: 'DELETE' });
+      await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, {
+        method: 'DELETE',
+      });
       onChanged(feature.id);
     } catch (error) {
       if (error.name !== 'AbortError') showError(container, error.message);
@@ -848,7 +903,10 @@ export function renderGraphicsAndRingsList({
     const text = createElement('button', 'graphic-row-text');
     text.type = 'button';
     text.title = 'Go to this feature';
-    text.append(createElement('strong', null, feature.label || '(unnamed)'), createElement('small', null, detail));
+    text.append(
+      createElement('strong', null, feature.label || '(unnamed)'),
+      createElement('small', null, detail),
+    );
     text.addEventListener('click', () => mapController.fitFeature(feature.id));
     row.append(text);
     if (can) {
@@ -886,7 +944,9 @@ export function renderGraphicsAndRingsList({
   if (rings.length) {
     const list = createElement('ul', 'range-rings-list');
     rings.forEach((feature) => {
-      const radii = (feature.properties?.radii ?? []).map((metres) => formatMgrsRadius(metres)).join(', ');
+      const radii = (feature.properties?.radii ?? [])
+        .map((metres) => formatMgrsRadius(metres))
+        .join(', ');
       list.append(renderRow(feature, radii));
     });
     ringsGroup.append(list);

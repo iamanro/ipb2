@@ -34,13 +34,24 @@ test('backup and restore load the database list without any route code', () => {
       }`,
     );
     const register = path.join(scratch, 'register.mjs');
-    writeFileSync(register, `import { register } from 'node:module'; register(${JSON.stringify(pathToFileURL(hooks).href)});`);
-    const env = { ...process.env, IPB_STATE_ROOT: path.join(scratch, 'state'), IPB_BACKUP_ROOT: path.join(scratch, 'backups') };
+    writeFileSync(
+      register,
+      `import { register } from 'node:module'; register(${JSON.stringify(pathToFileURL(hooks).href)});`,
+    );
+    const env = {
+      ...process.env,
+      IPB_STATE_ROOT: path.join(scratch, 'state'),
+      IPB_BACKUP_ROOT: path.join(scratch, 'backups'),
+    };
     for (const tool of ['backup.mjs', 'restore.mjs']) {
-      const output = execFileSync(process.execPath, ['--import', register, path.join(ROOT, 'server', 'tools', tool)], {
-        env,
-        encoding: 'utf8',
-      });
+      const output = execFileSync(
+        process.execPath,
+        ['--import', register, path.join(ROOT, 'server', 'tools', tool)],
+        {
+          env,
+          encoding: 'utf8',
+        },
+      );
       expect(output).toMatch(/Nothing to back up|No backups/);
     }
   } finally {

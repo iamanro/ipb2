@@ -74,7 +74,14 @@ function composeSidc(state) {
 /** The picker's field state for a starting SIDC (falls back to sensible defaults). */
 function stateFromSidc(sidc) {
   const parts = parseSidc(sidc);
-  if (!parts) return { affiliation: 'friendly', status: 'present', symbolSet: '10', entity: '121100', echelonCode: '00' };
+  if (!parts)
+    return {
+      affiliation: 'friendly',
+      status: 'present',
+      symbolSet: '10',
+      entity: '121100',
+      echelonCode: '00',
+    };
   return {
     affiliation: affiliationOf(sidc) ?? 'friendly',
     status: parts.status === '1' ? 'planned' : 'present',
@@ -267,7 +274,9 @@ function buildEntitySearch({ value, symbolSet, onChange }) {
 export function openSymbolPicker({ initial, affiliation, title = 'Choose a symbol' } = {}) {
   return new Promise((resolve) => {
     const seed =
-      initial && parseSidc(initial) ? initial : withAffiliation(DEFAULT_SIDC, affiliation ?? 'friendly');
+      initial && parseSidc(initial)
+        ? initial
+        : withAffiliation(DEFAULT_SIDC, affiliation ?? 'friendly');
     let state = stateFromSidc(seed);
 
     const dialog = el('dialog', 'symbol-picker-dialog');

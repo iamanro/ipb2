@@ -86,7 +86,8 @@ export const EXERCISE_CONTROL = Object.freeze({
 });
 
 function compilePath(path) {
-  if (path instanceof RegExp) return (route) => path.exec(route)?.groups ?? (path.test(route) ? {} : null);
+  if (path instanceof RegExp)
+    return (route) => path.exec(route)?.groups ?? (path.test(route) ? {} : null);
   const segments = path.split('/');
   return (route) => {
     const parts = route.split('/');
@@ -133,33 +134,64 @@ function compileModule(module) {
   const items = module.items ?? {};
   const parts = module.parts ?? {};
   for (const [kind, part] of Object.entries(parts)) {
-    if (!items[part.item]) throw new Error(`${module.id}: part "${kind}" names unknown item "${part.item}".`);
-    if (!part.table || !part.column) throw new Error(`${module.id}: part "${kind}" needs table and column.`);
+    if (!items[part.item])
+      throw new Error(`${module.id}: part "${kind}" names unknown item "${part.item}".`);
+    if (!part.table || !part.column)
+      throw new Error(`${module.id}: part "${kind}" needs table and column.`);
   }
   const routes = [];
   for (const route of module.routes ?? []) {
-    if (!VERBS.has(route.verb)) throw new Error(`${module.id}: ${route.method} ${route.path} has no valid verb.`);
+    if (!VERBS.has(route.verb))
+      throw new Error(`${module.id}: ${route.method} ${route.path} has no valid verb.`);
     if (route.verb === 'see' && route.method !== 'GET' && route.method !== 'HEAD') {
-      throw new Error(`${module.id}: ${route.method} ${route.path}: a change can't be declared 'see'.`);
+      throw new Error(
+        `${module.id}: ${route.method} ${route.path}: a change can't be declared 'see'.`,
+      );
     }
-    if (typeof route.path === 'string' && /(^|\/):(item|part)(\/|$)/.test(route.path) && !route.item) {
-      throw new Error(`${module.id}: ${route.method} ${route.path} names an item in its path but declares no item kind.`);
+    if (
+      typeof route.path === 'string' &&
+      /(^|\/):(item|part)(\/|$)/.test(route.path) &&
+      !route.item
+    ) {
+      throw new Error(
+        `${module.id}: ${route.method} ${route.path} names an item in its path but declares no item kind.`,
+      );
     }
     if (['see', 'change', 'create'].includes(route.verb) && !items[route.item]) {
-      throw new Error(`${module.id}: ${route.method} ${route.path} names unknown item "${route.item}".`);
+      throw new Error(
+        `${module.id}: ${route.method} ${route.path} names unknown item "${route.item}".`,
+      );
     }
     if (route.part && parts[route.part]?.item !== route.item) {
-      throw new Error(`${module.id}: ${route.method} ${route.path}: part "${route.part}" is not a part of "${route.item}".`);
+      throw new Error(
+        `${module.id}: ${route.method} ${route.path}: part "${route.part}" is not a part of "${route.item}".`,
+      );
     }
-    if (route.reach && !REACHES.has(route.reach)) throw new Error(`${module.id}: unknown reach "${route.reach}".`);
-    if (route.reach && route.verb !== 'none') throw new Error(`${module.id}: ${route.method} ${route.path}: reach is only for 'none' routes.`);
+    if (route.reach && !REACHES.has(route.reach))
+      throw new Error(`${module.id}: unknown reach "${route.reach}".`);
+    if (route.reach && route.verb !== 'none')
+      throw new Error(
+        `${module.id}: ${route.method} ${route.path}: reach is only for 'none' routes.`,
+      );
     routes.push({ ...route, match: compilePath(route.path) });
   }
   for (const [kind, item] of Object.entries(items)) {
     if (!item.path) continue;
     routes.push(
-      { method: 'POST', path: `${item.path}/:item/release`, verb: 'release', item: kind, match: compilePath(`${item.path}/:item/release`) },
-      { method: 'PATCH', path: `${item.path}/:item/owner`, verb: 'reassign', item: kind, match: compilePath(`${item.path}/:item/owner`) },
+      {
+        method: 'POST',
+        path: `${item.path}/:item/release`,
+        verb: 'release',
+        item: kind,
+        match: compilePath(`${item.path}/:item/release`),
+      },
+      {
+        method: 'PATCH',
+        path: `${item.path}/:item/owner`,
+        verb: 'reassign',
+        item: kind,
+        match: compilePath(`${item.path}/:item/owner`),
+      },
     );
   }
   return { module, items, parts, routes };
@@ -192,7 +224,8 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
       canEdit: (itemRow) => canEdit(actor, itemRow),
       /** The WHERE condition limiting an item kind's list to what the requester can see. */
       visible(kind, options) {
-        if (!entry.items[kind]) throw new Error(`${entry.module.id}: visible() needs an item kind, got "${kind}".`);
+        if (!entry.items[kind])
+          throw new Error(`${entry.module.id}: visible() needs an item kind, got "${kind}".`);
         return visibilitySql(actor, options);
       },
     };
@@ -208,7 +241,8 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
       const partSpec = entry.parts[route.part];
       const partId = integerId(params.part, partSpec.label);
       part = fetchRow(entry, partSpec.table, partId);
-      if (!part || part[partSpec.column] !== id) throw new HttpError(404, `${partSpec.label} ${partId} not found.`);
+      if (!part || part[partSpec.column] !== id)
+        throw new HttpError(404, `${partSpec.label} ${partId} not found.`);
     }
     return { item, part };
   }
@@ -219,7 +253,8 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
     let ownerCell = item.owner_cell;
     let releasable;
     if (route.verb === 'release') {
-      if (!canRelease(actor, item)) throw new HttpError(403, `You may not release this ${spec.label}.`);
+      if (!canRelease(actor, item))
+        throw new HttpError(403, `You may not release this ${spec.label}.`);
       releasable = normalizeRelease(body?.cells, ownerCell);
     } else {
       if (!isWhite(actor)) throw new HttpError(403, `Only White may reassign this ${spec.label}.`);
@@ -245,7 +280,16 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
    * and `response` may be null for an internal call (see `runAs`), in which
    * case `body` is given directly and the value is returned, not sent.
    */
-  async function run({ moduleId, method, route: path, url, actor, request = null, response = null, body: givenBody }) {
+  async function run({
+    moduleId,
+    method,
+    route: path,
+    url,
+    actor,
+    request = null,
+    response = null,
+    body: givenBody,
+  }) {
     const entry = compiled.get(moduleId);
     if (!entry) throw new HttpError(404, 'Unknown module.');
     let route = null;
@@ -255,26 +299,38 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
       const found = candidate.match(path);
       if (!found) continue;
       pathMatched = true;
-      if (candidate.method !== method && !(method === 'HEAD' && candidate.method === 'GET')) continue;
+      if (candidate.method !== method && !(method === 'HEAD' && candidate.method === 'GET'))
+        continue;
       route = candidate;
       params = found;
       break;
     }
-    if (!route) throw new HttpError(pathMatched ? 405 : 404, pathMatched ? 'Method not allowed.' : 'Unknown API route.');
+    if (!route)
+      throw new HttpError(
+        pathMatched ? 405 : 404,
+        pathMatched ? 'Method not allowed.' : 'Unknown API route.',
+      );
 
     const required = route.role ?? (method === 'GET' || method === 'HEAD' ? 'observer' : 'analyst');
     if (!roleAtLeast(actor.role, required)) {
       throw new HttpError(403, `This action needs the ${required} role.`);
     }
 
-    const { item, part } = route.item && route.verb !== 'create' ? resolveItem(entry, route, params, actor) : {};
+    const { item, part } =
+      route.item && route.verb !== 'create' ? resolveItem(entry, route, params, actor) : {};
     if (route.verb === 'change' && !canEdit(actor, item)) {
-      throw new HttpError(403, `Released to your cell for reading only; the ${item.owner_cell} cell owns it.`);
+      throw new HttpError(
+        403,
+        `Released to your cell for reading only; the ${item.owner_cell} cell owns it.`,
+      );
     }
 
-    const body = givenBody !== undefined ? givenBody : MUTATION_METHODS.has(method)
-      ? await readBody(request, route.bodyLimit ?? DEFAULT_BODY_LIMIT)
-      : null;
+    const body =
+      givenBody !== undefined
+        ? givenBody
+        : MUTATION_METHODS.has(method)
+          ? await readBody(request, route.bodyLimit ?? DEFAULT_BODY_LIMIT)
+          : null;
     const actorName = actor.name;
 
     let value;
@@ -295,15 +351,39 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
         cells = liveCellsFor(item);
       }
       const query = url?.searchParams ?? new URLSearchParams();
-      value = await route.handler({ item, part, params, query, body, owner, access: accessFor(entry, actor), actorName, request, response });
+      value = await route.handler({
+        item,
+        part,
+        params,
+        query,
+        body,
+        owner,
+        access: accessFor(entry, actor),
+        actorName,
+        request,
+        response,
+      });
       if (route.reach === 'handler') {
-        if (!value?.[ANNOUNCE]) throw new Error(`${moduleId}: ${method} ${route.path} must return announce(value, cells).`);
+        if (!value?.[ANNOUNCE])
+          throw new Error(
+            `${moduleId}: ${method} ${route.path} must return announce(value, cells).`,
+          );
         ({ value, cells } = value);
       } else if (value?.[ANNOUNCE]) {
-        throw new Error(`${moduleId}: ${method} ${route.path} returned announce() without reach: 'handler'.`);
+        throw new Error(
+          `${moduleId}: ${method} ${route.path} returned announce() without reach: 'handler'.`,
+        );
       }
-      if (route.verb === 'create' && value && typeof value === 'object' && 'owner_cell' in value && value.owner_cell !== owner.owner_cell) {
-        throw new Error(`${moduleId}: ${method} ${route.path} stored owner_cell "${value.owner_cell}", not "${owner.owner_cell}".`);
+      if (
+        route.verb === 'create' &&
+        value &&
+        typeof value === 'object' &&
+        'owner_cell' in value &&
+        value.owner_cell !== owner.owner_cell
+      ) {
+        throw new Error(
+          `${moduleId}: ${method} ${route.path} stored owner_cell "${value.owner_cell}", not "${owner.owner_cell}".`,
+        );
       }
     }
 
@@ -318,7 +398,15 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
 
   /** The HTTP entry point, called by server/api.js after authentication. */
   async function handle({ moduleId, route, url, request, response, actor, client, rawClient }) {
-    const result = await run({ moduleId, method: request.method, route, url, actor, request, response });
+    const result = await run({
+      moduleId,
+      method: request.method,
+      route,
+      url,
+      actor,
+      request,
+      response,
+    });
     if (result.changes) {
       const finish = () => {
         if (response.statusCode >= 400) return;
@@ -331,7 +419,13 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
           at: new Date().toISOString(),
           ...(result.cells ? { cells: result.cells } : {}),
         });
-        audit({ user: actor.name, method: request.method, path: url.pathname, status: response.statusCode, client: rawClient });
+        audit({
+          user: actor.name,
+          method: request.method,
+          path: url.pathname,
+          status: response.statusCode,
+          client: rawClient,
+        });
       };
       if (response.writableEnded) finish();
       else response.once('finish', finish);
@@ -359,12 +453,22 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
   /** Every route of every module, for generated sweep tests. */
   function describe() {
     return [...compiled.values()].flatMap((entry) =>
-      entry.routes.map(({ method, path, verb, item, part, role }) => ({ module: entry.module.id, method, path, verb, item, part, role })),
+      entry.routes.map(({ method, path, verb, item, part, role }) => ({
+        module: entry.module.id,
+        method,
+        path,
+        verb,
+        item,
+        part,
+        role,
+      })),
     );
   }
 
   for (const module of modules) {
-    module.connect?.({ runAs: (actor, method, route, body) => runAs(actor, module.id, method, route, body) });
+    module.connect?.({
+      runAs: (actor, method, route, body) => runAs(actor, module.id, method, route, body),
+    });
   }
 
   return { handle, runAs, describe };

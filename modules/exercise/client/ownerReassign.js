@@ -20,7 +20,12 @@ export function renderOwnerReassign(currentOwner, onReassign) {
   const select = document.createElement('select');
   ['white', 'blue', 'red'].forEach((cell) => {
     select.append(
-      new Option(cell[0].toUpperCase() + cell.slice(1), cell, cell === currentOwner, cell === currentOwner),
+      new Option(
+        cell[0].toUpperCase() + cell.slice(1),
+        cell,
+        cell === currentOwner,
+        cell === currentOwner,
+      ),
     );
   });
   select.addEventListener('change', () => onReassign(select.value));

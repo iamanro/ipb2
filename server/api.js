@@ -201,7 +201,11 @@ function clientIp(request) {
  * every subscriber a value they could resend as their own. */
 function hashClientId(rawClientId) {
   if (!rawClientId) return null;
-  return crypto.createHash('sha256').update(rawClientId).digest('hex').slice(0, CLIENT_ID_HASH_LENGTH);
+  return crypto
+    .createHash('sha256')
+    .update(rawClientId)
+    .digest('hex')
+    .slice(0, CLIENT_ID_HASH_LENGTH);
 }
 
 /** Audits an `/api/auth/*` mutation (user management, self-service password
@@ -261,7 +265,10 @@ export function createApiMiddleware(mode) {
   }
 
   const lifecycle = createExerciseLifecycle({ getAuthStore: ensureAuthStore });
-  const dispatcher = createDispatcher(modules, { publish, audit: (entry) => ensureAuthStore().audit(entry) });
+  const dispatcher = createDispatcher(modules, {
+    publish,
+    audit: (entry) => ensureAuthStore().audit(entry),
+  });
 
   function sessionToken(request) {
     return parseCookies(request.headers.cookie)[SESSION_COOKIE];
@@ -409,7 +416,8 @@ export function createApiMiddleware(mode) {
     }
     if (userMatch && request.method === 'DELETE') {
       const name = decodeURIComponent(userMatch[1]);
-      if (name === request.user.name) throw new HttpError(409, "You can't delete your own account.");
+      if (name === request.user.name)
+        throw new HttpError(409, "You can't delete your own account.");
       store.removeUser(name);
       closeStreamsForUser(name);
       auditAuthAction(store, request, `${url.pathname}`, 200);
@@ -615,7 +623,8 @@ export function createApiMiddleware(mode) {
       // dispatcher checks the role, resolves the item, announces and audits.
       // The raw client id is never broadcast (IPB-AUTH-006), only its hash:
       // `src/live.js` hashes its own id the same way to skip its own echo.
-      const rawClientId = String(request.headers['x-client-id'] || '').slice(0, CLIENT_ID_HEADER_MAX) || null;
+      const rawClientId =
+        String(request.headers['x-client-id'] || '').slice(0, CLIENT_ID_HEADER_MAX) || null;
       await dispatcher.handle({
         moduleId,
         route,

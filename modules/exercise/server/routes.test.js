@@ -16,7 +16,8 @@ const WHITE_OBSERVER = { name: 'wo', admin: false, cell: 'white', role: 'observe
 const BLUE_ANALYST = { name: 'ba', admin: false, cell: 'blue', role: 'analyst' };
 const BLUE_OBSERVER = { name: 'bo', admin: false, cell: 'blue', role: 'observer' };
 
-const call = (actor, method, route, body) => dispatcher.runAs(actor, 'exercise', method, route, body);
+const call = (actor, method, route, body) =>
+  dispatcher.runAs(actor, 'exercise', method, route, body);
 
 beforeAll(async () => {
   stateRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-exercise-routes-test-'));
@@ -24,7 +25,10 @@ beforeAll(async () => {
   process.env.IPB_STATE_ROOT = stateRoot;
   process.env.IPB_DATA_ROOT = dataRoot;
   mkdirSync(path.join(dataRoot, 'exercise'), { recursive: true });
-  writeFileSync(path.join(dataRoot, 'exercise', 'regions.json'), JSON.stringify({ type: 'FeatureCollection', features: [] }));
+  writeFileSync(
+    path.join(dataRoot, 'exercise', 'regions.json'),
+    JSON.stringify({ type: 'FeatureCollection', features: [] }),
+  );
   routes = (await import('./routes.js')).default;
 });
 
@@ -45,7 +49,9 @@ afterEach(() => {
 
 describe('scenario-events: game-master only, even for a plain GET', () => {
   test('an analyst is refused; a game-master (any cell) reads the schedule', async () => {
-    await expect(call(BLUE_ANALYST, 'GET', 'scenario-events')).rejects.toMatchObject({ status: 403 });
+    await expect(call(BLUE_ANALYST, 'GET', 'scenario-events')).rejects.toMatchObject({
+      status: 403,
+    });
     const event = await call(GM, 'POST', 'scenario-events', {
       trigger_at: new Date(Date.now() + 3_600_000).toISOString(),
       kind: 'message',
@@ -66,13 +72,17 @@ describe('activity: scenario scheduling is White-only, ordinary activity is not'
     });
 
     const asGm = await call(GM, 'GET', 'activity');
-    expect(asGm.map((row) => row.action)).toEqual(expect.arrayContaining(['scenario:schedule', 'requirement:create']));
+    expect(asGm.map((row) => row.action)).toEqual(
+      expect.arrayContaining(['scenario:schedule', 'requirement:create']),
+    );
 
     // Same cell (White), lower role: sees it too — the activity log is
     // scoped by cell (docs/adr/0002), not by the extra role check
     // `scenario-events` itself still enforces.
     const asWhiteObserver = await call(WHITE_OBSERVER, 'GET', 'activity');
-    expect(asWhiteObserver.map((row) => row.action)).toEqual(expect.arrayContaining(['scenario:schedule', 'requirement:create']));
+    expect(asWhiteObserver.map((row) => row.action)).toEqual(
+      expect.arrayContaining(['scenario:schedule', 'requirement:create']),
+    );
 
     const asBlue = await call(BLUE_OBSERVER, 'GET', 'activity');
     expect(asBlue.some((row) => row.action === 'scenario:schedule')).toBe(false);
@@ -81,7 +91,9 @@ describe('activity: scenario scheduling is White-only, ordinary activity is not'
 
 describe('collectors/taskings: collection-manager role, not just analyst', () => {
   test('an analyst is refused; a collection-manager (their own cell) may create', async () => {
-    await expect(call(BLUE_ANALYST, 'POST', 'collectors', { name: 'UAS-1', discipline: 'UAS' })).rejects.toMatchObject({ status: 403 });
+    await expect(
+      call(BLUE_ANALYST, 'POST', 'collectors', { name: 'UAS-1', discipline: 'UAS' }),
+    ).rejects.toMatchObject({ status: 403 });
     const cm = { ...BLUE_ANALYST, role: 'collection-manager' };
     const collector = await call(cm, 'POST', 'collectors', { name: 'UAS-1', discipline: 'UAS' });
     expect(collector).toMatchObject({ name: 'UAS-1', owner_cell: 'blue' });
@@ -94,10 +106,17 @@ describe('collectors/taskings: collection-manager role, not just analyst', () =>
 
 describe('release/reassign are generated for every releasable item kind', () => {
   test('POST .../:item/release and PATCH .../:item/owner work exactly as the dispatcher promises', async () => {
-    const requirement = await call(BLUE_ANALYST, 'POST', 'requirements', { kind: 'PIR', text: 'x' });
-    const released = await call(BLUE_ANALYST, 'POST', `requirements/${requirement.id}/release`, { cells: ['red'] });
+    const requirement = await call(BLUE_ANALYST, 'POST', 'requirements', {
+      kind: 'PIR',
+      text: 'x',
+    });
+    const released = await call(BLUE_ANALYST, 'POST', `requirements/${requirement.id}/release`, {
+      cells: ['red'],
+    });
     expect(released.releasable_to).toEqual(['red']);
-    const reassigned = await call(GM, 'PATCH', `requirements/${requirement.id}/owner`, { owner_cell: 'red' });
+    const reassigned = await call(GM, 'PATCH', `requirements/${requirement.id}/owner`, {
+      owner_cell: 'red',
+    });
     expect(reassigned).toMatchObject({ owner_cell: 'red', releasable_to: [] });
   });
 });

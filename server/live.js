@@ -102,7 +102,9 @@ export function handleLive(
       const meta = clients.get(response);
       const changed =
         meta &&
-        (result.cell !== meta.cell || result.role !== meta.role || Boolean(result.admin) !== meta.admin);
+        (result.cell !== meta.cell ||
+          result.role !== meta.role ||
+          Boolean(result.admin) !== meta.admin);
       if (changed) {
         forget(response);
         response.end();

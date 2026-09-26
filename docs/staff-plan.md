@@ -5,6 +5,7 @@ Goal: the app can run an exercise intelligence cell end to end. That means the t
 Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchronization), FM 2-0, APP-6(D)/MIL-STD-2525E symbology, ADP 1-02 graphics.
 
 ## Items → deliverables
+
 1. **Units on the map.** A shared SIDC symbol picker. IPB threats get a SIDC and an ORBAT link. SITEMP unit symbols are placed per COA. The **current situation** (enemy/unknown/friendly tracks with a time and position history) is app-wide and owned by Exercise; it is shown on the Exercise Situation map and as an IPB overlay.
 2. **Reports with location.** Reports carry lon/lat and a type (free / SPOTREP / SALUTE) with structured fields and a reported SIDC. They are plotted on the maps. They are linked to NAIs automatically by point-in-polygon, and they can update a track. Injects carry the same report payload, including location.
 3. **Collection plan.** IPB NAIs and TAIs are imported with geometry; SIRs reference real NAIs. Collectors (discipline, unit, range, availability) are tasked against SIR × NAI × time window. There is an ISR synchronization matrix (a Gantt over scenario time) and generated SOR text.
@@ -33,27 +34,31 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
    - A classification marking on every print.
 
 ## Waves
+
 - **Wave 0 (done by lead):** localhost binding; `src/dtg.js` + tests.
 - **Wave 1 (parallel):** Access, MapKit, Symbols, IpbServer, ExerciseServer, EquipmentRanges. Servers and shared libraries only.
 - **Wave 2 (parallel, after wave 1):** IpbClientA, IpbClientB, ExerciseClientA, ExerciseClientB. UI only, built on wave 1 contracts.
 - **Wave 3 (lead):** integration, real-browser end-to-end tests, a security review, README.
 
 ## File ownership (wave 1)
-| Agent | Owns | May touch surgically |
-|---|---|---|
-| Access | `server/auth.js`, `server/access.js`, `server/live.js`, `server/tools/users.mjs`, `src/session.js`, `src/live.js`, login UI in `src/` + `index.html`, `server/api.js` | `package.json` scripts, `src/main.js`, `src/shell.css`, README |
-| MapKit | `src/map.js`, new `src/tactical.js`, new `src/measure.js` | README |
-| Symbols | new `src/symbols/*` (moved from `modules/orbat/client/sidc.js`, `symbology.js`, `symbol.js`), `modules/orbat/client/*` imports | README |
-| IpbServer | `modules/ipb/server/*`, `server/state.js` (rebuild-migration support) | README |
-| ExerciseServer | `modules/exercise/server/*` | README |
-| EquipmentRanges | `modules/equipment/server/*` (new `ranges.js`) | README |
+
+| Agent           | Owns                                                                                                                                                                  | May touch surgically                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Access          | `server/auth.js`, `server/access.js`, `server/live.js`, `server/tools/users.mjs`, `src/session.js`, `src/live.js`, login UI in `src/` + `index.html`, `server/api.js` | `package.json` scripts, `src/main.js`, `src/shell.css`, README |
+| MapKit          | `src/map.js`, new `src/tactical.js`, new `src/measure.js`                                                                                                             | README                                                         |
+| Symbols         | new `src/symbols/*` (moved from `modules/orbat/client/sidc.js`, `symbology.js`, `symbol.js`), `modules/orbat/client/*` imports                                        | README                                                         |
+| IpbServer       | `modules/ipb/server/*`, `server/state.js` (rebuild-migration support)                                                                                                 | README                                                         |
+| ExerciseServer  | `modules/exercise/server/*`                                                                                                                                           | README                                                         |
+| EquipmentRanges | `modules/equipment/server/*` (new `ranges.js`)                                                                                                                        | README                                                         |
 
 ## Contracts
 
 ### C1 Time (`src/dtg.js`, done)
+
 `formatDtg(ms)` → `251430ZSEP26`; `parseDtg(text, ref)`; `formatHOffset(min)` / `parseHOffset(text)`; `parsePlannedTime(text, ref)` → `{at}` | `{offset}` | null; `resolveTime({at, offset}, hHour)`; `formatPlannedTime(time, hHour)`. Server stores absolute times as ISO strings and offsets as integer minutes. Server code may import `src/dtg.js` (pure, no DOM).
 
 ### C2 Live updates
+
 - Server `server/live.js`: `publish(event)`; `GET /api/live` is an SSE stream, handled in `api.js` before module dispatch.
 - After every successful (status < 400) non-GET `/api/<module>/…` request, `api.js` publishes `{ module, method, route, client, user, at }`. `client` is the `X-Client-Id` request header. Modules need no changes.
 - Client `src/live.js` exports:
@@ -62,6 +67,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 - A subscriber refetches what it shows. There is no field-level merge; last write wins.
 
 ### C3 Access
+
 - **Modes:** `IPB_AUTH=off|on`. The default is `off` when the server is bound to a loopback host and `on` otherwise; `npm run dev:lan` / `start:lan` bind `::` with `IPB_AUTH=on`.
   - `off`: every request acts as `{ name: 'local', role: 'game-master' }`.
   - `on` with no users: `/api/*` answers 503 with the command that creates one.
@@ -78,6 +84,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 - **Client:** `src/session.js`: `await loadSession()`, `currentUser()`, `can(role)`. When the session is missing (401), the shell shows a login screen; a user chip with sign-out sits in the masthead. Wave 2 UIs hide or disable controls the role can't use; the server enforces anyway.
 
 ### C4 Symbols (`src/symbols/`)
+
 - The SIDC is always 20-digit numeric APP-6(D)/2525E.
 - Moved from ORBAT, with ORBAT migrated to import them (no copies left behind): `symbology.js` tables and `sidc.js` helpers.
 - New in `symbol.js`: `symbolCanvas(sidc, { size, designation, dtg })` and `symbolSvg(…)`.
@@ -90,6 +97,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 - `defaultThreatSidc(echelonName)` = hostile land unit, infantry, with that echelon.
 
 ### C5 Map (`src/map.js`), additions only; existing API stays
+
 - **Feature kinds rendered:**
   - `symbol`: a Point with `properties.sidc`, plus optional `designation` and `dtg` via milsymbol modifiers.
   - `graphic`: a line or polygon with `properties.graphic` (a key of `TACTICAL_GRAPHICS`), `properties.name`, `properties.affiliation`.
@@ -108,6 +116,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 - `exportCanvas()` includes the situation, graphics and range rings.
 
 ### C6 IPB server (`/api/ipb`)
+
 - **`server/state.js`:** a migration may be `{ sql, rebuild: true }`. It runs outside the transaction with `PRAGMA foreign_keys=OFF`, then `PRAGMA foreign_key_check` (throw on violations), then foreign keys back ON, per SQLite's 12-step ALTER procedure. Plain strings behave as today.
 - **features:**
   - `layer` adds `unit`, `graphic`, `range-ring`; `kind` adds `graphic`, `range-ring`.
@@ -128,6 +137,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 - `GET studies/:id` returns all of the new children.
 
 ### C7 Exercise server (`/api/exercise`)
+
 - **reports:** + `lon`, `lat` (both or neither), + `report_type` (`free`|`spotrep`|`salute`, default free), + `fields` (JSON; salute: `size, activity, location, unit, time, equipment`; spotrep: `size, activity, location, unit, time, equipment, remarks`), + `sidc` (nullable, validated), + `nai_id` (FK nais, SET NULL), + `track_id` (FK tracks, SET NULL). On create or location change, if `nai_id` isn't given, set it to the first NAI polygon containing the point (or within 250 m of a point NAI).
 - **nais:** `(id, source UNIQUE, study_id, feature_id, kind 'nai'|'tai', label, geometry JSON)`. They are filled by the IPB import, whose payload adds `nais: [{id, label, kind, geometry}]` (TAIs included) and, optionally, `decision_points`. SIRs get `nai_id` (FK, SET NULL), set by the import instead of text-only.
 - **tracks:** `(id, sidc, designation, status 'confirmed'|'suspected'|'destroyed'|'lost', lon, lat, observed_at, notes, created_at, updated_at)`. **track_positions:** `(id, track_id CASCADE, lon, lat, observed_at, report_id SET NULL)`.
@@ -142,6 +152,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 - All times are ISO; scenario time comes from the clock.
 
 ### C8 Equipment ranges (`/api/equipment`)
+
 - `GET cards/:identifier/ranges` → `[{ system, kind: 'effective'|'maximum'|'minimum'|'sight'|'other', min_m, max_m, raw }]`.
   - Parsed from `properties` whose name matches /range/i, units m or km, values like `2,000-3,000`, `200-1,800m`, `1,220 m`; `INA` and non-distance values are skipped.
   - `system` = the parent section path, e.g. "Main Armament › Ammunition (Option 1)".
@@ -149,6 +160,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 - `POST ranges {identifiers: [...]}` → a map for batch use.
 
 ## Wave 2 (clients)
+
 - **IpbClientA:**
   - step 1: ASCOPE×PMESII matrix and weather effects matrix (thresholds editable, forecast-driven);
   - map toolbar: tactical graphics palette, measure tool, range rings (manual, or "weapon ranges" from a threat's WEG card via C8);
@@ -168,9 +180,11 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
   - role-aware UI via `can()`.
 
 ## Definition of done (every item)
+
 Server tests for the invariants; a real-browser smoke test with screenshots; `npx vp lint` clean; README updated; no console errors; the existing suite (currently 337 tests) green; the existing e2e green.
 
 ## Wave 1 as implemented (binding for wave 2)
+
 - **All 670 tests green; lint clean.** Your real state DBs are migrated: ipb v10, exercise v8.
 - **C2/C3:**
   - `src/session.js`: `loadSession`, `sessionMode`, `currentUser`, `can(role)`, `onUnauthorized`, `handleUnauthorized`.

@@ -16,7 +16,10 @@ describe('computeTimeWindow', () => {
   test('fits every tasking span plus LTIOVs, padded an hour', () => {
     const taskings = [
       { start_at: new Date(NOW).toISOString(), end_at: new Date(NOW + 2 * H).toISOString() },
-      { start_at: new Date(NOW + 5 * H).toISOString(), end_at: new Date(NOW + 6 * H).toISOString() },
+      {
+        start_at: new Date(NOW + 5 * H).toISOString(),
+        end_at: new Date(NOW + 6 * H).toISOString(),
+      },
     ];
     const window = computeTimeWindow(taskings, [NOW + 8 * H], NOW);
     expect(window.start).toBe(NOW - H);
@@ -67,8 +70,18 @@ describe('buildMatrixRows', () => {
 
   test('a SIR row labels its NAI and sorts taskings by start', () => {
     const taskings = [
-      { id: 1, sir_id: 100, start_at: new Date(NOW + 3 * H).toISOString(), end_at: new Date(NOW + 4 * H).toISOString() },
-      { id: 2, sir_id: 100, start_at: new Date(NOW).toISOString(), end_at: new Date(NOW + H).toISOString() },
+      {
+        id: 1,
+        sir_id: 100,
+        start_at: new Date(NOW + 3 * H).toISOString(),
+        end_at: new Date(NOW + 4 * H).toISOString(),
+      },
+      {
+        id: 2,
+        sir_id: 100,
+        start_at: new Date(NOW).toISOString(),
+        end_at: new Date(NOW + H).toISOString(),
+      },
     ];
     const rows = buildMatrixRows(requirements, taskings, nais);
     const sirRow = rows.find((r) => r.id === 100);

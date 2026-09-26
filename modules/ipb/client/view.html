@@ -1,7 +1,15 @@
 <div class="workspace" id="workspace" data-tools="open" data-worksheet="open">
   <!-- Print-only classification marking, repeated on every printed page. -->
-  <div class="classification-banner classification-banner-top" id="classification-banner-top" aria-hidden="true"></div>
-  <div class="classification-banner classification-banner-bottom" id="classification-banner-bottom" aria-hidden="true"></div>
+  <div
+    class="classification-banner classification-banner-top"
+    id="classification-banner-top"
+    aria-hidden="true"
+  ></div>
+  <div
+    class="classification-banner classification-banner-bottom"
+    id="classification-banner-bottom"
+    aria-hidden="true"
+  ></div>
   <!-- Relocated into #masthead-status on mount (buildMastheadStatus): the study
        switcher and the active-scenario chip live in the masthead, next to the
        source status, not floating over the map or duplicated in the panel. -->
@@ -60,11 +68,18 @@
       <div class="map-popover" id="map-popover" role="region" aria-label="Map layers" hidden>
         <section class="map-popover-section">
           <h3>Basemap</h3>
-          <div class="basemap-switch" id="basemap-switch" role="radiogroup" aria-label="Basemap"></div>
+          <div
+            class="basemap-switch"
+            id="basemap-switch"
+            role="radiogroup"
+            aria-label="Basemap"
+          ></div>
         </section>
         <section class="map-popover-section">
           <h3>Overlays</h3>
-          <button class="grid-switch" id="grid-toggle" type="button" aria-pressed="true">MGRS grid</button>
+          <button class="grid-switch" id="grid-toggle" type="button" aria-pressed="true">
+            MGRS grid
+          </button>
           <div class="overlay-list" id="overlay-list"></div>
         </section>
         <p class="map-popover-scenario" id="map-popover-scenario" hidden></p>
@@ -100,7 +115,10 @@
           title="Show or hide the tools ([)"
           aria-keyshortcuts="["
         >
-          <svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M6 2.5v11"/></svg><span class="visually-hidden">Tools</span>
+          <svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="1" />
+            <path d="M6 2.5v11" /></svg
+          ><span class="visually-hidden">Tools</span>
         </button>
         <button
           class="sheet-toggle sheet-toggle-worksheet"
@@ -111,7 +129,10 @@
           title="Show or hide the worksheet (])"
           aria-keyshortcuts="]"
         >
-          <svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M10 2.5v11"/></svg><span class="visually-hidden">Worksheet</span>
+          <svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="1" />
+            <path d="M10 2.5v11" /></svg
+          ><span class="visually-hidden">Worksheet</span>
         </button>
         <button class="zoom-button" id="zoom-out" type="button" aria-label="Zoom out">−</button>
         <button class="zoom-button" id="zoom-in" type="button" aria-label="Zoom in">+</button>
@@ -126,7 +147,13 @@
           ⓘ
         </button>
       </div>
-      <div class="info-popover" id="info-popover" role="region" aria-label="Map information" hidden></div>
+      <div
+        class="info-popover"
+        id="info-popover"
+        role="region"
+        aria-label="Map information"
+        hidden
+      ></div>
     </div>
 
     <div class="map-empty" id="map-empty">

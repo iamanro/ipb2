@@ -186,7 +186,9 @@ function unitRow(feature, threatsById, canEdit) {
       feature.properties?.designation || 'Unit',
     ),
   );
-  const threat = feature.properties?.threat_id ? threatsById.get(String(feature.properties.threat_id)) : null;
+  const threat = feature.properties?.threat_id
+    ? threatsById.get(String(feature.properties.threat_id))
+    : null;
   const text = createElement(
     'button',
     'feature-label',
@@ -198,7 +200,9 @@ function unitRow(feature, threatsById, canEdit) {
   row.append(icon, text);
   if (threat) row.append(createElement('span', 'panel-note', `(${threat.name})`));
   if (state.showAllCoas) {
-    const coa = state.study.coas.find((entry) => String(entry.id) === String(feature.properties?.coa_id));
+    const coa = state.study.coas.find(
+      (entry) => String(entry.id) === String(feature.properties?.coa_id),
+    );
     if (coa) row.append(createElement('span', 'coa-kind', coa.name));
   }
   if (canEdit) {

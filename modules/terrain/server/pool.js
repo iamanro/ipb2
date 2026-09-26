@@ -89,7 +89,10 @@ export function createTerrainPool({ size, workerFile = WORKER_FILE } = {}) {
     slot.job = null;
     releaseUser(job);
     if (message.ok) job.resolve(message.result);
-    else job.reject(new HttpError(message.status || 500, message.message || 'Terrain analysis failed.'));
+    else
+      job.reject(
+        new HttpError(message.status || 500, message.message || 'Terrain analysis failed.'),
+      );
     pump();
   }
 
@@ -185,7 +188,16 @@ export function createTerrainPool({ size, workerFile = WORKER_FILE } = {}) {
       throw new HttpError(503, 'Terrain analysis is busy, try again shortly.');
     }
 
-    const job = { id: nextId++, kind, payload, user: key, tile, queued: true, slot: null, settled: false };
+    const job = {
+      id: nextId++,
+      kind,
+      payload,
+      user: key,
+      tile,
+      queued: true,
+      slot: null,
+      settled: false,
+    };
     if (!tile) {
       if (!byUser.has(key)) byUser.set(key, new Set());
       byUser.get(key).add(job);

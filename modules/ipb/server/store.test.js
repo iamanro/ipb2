@@ -451,7 +451,7 @@ describe('openStore: feature layers (unit, graphic, range-ring)', () => {
     );
   });
 
-  test('a unit feature\'s sidc is canonicalized: spaces/dashes stripped to the dense 20-digit form', () => {
+  test("a unit feature's sidc is canonicalized: spaces/dashes stripped to the dense 20-digit form", () => {
     const grouped = '3003 1000-0012 1100 0000';
     const created = store.createChild('features', studyId, {
       layer: 'unit',
@@ -935,14 +935,14 @@ describe('openStore: listStudies uses the access capability', () => {
     };
   }
 
-  test('applies the capability\'s visibility condition and keeps newest-updated-first ordering', () => {
+  test("applies the capability's visibility condition and keeps newest-updated-first ordering", () => {
     store.createStudy({ name: 'Blue A' }, { owner_cell: 'blue', releasable_to: [] });
     const redStudy = store.createStudy({ name: 'Red A' }, { owner_cell: 'red', releasable_to: [] });
     store.createStudy({ name: 'White A' }, { owner_cell: 'white', releasable_to: [] });
 
-    expect(store.listStudies(access('s.owner_cell = ?', ['blue'])).items.map((s) => s.name)).toEqual([
-      'Blue A',
-    ]);
+    expect(
+      store.listStudies(access('s.owner_cell = ?', ['blue'])).items.map((s) => s.name),
+    ).toEqual(['Blue A']);
     expect(store.listStudies(access('1=1')).items.map((s) => s.name)).toEqual([
       'White A',
       'Red A',

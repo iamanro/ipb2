@@ -50,7 +50,10 @@ function showTrackInfo(track) {
   fact('Status', track.status);
   fact('Last DTG', track.observed_at ? formatDtg(new Date(track.observed_at).getTime()) : '—');
   fact('MGRS', formatMgrs(track.lon, track.lat));
-  fact('History', `${track.history?.length ?? 0} position${(track.history?.length ?? 0) === 1 ? '' : 's'}`);
+  fact(
+    'History',
+    `${track.history?.length ?? 0} position${(track.history?.length ?? 0) === 1 ? '' : 's'}`,
+  );
   card.append(facts);
 }
 
@@ -90,7 +93,8 @@ function onSelect({ kind, id }) {
     return;
   }
   const report = lastReports.find((entry) => String(entry.id) === String(id));
-  if (report) showReportInfo(report, report.nai_id ? lastNaisById.get(String(report.nai_id)) : null);
+  if (report)
+    showReportInfo(report, report.nai_id ? lastNaisById.get(String(report.nai_id)) : null);
 }
 
 async function refresh() {

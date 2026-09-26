@@ -19,7 +19,13 @@ import {
 // -- fixtures --------------------------------------------------------------
 
 const admin = { name: 'root', admin: true, cell: null, role: null };
-const adminEffectiveWhite = { name: 'root', admin: true, cell: 'white', role: 'game-master', effective: true };
+const adminEffectiveWhite = {
+  name: 'root',
+  admin: true,
+  cell: 'white',
+  role: 'game-master',
+  effective: true,
+};
 const whiteGm = { name: 'wendy', admin: false, cell: 'white', role: 'game-master' };
 const blueAnalyst = { name: 'bob', admin: false, cell: 'blue', role: 'analyst' };
 const blueObserver = { name: 'billie', admin: false, cell: 'blue', role: 'observer' };
@@ -72,12 +78,12 @@ test('canSee: white and admin see every item regardless of owner or release', ()
   expect(canSee(adminEffectiveWhite, item('red', '[]'))).toBe(true);
 });
 
-test('canSee: a cell member sees their own cell\'s items', () => {
+test("canSee: a cell member sees their own cell's items", () => {
   expect(canSee(blueAnalyst, item('blue', []))).toBe(true);
   expect(canSee(redAnalyst, item('red', '[]'))).toBe(true);
 });
 
-test('canSee: a cell member does not see another cell\'s unreleased item', () => {
+test("canSee: a cell member does not see another cell's unreleased item", () => {
   expect(canSee(blueAnalyst, item('red', []))).toBe(false);
   expect(canSee(redAnalyst, item('blue', '[]'))).toBe(false);
 });

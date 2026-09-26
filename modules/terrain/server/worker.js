@@ -115,6 +115,11 @@ parentPort.on('message', async ({ id, kind, payload }) => {
     parentPort.postMessage({ id, ok: true, result }, transferablesOf(result));
   } catch (error) {
     const status = error instanceof HttpError ? error.status : DEFAULT_ERROR_STATUS[kind] || 500;
-    parentPort.postMessage({ id, ok: false, status, message: error.message || 'Terrain analysis failed.' });
+    parentPort.postMessage({
+      id,
+      ok: false,
+      status,
+      message: error.message || 'Terrain analysis failed.',
+    });
   }
 });

@@ -43,7 +43,12 @@ export const DISCIPLINE_TAG = {
  * Auto-fit window over every tasking's [start_at, end_at] plus any LTIOV,
  * padded by an hour either side; falls back to now ± 3h with nothing to fit.
  */
-export function computeTimeWindow(taskings, ltiovTimes = [], nowMs = Date.now(), { paddingHours = 1 } = {}) {
+export function computeTimeWindow(
+  taskings,
+  ltiovTimes = [],
+  nowMs = Date.now(),
+  { paddingHours = 1 } = {},
+) {
   const times = [
     ...taskings.map((t) => new Date(t.start_at).getTime()),
     ...taskings.map((t) => new Date(t.end_at).getTime()),
@@ -139,7 +144,8 @@ export function conflictDescription(conflicts, taskingId, taskingsById) {
     parts.push(`overlaps tasking #${other}${otherTasking ? ` (${otherTasking.sor})` : ''}`);
   }
   for (const entry of conflicts?.outside ?? []) {
-    if (entry.tasking_id === taskingId) parts.push('scheduled outside the collector\u2019s availability window');
+    if (entry.tasking_id === taskingId)
+      parts.push('scheduled outside the collector\u2019s availability window');
   }
   return parts.join('; ');
 }
@@ -202,7 +208,11 @@ export function renderSyncMatrixSvg({
   // Time axis ticks (hourly if the window is short, else every few hours).
   const spanHours = (timeWindow.end - timeWindow.start) / HOUR;
   const step = spanHours <= 12 ? 1 : spanHours <= 48 ? 4 : 12;
-  for (let h = Math.ceil(timeWindow.start / HOUR / step) * step; h * HOUR < timeWindow.end; h += step) {
+  for (
+    let h = Math.ceil(timeWindow.start / HOUR / step) * step;
+    h * HOUR < timeWindow.end;
+    h += step
+  ) {
     const ms = h * HOUR;
     const x = LABEL_W + PADDING + scale(ms);
     svg.append(
@@ -239,7 +249,12 @@ export function renderSyncMatrixSvg({
     defs.append(clipPath);
     label.setAttribute('clip-path', `url(#sync-label-clip-${index})`);
 
-    if (row.kind === 'pir' && row.ltiov !== null && row.ltiov >= timeWindow.start && row.ltiov <= timeWindow.end) {
+    if (
+      row.kind === 'pir' &&
+      row.ltiov !== null &&
+      row.ltiov >= timeWindow.start &&
+      row.ltiov <= timeWindow.end
+    ) {
       const x = LABEL_W + PADDING + scale(row.ltiov);
       const tick = svgEl('g', { class: 'sync-ltiov' });
       tick.append(svgEl('line', { x1: x, x2: x, y1: y, y2: y + ROW_H }));
@@ -272,7 +287,9 @@ export function renderSyncMatrixSvg({
           `${collector?.name ?? `Collector #${tasking.collector_id}`} (${collector?.discipline ?? '?'})`,
           `${tasking.status}`,
           `${tasking.start_at} \u2192 ${tasking.end_at}`,
-          conflicted ? `CONFLICT: ${conflictDescription(conflicts, tasking.id, taskingsById)}` : null,
+          conflicted
+            ? `CONFLICT: ${conflictDescription(conflicts, tasking.id, taskingsById)}`
+            : null,
         ]
           .filter(Boolean)
           .join('\n');
@@ -293,7 +310,11 @@ export function renderSyncMatrixSvg({
           rowGroup.append(tag);
         }
         if (conflicted) {
-          const warn = svgEl('text', { x: endX - 14, y: y + ROW_H / 2 + 4, class: 'sync-conflict-icon' });
+          const warn = svgEl('text', {
+            x: endX - 14,
+            y: y + ROW_H / 2 + 4,
+            class: 'sync-conflict-icon',
+          });
           warn.textContent = '\u26A0';
           rowGroup.append(warn);
         }

@@ -338,7 +338,10 @@ export function mountBuilder({ root, params, confirm }) {
     }
     if (canEditOrbat()) return control;
     const wrap = el('div', 'orbat-release-wrap');
-    wrap.append(control, el('p', 'read-only-note', `Read-only — owned by ${cellLabel(orbat.owner_cell)}.`));
+    wrap.append(
+      control,
+      el('p', 'read-only-note', `Read-only — owned by ${cellLabel(orbat.owner_cell)}.`),
+    );
     return wrap;
   }
 
@@ -513,10 +516,13 @@ export function mountBuilder({ root, params, confirm }) {
   async function duplicateUnit(id) {
     if (!canEditOrbat()) return;
     try {
-      const result = await requestJson(`${API}/orbats/${state.doc.orbat.id}/units/${id}/duplicate`, {
-        method: 'POST',
-        signal,
-      });
+      const result = await requestJson(
+        `${API}/orbats/${state.doc.orbat.id}/units/${id}/duplicate`,
+        {
+          method: 'POST',
+          signal,
+        },
+      );
       applyDocument({ orbat: result.orbat, units: result.units });
       state.selectedUnitId = result.unitId;
       await loadOrbatList();
@@ -922,7 +928,9 @@ export function mountBuilder({ root, params, confirm }) {
         el(
           'p',
           'panel-note chart-pane-empty',
-          canEditOrbat() ? 'No units yet. Use the outline toolbar to add the first one.' : 'No units yet.',
+          canEditOrbat()
+            ? 'No units yet. Use the outline toolbar to add the first one.'
+            : 'No units yet.',
         ),
       );
       return;
@@ -1215,7 +1223,11 @@ export function mountBuilder({ root, params, confirm }) {
 
     if (!canEditOrbat()) {
       inspectorBodyEl.append(
-        el('p', 'panel-note read-only-note', `Read-only — owned by ${cellLabel(state.doc.orbat.owner_cell)}.`),
+        el(
+          'p',
+          'panel-note read-only-note',
+          `Read-only — owned by ${cellLabel(state.doc.orbat.owner_cell)}.`,
+        ),
       );
       const facts = el('dl', 'inspector-facts');
       for (const [label, value] of [

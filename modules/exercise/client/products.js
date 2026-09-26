@@ -105,7 +105,9 @@ export function createProductsController(ctx) {
 
   async function loadDraft(from, to, container) {
     try {
-      const draft = await requestJson(`${api}/products/intsum-draft?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+      const draft = await requestJson(
+        `${api}/products/intsum-draft?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      );
       draftForm = {
         period_start: draft.period_start,
         period_end: draft.period_end,
@@ -165,7 +167,10 @@ export function createProductsController(ctx) {
   }
 
   async function reassignIntsumOwner(intsum, ownerCell) {
-    await requestJson(`${api}/intsums/${intsum.id}/owner`, { method: 'PATCH', body: { owner_cell: ownerCell } });
+    await requestJson(`${api}/intsums/${intsum.id}/owner`, {
+      method: 'PATCH',
+      body: { owner_cell: ownerCell },
+    });
     await load();
     render();
   }
@@ -173,7 +178,13 @@ export function createProductsController(ctx) {
   function renderIntsumEditor(container) {
     const section = createElement('section', 'field-group intsum-editor');
     section.dataset.product = 'intsum-editor';
-    section.append(createElement('h3', null, editing === 'draft' ? 'New INTSUM draft' : `Editing INTSUM ${draftForm.dtg}`));
+    section.append(
+      createElement(
+        'h3',
+        null,
+        editing === 'draft' ? 'New INTSUM draft' : `Editing INTSUM ${draftForm.dtg}`,
+      ),
+    );
 
     // Built alongside the editor so every field's input handler can push its
     // value straight into the matching print-sheet node — no full re-render
@@ -210,8 +221,10 @@ export function createProductsController(ctx) {
     // C2b: release grants read only. A new draft is always editable by its
     // creator (own-cell creation); an existing INTSUM merely released to
     // this cell falls back to the same read-only rendering as a role gate.
-    const editingExisting = editing !== 'draft' && data.intsums.find((intsum) => intsum.id === editing);
-    const canEditThis = editing === 'draft' || (editingExisting ? canEditClient(editingExisting) : true);
+    const editingExisting =
+      editing !== 'draft' && data.intsums.find((intsum) => intsum.id === editing);
+    const canEditThis =
+      editing === 'draft' || (editingExisting ? canEditClient(editingExisting) : true);
     const readOnly = !can('analyst') || !canEditThis;
     INTSUM_SECTIONS.forEach(([key, label]) => {
       const field = createElement('div', 'intsum-field');
@@ -233,7 +246,11 @@ export function createProductsController(ctx) {
     });
 
     if (can('analyst') && canEditThis) {
-      const saveButton = createElement('button', 'primary-button', editing === 'draft' ? 'Save INTSUM' : 'Save changes');
+      const saveButton = createElement(
+        'button',
+        'primary-button',
+        editing === 'draft' ? 'Save INTSUM' : 'Save changes',
+      );
       saveButton.type = 'button';
       saveButton.addEventListener('click', () => saveIntsum(section));
       section.append(saveButton);
@@ -287,7 +304,11 @@ export function createProductsController(ctx) {
     if (can('analyst') && hasCell()) {
       const form = createElement('div', 'requirement-form');
       const { from: defaultFrom, to: defaultTo } = defaultPeriod();
-      const fromInput = createDtgInput({ name: 'period_from', label: 'Period from', value: defaultFrom });
+      const fromInput = createDtgInput({
+        name: 'period_from',
+        label: 'Period from',
+        value: defaultFrom,
+      });
       const toInput = createDtgInput({ name: 'period_to', label: 'Period to', value: defaultTo });
       const draftButton = createElement('button', 'primary-button', 'Generate draft');
       draftButton.type = 'button';
@@ -317,22 +338,33 @@ export function createProductsController(ctx) {
       table.className = 'data-table';
       const head = document.createElement('thead');
       const headRow = document.createElement('tr');
-      ['DTG', 'Period', 'Author', 'Cell', ''].forEach((label) => headRow.append(createElement('th', null, label)));
+      ['DTG', 'Period', 'Author', 'Cell', ''].forEach((label) =>
+        headRow.append(createElement('th', null, label)),
+      );
       head.append(headRow);
       const body = document.createElement('tbody');
       data.intsums.forEach((intsum) => {
         const row = document.createElement('tr');
         row.append(
           createElement('td', null, intsum.dtg),
-          createElement('td', null, `${formatDate(intsum.period_start)} \u2192 ${formatDate(intsum.period_end)}`),
+          createElement(
+            'td',
+            null,
+            `${formatDate(intsum.period_start)} \u2192 ${formatDate(intsum.period_end)}`,
+          ),
           createElement('td', null, intsum.author || '—'),
         );
         const cellCell = document.createElement('td');
         cellCell.append(renderCellBadge(intsum.owner_cell));
         cellCell.append(
-          renderReleaseControl({ item: intsum, onRelease: (cells) => releaseIntsum(intsum, cells) }),
+          renderReleaseControl({
+            item: intsum,
+            onRelease: (cells) => releaseIntsum(intsum, cells),
+          }),
         );
-        appendOwnerReassign(cellCell, intsum.owner_cell, (ownerCell) => reassignIntsumOwner(intsum, ownerCell));
+        appendOwnerReassign(cellCell, intsum.owner_cell, (ownerCell) =>
+          reassignIntsumOwner(intsum, ownerCell),
+        );
         row.append(cellCell);
         const actions = document.createElement('td');
         const openButton = createElement('button', 'text-button', 'Open');
@@ -397,9 +429,7 @@ export function createProductsController(ctx) {
     if (!frame) return;
     const { canvas, attributions, metresPerPixel } = frame;
     const caption = createElement('figcaption');
-    const scaleNote = metresPerPixel
-      ? `~1 px \u2248 ${Math.round(metresPerPixel)} m`
-      : null;
+    const scaleNote = metresPerPixel ? `~1 px \u2248 ${Math.round(metresPerPixel)} m` : null;
     caption.append(
       createElement('strong', null, `Graphic INTSUM — ${classification}`),
       createElement(
@@ -448,10 +478,7 @@ export function createProductsController(ctx) {
     // Deferred: the target must be attached to the DOM before OL measures it.
     requestAnimationFrame(() => {
       const map = ensureMap(target);
-      map.setSituation(
-        { tracks: data.tracks, reports: data.reports },
-        { onSelect: () => {} },
-      );
+      map.setSituation({ tracks: data.tracks, reports: data.reports }, { onSelect: () => {} });
       map.setFeatures(
         data.nais.map((nai) => ({
           id: nai.id,
@@ -481,9 +508,11 @@ export function createProductsController(ctx) {
     legend.append(trackList);
     legend.append(createElement('h4', null, 'Report credibility key'));
     const credibilityList = createElement('ul', null, '');
-    ['1–2 solid marker: confirmed', '3 half-filled: probably true', '4–6 hollow: unconfirmed'].forEach((text) =>
-      credibilityList.append(createElement('li', null, text)),
-    );
+    [
+      '1–2 solid marker: confirmed',
+      '3 half-filled: probably true',
+      '4–6 hollow: unconfirmed',
+    ].forEach((text) => credibilityList.append(createElement('li', null, text)));
     legend.append(credibilityList);
     section.append(legend);
 
@@ -514,7 +543,9 @@ export function createProductsController(ctx) {
     const section = createElement('section', 'field-group salute-section');
     section.dataset.product = 'salute';
     section.append(createElement('h3', null, 'SPOTREP / SALUTE print'));
-    const structuredReports = data.reports.filter((r) => r.report_type === 'salute' || r.report_type === 'spotrep');
+    const structuredReports = data.reports.filter(
+      (r) => r.report_type === 'salute' || r.report_type === 'spotrep',
+    );
     if (!structuredReports.length) {
       section.append(createElement('p', 'panel-note', 'No SALUTE/SPOTREP reports yet.'));
       container.append(section);
@@ -523,7 +554,9 @@ export function createProductsController(ctx) {
     const select = document.createElement('select');
     select.append(new Option('Choose a report…', ''));
     structuredReports.forEach((r) =>
-      select.append(new Option(`#${r.id} ${r.report_type.toUpperCase()} — ${r.text.slice(0, 40)}`, r.id)),
+      select.append(
+        new Option(`#${r.id} ${r.report_type.toUpperCase()} — ${r.text.slice(0, 40)}`, r.id),
+      ),
     );
     select.value = selectedReportId ?? '';
     select.addEventListener('change', () => {
@@ -544,13 +577,20 @@ export function createProductsController(ctx) {
       sheet.append(
         createElement('p', 'classification-banner', DEFAULT_CLASSIFICATION),
         createElement('h4', null, report.report_type.toUpperCase()),
-        createElement('p', 'panel-note', `DTG ${formatDtg(new Date(report.occurred_at ?? report.created_at).getTime())} · MGRS ${formatMgrs(report.lon, report.lat)} · Admiralty ${report.reliability}${report.credibility}`),
+        createElement(
+          'p',
+          'panel-note',
+          `DTG ${formatDtg(new Date(report.occurred_at ?? report.created_at).getTime())} · MGRS ${formatMgrs(report.lon, report.lat)} · Admiralty ${report.reliability}${report.credibility}`,
+        ),
       );
       const dl = document.createElement('dl');
       dl.className = 'salute-fields';
       const fieldSpec = report.report_type === 'spotrep' ? SPOTREP_FIELDS : SALUTE_FIELDS;
       fieldSpec.forEach(([key, label]) => {
-        dl.append(createElement('dt', null, label), createElement('dd', null, report.fields?.[key] || '—'));
+        dl.append(
+          createElement('dt', null, label),
+          createElement('dd', null, report.fields?.[key] || '—'),
+        );
       });
       sheet.append(dl);
       sheet.append(createElement('p', null, report.text));

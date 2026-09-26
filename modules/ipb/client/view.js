@@ -36,7 +36,11 @@ import {
   wmsCapabilitiesUrl,
 } from '../../../src/weather.js';
 import { renderCivilConsiderationsMatrix } from './civil.js';
-import { applyClassificationBanner, renderClassificationField, renderExchangeTools } from './exchange.js';
+import {
+  applyClassificationBanner,
+  renderClassificationField,
+  renderExchangeTools,
+} from './exchange.js';
 import { initMapToolbar, renderGraphicsAndRingsList } from './mapTools.js';
 import { handleUnitPlaced, renderSitempTools, renderSitempWorksheet } from './sitemp.js';
 import { destroySituation, renderSituationOverlayRow, setSituationEnabled } from './situation.js';
@@ -1224,7 +1228,9 @@ function visibleFeatures() {
     // selected COA, unless "show all COAs" is on.
     const coaFiltered = (list) =>
       state.selectedCoaId && !state.showAllCoas
-        ? list.filter((feature) => String(feature.properties?.coa_id) === String(state.selectedCoaId))
+        ? list.filter(
+            (feature) => String(feature.properties?.coa_id) === String(state.selectedCoaId),
+          )
         : list;
     features.push(...coaFiltered(byLayer('coa')), ...coaFiltered(byLayer('unit')));
   }
@@ -1826,13 +1832,18 @@ function renderInfoPopover() {
   const popover = elements.infoPopover;
   if (!popover) return;
   const attributions = elements.mapTarget
-    ? [...elements.mapTarget.querySelectorAll('.ol-attribution li')].map((item) => item.textContent.trim())
+    ? [...elements.mapTarget.querySelectorAll('.ol-attribution li')].map((item) =>
+        item.textContent.trim(),
+      )
     : [];
   popover.replaceChildren();
   const dataset = state.terrainMeta?.elevation?.dataset;
   if (dataset) {
     const row = createElement('div', 'info-popover-row');
-    row.append(createElement('span', 'readout-label', 'Elevation dataset'), createElement('span', null, dataset));
+    row.append(
+      createElement('span', 'readout-label', 'Elevation dataset'),
+      createElement('span', null, dataset),
+    );
     popover.append(row);
   }
   if (attributions.length) {
@@ -2278,7 +2289,9 @@ function scheduleElevationReadout(lon, lat) {
     pointerElevationController = controller;
     try {
       const params = new URLSearchParams({ at: `${lon},${lat}` });
-      const result = await requestJson(`${TERRAIN_API}/elevation?${params}`, { signal: controller.signal });
+      const result = await requestJson(`${TERRAIN_API}/elevation?${params}`, {
+        signal: controller.signal,
+      });
       if (controller.signal.aborted) return;
       elements.pointerElevation.textContent = Number.isFinite(result.elevation)
         ? formatMetres(result.elevation)
@@ -2487,7 +2500,9 @@ async function deleteFeature(feature) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete "${feature.label}"?`))) return;
   try {
-    await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${feature.study_id}/features/${feature.id}`, {
+      method: 'DELETE',
+    });
     state.study.features = state.study.features.filter(
       (entry) => String(entry.id) !== String(feature.id),
     );
@@ -2578,7 +2593,7 @@ function renderStep1Tools() {
       createElement,
       requestJson,
       showError,
-      can: (can('analyst') && canEditStudy()),
+      can: can('analyst') && canEditStudy(),
       getStudyId: () => state.studyId,
       onImported: (items) => {
         state.study.features.push(...items);
@@ -2604,7 +2619,7 @@ function renderStep1Worksheet() {
       createElement,
       requestJson,
       showError,
-      can: (can('analyst') && canEditStudy()),
+      can: can('analyst') && canEditStudy(),
       study,
       studyId: state.studyId,
       getStudyId: () => state.studyId,
@@ -2639,14 +2654,16 @@ function renderStep1Worksheet() {
   // Reuses the forecast the block above already fetched — never refetches.
   const { forecast } = state.weather;
   const forecastHours =
-    forecast.dataKey === forecast.key && forecast.dataKey !== null ? (forecast.data?.[0]?.hours ?? []) : [];
+    forecast.dataKey === forecast.key && forecast.dataKey !== null
+      ? (forecast.data?.[0]?.hours ?? [])
+      : [];
   const weatherEffectsPoint = state.weather.site.value?.point ?? resolveWeatherEffectsPoint(study);
   container.append(
     renderWeatherEffectsBlock({
       createElement,
       requestJson,
       showError,
-      can: (can('analyst') && canEditStudy()),
+      can: can('analyst') && canEditStudy(),
       study,
       hours: forecastHours,
       point: weatherEffectsPoint,
@@ -4222,7 +4239,7 @@ function renderStep2Worksheet() {
       createElement,
       requestJson,
       showError,
-      can: (can('analyst') && canEditStudy()),
+      can: can('analyst') && canEditStudy(),
       study: state.study,
       studyId: state.studyId,
       getStudyId: () => state.studyId,
@@ -4298,7 +4315,9 @@ async function deleteThreat(threat) {
   if (!(can('analyst') && canEditStudy())) return;
   if (!(await askConfirm(`Delete "${threat.name}"?`))) return;
   try {
-    await requestJson(`${API}/studies/${threat.study_id}/threats/${threat.id}`, { method: 'DELETE' });
+    await requestJson(`${API}/studies/${threat.study_id}/threats/${threat.id}`, {
+      method: 'DELETE',
+    });
     state.study.threats = state.study.threats.filter(
       (entry) => String(entry.id) !== String(threat.id),
     );
@@ -5074,9 +5093,7 @@ function renderStep4Tools() {
   const likelyButton = editable(createElement('button', 'chip-button', '+ Most likely COA'));
   likelyButton.type = 'button';
   likelyButton.addEventListener('click', () => createCoa('most-likely'));
-  const dangerousButton = editable(
-    createElement('button', 'chip-button', '+ Most dangerous COA'),
-  );
+  const dangerousButton = editable(createElement('button', 'chip-button', '+ Most dangerous COA'));
   dangerousButton.type = 'button';
   dangerousButton.addEventListener('click', () => createCoa('most-dangerous'));
   coaGroup.append(likelyButton, dangerousButton);
@@ -5101,7 +5118,9 @@ function renderStep4Tools() {
   naiGroup.append(naiRow, taiRow);
   container.append(naiGroup);
 
-  container.append(renderSitempTools({ threats: state.study.threats, canEdit: (can('analyst') && canEditStudy()) }));
+  container.append(
+    renderSitempTools({ threats: state.study.threats, canEdit: can('analyst') && canEditStudy() }),
+  );
 
   return container;
 }
@@ -5112,7 +5131,9 @@ function renderStep4Worksheet() {
   if (!state.study) return;
   container.append(createElement('h3', null, '4 · Determine threat courses of action'));
 
-  container.append(renderHHourField(state.study.study, { canEdit: (can('analyst') && canEditStudy()) }));
+  container.append(
+    renderHHourField(state.study.study, { canEdit: can('analyst') && canEditStudy() }),
+  );
 
   const coaSection = createElement('section', 'worksheet-block');
   coaSection.append(createElement('h4', null, 'Courses of action'));
@@ -5145,7 +5166,10 @@ function renderStep4Worksheet() {
   container.append(naiSection);
 
   container.append(
-    renderSitempWorksheet({ threats: state.study.threats, canEdit: (can('analyst') && canEditStudy()) }),
+    renderSitempWorksheet({
+      threats: state.study.threats,
+      canEdit: can('analyst') && canEditStudy(),
+    }),
   );
 
   container.append(
@@ -5155,7 +5179,7 @@ function renderStep4Worksheet() {
       showError,
       askText,
       askConfirm,
-      can: (can('analyst') && canEditStudy()),
+      can: can('analyst') && canEditStudy(),
       mapController,
       renderRowMenu,
       features: state.study.features,
@@ -5678,13 +5702,25 @@ function isTypingTarget(target) {
 
 function handleOutsideClick(event) {
   const path = event.composedPath();
-  if (!elements.studyMenu.hidden && !path.includes(elements.studyMenu) && !path.includes(elements.studyToggle)) {
+  if (
+    !elements.studyMenu.hidden &&
+    !path.includes(elements.studyMenu) &&
+    !path.includes(elements.studyToggle)
+  ) {
     closeStudyMenu();
   }
-  if (!elements.mapPopover.hidden && !path.includes(elements.mapPopover) && !path.includes(elements.mapMenuToggle)) {
+  if (
+    !elements.mapPopover.hidden &&
+    !path.includes(elements.mapPopover) &&
+    !path.includes(elements.mapMenuToggle)
+  ) {
     closeMapPopover();
   }
-  if (!elements.infoPopover.hidden && !path.includes(elements.infoPopover) && !path.includes(elements.infoToggle)) {
+  if (
+    !elements.infoPopover.hidden &&
+    !path.includes(elements.infoPopover) &&
+    !path.includes(elements.infoToggle)
+  ) {
     closeInfoPopover();
   }
 }
@@ -5760,8 +5796,12 @@ export function mount({ root, status }) {
   // Zoom +/- proxy the map's own (native OpenLayers) zoom control rather than
   // duplicating its logic, so the status bar's buttons stay in one place
   // without a second zoom code path.
-  elements.zoomIn.addEventListener('click', () => elements.mapTarget.querySelector('.ol-zoom-in')?.click());
-  elements.zoomOut.addEventListener('click', () => elements.mapTarget.querySelector('.ol-zoom-out')?.click());
+  elements.zoomIn.addEventListener('click', () =>
+    elements.mapTarget.querySelector('.ol-zoom-in')?.click(),
+  );
+  elements.zoomOut.addEventListener('click', () =>
+    elements.mapTarget.querySelector('.ol-zoom-out')?.click(),
+  );
   elements.mapEmptyCreate.addEventListener('click', createStudy);
   elements.createStudy.addEventListener('click', createStudy);
   elements.studySearch.addEventListener('input', () => {
@@ -5814,7 +5854,7 @@ export function mount({ root, status }) {
     requestJson,
     createElement,
     showError,
-    can: () => (can('analyst') && canEditStudy()),
+    can: () => can('analyst') && canEditStudy(),
     getStudy: () => state.study,
     getStudyId: () => state.studyId,
     getSelectedCoaId: () => state.selectedCoaId,
@@ -5885,10 +5925,7 @@ export function mount({ root, status }) {
   // A plain `selectStudy(state.studyId)` won't do this: it short-circuits
   // when the requested id is already the open one, which is exactly this
   // case, so this reloads the study data directly instead.
-  const unsubscribeLive = subscribe(
-    (event) => event.module === 'ipb',
-    refetchOpenStudy,
-  );
+  const unsubscribeLive = subscribe((event) => event.module === 'ipb', refetchOpenStudy);
 
   readLocation();
   renderStepChrome();
