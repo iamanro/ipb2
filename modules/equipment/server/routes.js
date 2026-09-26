@@ -4,7 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { HttpError, integerParameter, readJson, sendJson } from '../../../server/http.js';
-import { stateDirectory } from '../../../server/state.js';
+import { LIVE_ALL } from '../../../server/policy.js';
+import { referenceFile } from '../../../server/reference.js';
+import { dataDirectory, stateDirectory } from '../../../server/state.js';
 import { openBookmarks } from './bookmarks.js';
 import {
   KINDS,
@@ -16,9 +18,13 @@ import {
   stats,
   taxonomy,
 } from './db.js';
+import { cardRanges } from './ranges.js';
 
 const ID = 'equipment';
-const DATA_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const DATA_ROOT = dataDirectory(
+  ID,
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data'),
+);
 const STATE_ROOT = stateDirectory(
   ID,
   path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state'),
@@ -122,6 +128,35 @@ function apiCard(database, identifier) {
   return card;
 }
 
+const RANGES_BATCH_MAX = 200;
+
+function apiCardRanges(database, identifier) {
+  const ranges = cardRanges(showCard, database, identifier);
+  if (ranges === null) throw new HttpError(404, 'Equipment card not found.');
+  return ranges;
+}
+
+/** `POST ranges {identifiers}`: a map for batch use (a threat's WEG card may
+ * carry several weapon systems worth looking up at once). Unlike the single
+ * GET, an unknown identifier is not an error here: it simply maps to `[]`,
+ * so one bad id in a batch does not fail the rest. */
+function apiBatchRanges(database, body) {
+  if (typeof body !== 'object' || body === null || !Array.isArray(body.identifiers)) {
+    throw new HttpError(400, 'The body must have an "identifiers" array.');
+  }
+  if (body.identifiers.length > RANGES_BATCH_MAX) {
+    throw new HttpError(400, `At most ${RANGES_BATCH_MAX} identifiers per request.`);
+  }
+  const result = {};
+  for (const identifier of body.identifiers) {
+    if (typeof identifier !== 'string' || !identifier.trim()) {
+      throw new HttpError(400, 'Every identifier must be a non-empty string.');
+    }
+    result[identifier] = cardRanges(showCard, database, identifier) ?? [];
+  }
+  return result;
+}
+
 function apiTaxonomy(database, query) {
   const kind = query.get('kind');
   if (kind !== null && !KINDS.includes(kind)) throw new HttpError(400, 'Unknown taxonomy kind.');
@@ -188,6 +223,7 @@ async function handleBookmarks(database, { route, request, response }) {
     }
     if (request.method === 'POST') {
       const body = await readJson(request);
+      request.liveCells = LIVE_ALL; // bookmarks are shared by every cell
       sendJson(response, enrich(bookmarkStore.create(body)), 201);
       return;
     }
@@ -198,11 +234,13 @@ async function handleBookmarks(database, { route, request, response }) {
     const id = Number(idMatch[1]);
     if (request.method === 'PATCH') {
       const body = await readJson(request);
+      request.liveCells = LIVE_ALL;
       sendJson(response, enrich(bookmarkStore.update(id, body)));
       return;
     }
     if (request.method === 'DELETE') {
       bookmarkStore.remove(id);
+      request.liveCells = LIVE_ALL;
       sendJson(response, { deleted: true });
       return;
     }
@@ -212,12 +250,19 @@ async function handleBookmarks(database, { route, request, response }) {
   throw new HttpError(404, 'Unknown API route.');
 }
 
-let database;
+const reference = referenceFile(DATABASE, openDatabase);
 
 export default {
   id: ID,
   async handle({ route, url, request, response }) {
-    database ??= openDatabase(DATABASE);
+    const database = reference.get();
+    if (!database) {
+      throw new HttpError(
+        503,
+        'No equipment data. Build it with modules/equipment/tools/import_odin.py.',
+      );
+    }
+    const rangesMatch = /^cards\/(.+)\/ranges$/.exec(route);
     if (route === 'stats') sendJson(response, stats(database));
     else if (route === 'cards') {
       const params =
@@ -225,6 +270,12 @@ export default {
           ? cardsParams(await readJson(request))
           : cardsParamsFromQuery(url.searchParams);
       sendJson(response, apiCards(database, params));
+    } else if (rangesMatch) {
+      if (request.method !== 'GET') throw new HttpError(405, 'Method not allowed.');
+      sendJson(response, apiCardRanges(database, decodeURIComponent(rangesMatch[1])));
+    } else if (route === 'ranges') {
+      if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
+      sendJson(response, apiBatchRanges(database, await readJson(request)));
     } else if (route.startsWith('cards/')) {
       sendJson(response, apiCard(database, decodeURIComponent(route.slice('cards/'.length))));
     } else if (route === 'taxonomy') sendJson(response, apiTaxonomy(database, url.searchParams));
@@ -235,8 +286,7 @@ export default {
     } else throw new HttpError(404, 'Unknown API route.');
   },
   close() {
-    database?.close();
-    database = undefined;
+    reference.close();
     bookmarkStore?.close();
     bookmarkStore = undefined;
   },

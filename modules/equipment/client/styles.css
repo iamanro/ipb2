@@ -54,18 +54,25 @@
 
     .panel-heading h1 {
       margin-top: 5px;
-      font-size: 26px;
+      font-size: var(--t-2xl);
       line-height: 1;
     }
 
     .text-button {
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--target);
       border: 0;
-      padding: 7px 0;
-      color: var(--signal);
+      padding: 0;
+      color: var(--blue-dark);
       background: transparent;
-      font: 700 11px/1 var(--data);
-      text-transform: uppercase;
+      font: 600 var(--t-sm) / 1 var(--body);
       cursor: pointer;
+      transition: color var(--d-fast) var(--ease-out);
+    }
+
+    .text-button:hover:not(:disabled) {
+      color: var(--fill-hover);
     }
 
     .text-button:disabled {
@@ -80,8 +87,8 @@
       border-bottom-width: 2px;
       padding: 1px 5px 0;
       color: var(--muted);
-      background: var(--white);
-      font: 10px/1.3 var(--data);
+      background: var(--surface);
+      font: var(--t-xs) / 1.3 var(--data);
       vertical-align: 1px;
     }
 
@@ -94,7 +101,7 @@
       display: block;
       margin-bottom: 8px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: var(--t-sm);
     }
 
     .search-control {
@@ -102,12 +109,13 @@
       align-items: center;
       gap: 8px;
       border-bottom: 2px solid var(--blue-dark);
-      background: var(--white);
+      background: var(--surface);
+      transition: border-color var(--d-fast) var(--ease-out);
     }
 
     .search-control > span {
       padding-left: 10px;
-      color: var(--signal);
+      color: var(--blue-dark);
       font: 22px/1 var(--display);
     }
 
@@ -119,7 +127,7 @@
       outline: 0;
       color: var(--ink);
       background: transparent;
-      font-size: 13px;
+      font-size: var(--t-md);
     }
 
     .filter-group {
@@ -138,7 +146,7 @@
       border: 0;
       padding: 13px 2px;
       background: transparent;
-      font: 700 12px/1 var(--data);
+      font: 600 var(--t-sm) / 1 var(--data);
       letter-spacing: 0.06em;
       text-align: left;
       text-transform: uppercase;
@@ -148,7 +156,7 @@
     .filter-group-heading::before {
       content: '+';
       width: 16px;
-      color: var(--signal);
+      color: var(--blue-dark);
     }
 
     .filter-group-heading[aria-expanded='true']::before {
@@ -162,16 +170,16 @@
     .filter-group-count,
     .filter-option-count {
       color: var(--muted);
-      font: 10px/1 var(--data);
+      font: var(--t-xs) / 1 var(--data);
     }
 
     .filter-group-selected {
       min-width: 18px;
       margin-right: 8px;
       padding: 3px 5px 2px;
-      color: var(--white);
+      color: var(--on-signal);
       background: var(--signal);
-      font: 700 10px/1 var(--data);
+      font: 600 var(--t-xs) / 1 var(--data);
       text-align: center;
     }
 
@@ -181,9 +189,10 @@
       border: 1px solid var(--line);
       padding: 7px 9px;
       color: var(--ink);
-      background: var(--white);
-      font-size: 12px;
+      background: var(--surface);
+      font-size: var(--t-sm);
       outline: 0;
+      transition: border-color var(--d-fast) var(--ease-out);
     }
 
     .quick-filter:focus {
@@ -193,7 +202,7 @@
     .filter-empty {
       padding: 8px 3px;
       color: var(--muted);
-      font: 11px/1 var(--data);
+      font: var(--t-xs) / 1 var(--data);
     }
 
     .filter-options {
@@ -209,23 +218,24 @@
       align-items: center;
       gap: 8px;
       padding: 5px 3px 5px calc(3px + var(--depth) * 12px);
-      font-size: 12px;
+      font-size: var(--t-sm);
       cursor: pointer;
+      transition: background var(--d-fast) var(--ease-out);
     }
 
     .filter-option-region {
       margin-top: 4px;
-      font-weight: 700;
+      font-weight: 600;
     }
 
     .filter-option-region .filter-option-label {
-      font: 700 10px/1.25 var(--data);
+      font: 600 var(--t-xs) / 1.25 var(--data);
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }
 
     .filter-option:hover {
-      background: var(--mist);
+      background: var(--surface-hover);
     }
 
     .filter-option.implied {
@@ -234,7 +244,7 @@
 
     .filter-option.implied .check-indicator {
       border-color: var(--signal);
-      background: color-mix(in srgb, var(--signal) 28%, var(--white));
+      background: color-mix(in srgb, var(--signal) 28%, var(--surface));
     }
 
     .filter-option input {
@@ -244,7 +254,7 @@
 
     .iso-code {
       color: var(--muted);
-      font: 9px/1 var(--data);
+      font: var(--t-xs) / 1 var(--data);
       letter-spacing: 0.06em;
     }
 
@@ -252,7 +262,10 @@
       width: 13px;
       height: 13px;
       border: 1px solid var(--line-dark);
-      background: var(--white);
+      background: var(--surface);
+      transition:
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
     }
 
     .filter-option input:checked + .check-indicator {
@@ -273,9 +286,9 @@
     .scope-note {
       margin-top: 20px;
       padding-left: 10px;
-      border-left: 2px solid var(--signal);
+      border-left: 2px solid var(--blue-dark);
       color: var(--muted);
-      font: 10px/1.55 var(--data);
+      font: var(--t-xs) / 1.55 var(--data);
     }
 
     .results-panel {
@@ -304,7 +317,7 @@
 
     .results-heading h2 {
       margin-top: 5px;
-      font-size: 20px;
+      font-size: var(--t-xl);
     }
 
     .active-filters {
@@ -325,9 +338,12 @@
       border: 1px solid var(--blue-dark);
       padding: 4px 6px 4px 8px;
       color: var(--blue-dark);
-      background: var(--white);
-      font: 10px/1.2 var(--data);
+      background: var(--surface);
+      font: var(--t-xs) / 1.2 var(--data);
       cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out);
     }
 
     .filter-chip > span:nth-child(2) {
@@ -338,25 +354,25 @@
 
     .filter-chip-kind {
       color: var(--muted);
-      font-size: 8px;
+      font-size: var(--t-xs);
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
 
     .filter-chip-remove {
-      color: var(--signal);
-      font-size: 13px;
+      color: var(--blue-dark);
+      font-size: var(--t-md);
       line-height: 0.8;
     }
 
     .filter-chip:hover {
-      color: var(--white);
-      background: var(--blue-dark);
+      color: var(--on-fill);
+      background: var(--fill);
     }
 
     .filter-chip:hover .filter-chip-kind,
     .filter-chip:hover .filter-chip-remove {
-      color: var(--white);
+      color: var(--on-fill);
     }
 
     .chip-origin {
@@ -365,14 +381,14 @@
 
     .source-order {
       color: var(--muted);
-      font: 9px/1 var(--data);
+      font: var(--t-xs) / 1 var(--data);
       text-transform: uppercase;
     }
 
     .loading-state {
       padding: 28px 20px;
       color: var(--muted);
-      font: 12px/1.5 var(--data);
+      font: var(--t-sm) / 1.5 var(--body);
     }
 
     .loading-state .text-button {
@@ -382,7 +398,7 @@
 
     .card-list.is-loading {
       opacity: 0.45;
-      transition: opacity 120ms ease;
+      transition: opacity var(--d-fast) var(--ease-out);
     }
 
     .card-list {
@@ -391,20 +407,24 @@
 
     .load-more {
       width: calc(100% - 36px);
+      min-height: var(--target);
       margin: 18px 18px 30px;
       border: 1px solid var(--blue-dark);
-      padding: 12px;
+      padding: 8px 12px;
       color: var(--blue-dark);
       background: transparent;
-      font: 10px/1 var(--data);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font: 600 var(--t-sm) / 1.2 var(--body);
       cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
     }
 
     .load-more:hover {
-      color: var(--white);
-      background: var(--blue-dark);
+      color: var(--on-fill);
+      background: var(--fill);
+      border-color: var(--fill);
     }
 
     .equipment-card {
@@ -419,15 +439,18 @@
       background: transparent;
       text-align: left;
       cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out);
     }
 
     .equipment-card:hover {
-      background: #dbe5e8;
+      background: var(--surface-hover);
     }
 
     .equipment-card[aria-pressed='true'] {
-      color: var(--white);
-      background: var(--blue-dark);
+      color: var(--on-fill);
+      background: var(--fill);
     }
 
     .equipment-media {
@@ -436,15 +459,15 @@
       place-items: center;
       overflow: hidden;
       border-right: 1px solid var(--line);
-      background: #d4dfe2;
+      background: var(--surface);
     }
 
     .equipment-media img {
       width: 100%;
       height: 100%;
       object-fit: cover;
-      filter: saturate(0.55) contrast(1.06);
-      transition: transform 180ms ease;
+      filter: saturate(0.6) contrast(1.05) brightness(1.05);
+      transition: transform var(--d-med) var(--ease-out);
     }
 
     .equipment-card:hover .equipment-media img {
@@ -453,7 +476,7 @@
 
     .image-missing {
       color: var(--muted);
-      font: 9px/1 var(--data);
+      font: var(--t-xs) / 1 var(--data);
     }
 
     .equipment-body {
@@ -465,14 +488,14 @@
 
     .equipment-serial {
       color: var(--signal);
-      font: 10px/1 var(--data);
+      font: var(--t-xs) / 1 var(--data);
     }
 
     .equipment-body strong {
       display: -webkit-box;
       overflow: hidden;
       margin-top: 8px;
-      font: 700 16px/1.1 var(--display);
+      font: 700 var(--t-lg) / 1.1 var(--display);
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 3;
     }
@@ -482,7 +505,7 @@
       overflow: hidden;
       margin-top: 6px;
       color: var(--muted);
-      font: 10px/1.4 var(--data);
+      font: var(--t-xs) / 1.4 var(--body);
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
     }
@@ -493,17 +516,17 @@
     }
 
     .equipment-card[aria-pressed='true'] .equipment-snippet {
-      color: #adc1c7;
+      color: color-mix(in srgb, var(--on-fill) 75%, var(--fill));
     }
 
     .equipment-meta {
       margin-top: auto;
       color: var(--muted);
-      font: 9px/1.2 var(--data);
+      font: var(--t-xs) / 1.2 var(--body);
     }
 
     .equipment-card[aria-pressed='true'] .equipment-meta {
-      color: #adc1c7;
+      color: color-mix(in srgb, var(--on-fill) 75%, var(--fill));
     }
 
     .equipment-meta span:first-child {
@@ -515,8 +538,8 @@
     .detail-panel {
       background-color: var(--paper);
       background-image:
-        linear-gradient(#dce4e5 1px, transparent 1px),
-        linear-gradient(90deg, #dce4e5 1px, transparent 1px);
+        linear-gradient(var(--line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line) 1px, transparent 1px);
       background-size: 28px 28px;
     }
 
@@ -588,7 +611,7 @@
 
     .detail-overline {
       color: var(--muted);
-      font: 10px/1 var(--data);
+      font: var(--t-xs) / 1 var(--data);
       letter-spacing: 0.08em;
     }
 
@@ -615,9 +638,13 @@
       border: 1px solid var(--line-dark);
       padding: 5px 7px;
       color: var(--blue-dark);
-      background: var(--white);
-      font: 9px/1 var(--data);
+      background: var(--surface);
+      font: var(--t-xs) / 1 var(--data);
       text-transform: uppercase;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
     }
 
     button.tag {
@@ -625,8 +652,9 @@
     }
 
     button.tag:hover {
-      color: var(--white);
-      background: var(--blue-dark);
+      color: var(--on-fill);
+      background: var(--fill);
+      border-color: var(--fill);
     }
 
     .tag-origin {
@@ -637,7 +665,7 @@
     button.tag-origin:hover,
     .tag[aria-pressed='true'] {
       border-color: var(--signal);
-      color: var(--white);
+      color: var(--on-signal);
       background: var(--signal);
     }
 
@@ -657,8 +685,8 @@
     .main-image {
       aspect-ratio: 4 / 3;
       overflow: hidden;
-      border-bottom: 4px solid var(--signal);
-      background: #d5dfe1;
+      border-bottom: 4px solid var(--blue-dark);
+      background: var(--surface);
     }
 
     .main-image img {
@@ -681,6 +709,7 @@
       padding: 0;
       background: var(--mist);
       cursor: pointer;
+      transition: border-color var(--d-fast) var(--ease-out);
     }
 
     .thumbnail.active {
@@ -699,7 +728,7 @@
       gap: 7px 18px;
       padding-bottom: 20px;
       border-bottom: 1px solid var(--line);
-      font: 11px/1.3 var(--data);
+      font: var(--t-xs) / 1.3 var(--data);
     }
 
     .quick-facts dt {
@@ -708,7 +737,7 @@
     }
 
     .quick-facts dd {
-      font-weight: 700;
+      font-weight: 600;
     }
 
     .notes {
@@ -716,8 +745,8 @@
       overflow-y: auto;
       margin-top: 20px;
       padding-right: 8px;
-      color: #34484f;
-      font-size: 13px;
+      color: var(--ink);
+      font-size: var(--t-md);
       line-height: 1.65;
     }
 
@@ -738,14 +767,14 @@
       padding-bottom: 10px;
       border-bottom: 2px solid var(--blue-dark);
       color: var(--blue-dark);
-      font-size: 21px;
+      font-size: var(--t-xl);
       text-transform: uppercase;
     }
 
     .spec-section > h4 {
       margin: 18px 0 7px;
       color: var(--blue);
-      font-size: 15px;
+      font-size: var(--t-lg);
     }
 
     .property-list {
@@ -758,7 +787,7 @@
       gap: 24px;
       padding: 10px 0;
       border-bottom: 1px solid var(--line);
-      font-size: 12px;
+      font-size: var(--t-sm);
       line-height: 1.45;
     }
 
@@ -772,8 +801,8 @@
 
     .unit {
       margin-left: 8px;
-      color: var(--signal);
-      font: 10px/1 var(--data);
+      color: var(--blue);
+      font: var(--t-xs) / 1 var(--data);
     }
 
     .detail-loading {
@@ -793,56 +822,76 @@
       top: 6px;
       right: 6px;
       z-index: 1;
-      width: 26px;
-      height: 26px;
+      width: var(--target);
+      height: var(--target);
       border: 1px solid var(--line);
       color: var(--muted);
-      background: color-mix(in srgb, var(--white) 88%, transparent);
-      font-size: 15px;
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      font-size: var(--t-lg);
       line-height: 1;
       cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
     }
 
     .bookmark-star:hover {
-      color: var(--signal);
-      border-color: var(--signal);
+      color: var(--blue-dark);
+      border-color: var(--blue-dark);
     }
 
     .bookmark-star.is-bookmarked {
-      color: var(--signal);
-      border-color: var(--signal);
-      background: var(--white);
+      color: var(--fill);
+      border-color: var(--fill);
+      background: var(--surface);
     }
 
+    /* Aligned with the detail header's text column. */
     .bookmark-control {
-      margin: 0 0 18px;
+      margin: 18px 0;
+      padding: 0 clamp(24px, 4vw, 56px);
     }
 
     .bookmark-toggle {
+      min-height: var(--target);
       border: 1px solid var(--blue-dark);
-      padding: 8px 12px;
+      padding: 6px 12px;
       color: var(--blue-dark);
       background: transparent;
-      font: 700 11px/1 var(--data);
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
+      font: 600 var(--t-sm) / 1.2 var(--body);
       cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
+    }
+
+    .bookmark-toggle:hover {
+      color: var(--ink);
+      border-color: var(--blue);
+      background: var(--surface-hover);
     }
 
     .bookmark-toggle.is-bookmarked {
-      color: var(--white);
-      background: var(--blue-dark);
+      color: var(--on-fill);
+      border-color: var(--fill);
+      background: var(--fill);
+    }
+
+    .bookmark-toggle.is-bookmarked:hover {
+      background: var(--fill-hover);
+      border-color: var(--fill-hover);
     }
 
     .bookmark-note {
       display: block;
       width: 100%;
       margin-top: 10px;
-      border: 1px solid var(--line);
+      border: 1px solid var(--line-dark);
       padding: 8px;
       color: var(--ink);
-      background: var(--white);
-      font: 12px/1.4 var(--data);
+      background: var(--surface);
+      font: var(--t-sm) / 1.4 var(--body);
       resize: vertical;
     }
 
@@ -852,8 +901,8 @@
 
     .bookmark-error {
       margin: 8px 0 0;
-      color: var(--signal);
-      font: 11px/1.4 var(--data);
+      color: var(--danger);
+      font: var(--t-xs) / 1.4 var(--body);
     }
 
     .bookmarks-panel {
@@ -863,7 +912,7 @@
     }
 
     .bookmarks-panel h2 {
-      font: 700 12px/1 var(--data);
+      font: 600 var(--t-sm) / 1 var(--data);
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
@@ -889,31 +938,37 @@
       color: var(--ink);
       text-overflow: ellipsis;
       white-space: nowrap;
-      font: 12px/1.3 var(--data);
+      font: var(--t-sm) / 1.3 var(--body);
       background: none;
       border: 0;
       text-align: left;
       cursor: pointer;
+      transition: color var(--d-fast) var(--ease-out);
     }
 
     .bookmark-row-name:hover {
-      color: var(--signal);
+      color: var(--blue-dark);
     }
 
     .bookmark-row-remove {
       flex: 0 0 auto;
-      border: 1px solid var(--line-dark);
-      padding: 4px 7px;
-      color: var(--blue-dark);
-      background: var(--white);
-      font: 700 9px/1 var(--data);
-      text-transform: uppercase;
+      min-height: var(--target);
+      border: 1px solid var(--danger);
+      padding: 0 10px;
+      color: var(--danger);
+      background: var(--surface);
+      font: 600 var(--t-sm) / 1 var(--body);
       cursor: pointer;
+      transition:
+        color var(--d-fast) var(--ease-out),
+        background var(--d-fast) var(--ease-out),
+        border-color var(--d-fast) var(--ease-out);
     }
 
     .bookmark-row-remove:hover {
-      color: var(--white);
-      background: var(--blue-dark);
+      color: var(--on-fill);
+      background: var(--danger-fill);
+      border-color: var(--danger-fill);
     }
   }
 }
@@ -943,7 +998,7 @@
       .detail-panel {
         min-height: 100vh;
         grid-column: 1 / -1;
-        border-top: 4px solid var(--signal);
+        border-top: 4px solid var(--blue-dark);
       }
     }
 

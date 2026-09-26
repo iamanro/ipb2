@@ -1,3 +1,6 @@
+import { clientId } from '../../../src/live.js';
+import { handleUnauthorized } from '../../../src/session.js';
+
 import './styles.css';
 import template from './view.html?raw';
 
@@ -83,14 +86,17 @@ function isoLabel(entry) {
 
 /** Every request dies with its mount, so a stale view never touches a newer one. */
 async function requestJson(path, { method = 'GET', body, signal = state.session.signal } = {}) {
-  const options = { method, signal };
+  const options = { method, signal, headers: { 'X-Client-Id': clientId } };
   if (body !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
+    options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
   }
   const response = await fetch(path, options);
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || `Request failed: ${response.status}`);
+  if (!response.ok) {
+    if (response.status === 401) handleUnauthorized();
+    throw new Error(payload.error || `Request failed: ${response.status}`);
+  }
   return payload;
 }
 
