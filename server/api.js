@@ -12,6 +12,7 @@ import path from 'node:path';
 
 import { requiredRole, roleAtLeast } from './access.js';
 import { SESSION_TTL_MS, hashToken, openAuthStore } from './auth.js';
+import { createDispatcher } from './dispatch.js';
 import { createExerciseLifecycle } from './exerciseLifecycle.js';
 import { HttpError, readJson, sendJson } from './http.js';
 import {
@@ -265,6 +266,10 @@ export function createApiMiddleware(mode) {
   }
 
   const lifecycle = createExerciseLifecycle({ getAuthStore: ensureAuthStore });
+  const dispatcher = createDispatcher(
+    modules.filter((module) => module.routes),
+    { publish, audit: (entry) => ensureAuthStore().audit(entry) },
+  );
 
   function sessionToken(request) {
     return parseCookies(request.headers.cookie)[SESSION_COOKIE];
@@ -615,16 +620,28 @@ export function createApiMiddleware(mode) {
       if (!request.user.admin && !request.user.cell) {
         throw new HttpError(403, 'You are not assigned to the current exercise.');
       }
+      const rawClientId = String(request.headers['x-client-id'] || '').slice(0, CLIENT_ID_HEADER_MAX) || null;
+      if (module.routes) {
+        // Item-scoped requests (docs/adr/0002-item-scoped-requests.md): the
+        // dispatcher checks the role, resolves the item, announces and audits.
+        await dispatcher.handle({
+          moduleId,
+          route,
+          url,
+          request,
+          response,
+          actor: request.user,
+          client: hashClientId(rawClientId),
+          rawClient: rawClientId,
+        });
+        return;
+      }
       const required = requiredRole(moduleId, request.method, route);
       if (!roleAtLeast(request.user.role, required)) {
         throw new HttpError(403, `This action needs the ${required} role.`);
       }
 
       if (MUTATION_METHODS.has(request.method)) {
-        const rawClientId = String(request.headers['x-client-id'] || '').slice(
-          0,
-          CLIENT_ID_HEADER_MAX,
-        ) || null;
         const { name: user } = request.user;
         response.once('finish', () => {
           if (response.statusCode >= 400) return;

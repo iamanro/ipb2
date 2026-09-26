@@ -1,0 +1,3 @@
+# Release whole cell-owned items only, never single parts
+
+Cells share work by releasing a whole cell-owned item (a study, an ORBAT, a report…) for reading; its parts (a study's threats and COAs, an ORBAT's units, a requirement's SIRs) are always seen and changed exactly as their item is, and can't be released on their own. To share only some parts, a cell copies them into a new item and releases that (studies and ORBATs already export and import). We chose this over per-part release because per-part visibility would put an owner cell and release list on every part table and a visibility check on every part query, multiplying the places a leak between cells can hide, for a need the copy-and-release route already covers.
