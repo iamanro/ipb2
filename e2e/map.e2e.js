@@ -13,8 +13,14 @@ async function openStudy(page, request) {
   });
   const study = await response.json();
   await page.goto(`/ipb/?study=${study.id}&step=1`);
-  await expect(page.locator('#map-empty')).toBeHidden();
+  await expectStudyOpen(page, study);
   return study;
+}
+
+/** Not `#map-empty` hidden: that passes before the module has mounted the
+ * empty-state overlay, and a click on the map then lands on it. */
+async function expectStudyOpen(page, study) {
+  await expect(page.locator('#worksheet-study-name')).toHaveText(study.name);
 }
 
 async function rightClickMap(page, fx = 0.5, fy = 0.5) {
@@ -72,7 +78,7 @@ test('Enter on the Delete confirmation keeps the feature (Cancel is the default)
     },
   });
   await page.reload();
-  await expect(page.locator('#map-empty')).toBeHidden();
+  await expectStudyOpen(page, study);
   // The feature at the map centre is hit-testable only once drawn; retry.
   await expect(async () => {
     await rightClickMap(page);
