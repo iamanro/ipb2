@@ -1121,7 +1121,7 @@ first), so a new module is backed up and reset without touching those tools.
 | `npm start`        | Serve the production build (`dist/`, already built) standalone on `:8000`, loopback, no login — run `npm run build` first                                                  |
 | `npm run start:lan`| Same, every interface, login required (see "Users, roles and network access")                                                                                              |
 | `npm test`         | Runs `src/geo.test.js` and any other `*.test.js` (Vitest via `vp test`)                                                                                                      |
-| `npm run test:e2e` | Real-browser tests in `e2e/*.e2e.js` (Playwright) against a production build on :5190, with throwaway state (`IPB_STATE_ROOT`); first run: `npx playwright install chromium` |
+| `npm run test:e2e` | Real-browser tests in `e2e/*.e2e.js` (Playwright) against a production build on :5190, plus the standalone server with sign-in on at :5191 for the White/Blue/Red isolation test (`e2e/cells.e2e.js`), each with its own throwaway state; first run: `npx playwright install chromium` |
 | `npm run check`    | Format check + lint + typecheck; run before committing                                                                                                                       |
 | `npm run format`   | Auto-format with Prettier conventions (`vp fmt --write`)                                                                                                                     |
 

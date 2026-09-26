@@ -12,3 +12,4 @@ deploy/secrets/
 deploy/data/
 deploy/backups/
 .env
+docs/MIL-STD-2525E.pdf
