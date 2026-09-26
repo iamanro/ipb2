@@ -11,3 +11,4 @@ playwright-report/
 deploy/secrets/
 deploy/data/
 deploy/backups/
+.env

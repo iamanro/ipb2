@@ -33,7 +33,7 @@ services:
       IPB_ADMIN_PASSWORD_FILE: /run/secrets/ipb_admin_password
     volumes:
       - ${IPB_DATA_DIR:-./deploy/data}:/data:ro
-      - state:/state
+      - ${IPB_STATE_DIR:-state}:/state
     secrets:
       - ipb_admin_password
     healthcheck:
@@ -88,7 +88,7 @@ services:
       IPB_BACKUP_ROOT: /backups
       IPB_BACKUP_KEEP: ${IPB_BACKUP_KEEP:-14}
     volumes:
-      - state:/state
+      - ${IPB_STATE_DIR:-state}:/state
       - ${IPB_BACKUP_DIR:-./deploy/backups}:/backups
     entrypoint: ['node', 'server/tools/backup.mjs']
 

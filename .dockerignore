@@ -13,3 +13,4 @@ docs
 deploy/data
 deploy/secrets
 deploy/backups
+.env

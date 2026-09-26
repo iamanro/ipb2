@@ -12,31 +12,18 @@
  *
  *   docker compose exec app node server/tools/backup.mjs
  *
- * Restore: stop the app, copy the wanted dated folder's `*.db` files back
- * to their original paths under the state root (same file names — each
- * backup preserves them), then start the app again. Each file is a
- * complete, self-consistent SQLite database; there is no cross-database
- * transaction to restore, so partial restores (e.g. only `auth.db`) are
- * safe too.
+ * Exercise archives (`$IPB_STATE_ROOT/archives/*`, written by Admin →
+ * Exercise → Archive/Reset) are immutable once written, so they're mirrored
+ * into `<backup root>/archives/` (new ones only) and never rotated: losing
+ * the state volume must not lose past exercises.
+ *
+ * Restore with `server/tools/restore.mjs` (app stopped).
  */
-import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { vacuumInto } from '../dbArchive.js';
+import { STATE_DATABASES, archiveRoot, vacuumInto } from '../dbArchive.js';
 import { stateDirectory } from '../state.js';
-
-/** `{ moduleId, defaultStateDir, file }` for every state database the app
- * opens (see `server/state.js`'s doc: reference data in `data/`, state in
- * `state/`, never the same file). Kept as a flat list here, not derived by
- * scanning `modules/`, so a backup never silently skips a new module's
- * database if that module fails to load for an unrelated reason. */
-const DATABASES = [
-  { moduleId: 'auth', defaultDir: path.join(import.meta.dirname, '..', 'state'), file: 'auth.db' },
-  { moduleId: 'ipb', defaultDir: path.join(import.meta.dirname, '..', '..', 'modules', 'ipb', 'state'), file: 'ipb.db' },
-  { moduleId: 'exercise', defaultDir: path.join(import.meta.dirname, '..', '..', 'modules', 'exercise', 'state'), file: 'exercise.db' },
-  { moduleId: 'orbat', defaultDir: path.join(import.meta.dirname, '..', '..', 'modules', 'orbat', 'state'), file: 'orbat.db' },
-  { moduleId: 'equipment', defaultDir: path.join(import.meta.dirname, '..', '..', 'modules', 'equipment', 'state'), file: 'bookmarks.db' },
-];
 
 function flagValue(args, flag) {
   const index = args.indexOf(flag);
@@ -60,7 +47,7 @@ function keepCount(args) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 14;
 }
 
-function backupOne({ moduleId, defaultDir, file }, destDir) {
+function backupOne({ id: moduleId, defaultDir, file }, destDir) {
   const source = path.join(stateDirectory(moduleId, defaultDir), file);
   let stats;
   try {
@@ -86,6 +73,24 @@ function rotate(root, keep) {
   }
 }
 
+/** Copies exercise archives not yet in `<root>/archives`; returns how many. */
+function mirrorArchives(root) {
+  const source = archiveRoot();
+  if (!existsSync(source)) return 0;
+  const dest = path.join(root, 'archives');
+  let copied = 0;
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    if (!entry.isDirectory() || existsSync(path.join(dest, entry.name))) continue;
+    // Copy under a temporary name first, so an interrupted copy is never mistaken for a complete archive.
+    const partial = path.join(dest, `.partial-${entry.name}`);
+    rmSync(partial, { recursive: true, force: true });
+    cpSync(path.join(source, entry.name), partial, { recursive: true });
+    renameSync(partial, path.join(dest, entry.name));
+    copied += 1;
+  }
+  return copied;
+}
+
 function main() {
   const args = process.argv.slice(2);
   const root = backupRoot(args);
@@ -96,7 +101,7 @@ function main() {
 
   console.log(`Backing up state databases into ${destDir}`);
   let copied = 0;
-  for (const entry of DATABASES) {
+  for (const entry of STATE_DATABASES) {
     if (backupOne(entry, destDir)) copied += 1;
   }
   if (copied === 0) {
@@ -106,6 +111,8 @@ function main() {
   }
   console.log(`Rotating: keeping the newest ${keep} backup(s) in ${root}`);
   rotate(root, keep);
+  const archives = mirrorArchives(root);
+  if (archives) console.log(`  mirrored ${archives} new exercise archive(s) into ${path.join(root, 'archives')}`);
   console.log('Done.');
 }
 

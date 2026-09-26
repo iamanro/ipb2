@@ -16,7 +16,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { vacuumInto } from './dbArchive.js';
+import { STATE_DATABASES, archiveRoot, vacuumInto } from './dbArchive.js';
 import { HttpError } from './http.js';
 import { publish } from './live.js';
 import { modules } from './modules.js';
@@ -25,27 +25,9 @@ import { stateDirectory } from './state.js';
 const EXERCISE_NAME_MAX_LENGTH = 80;
 
 /** The exercise's own databases — never `auth` (users/sessions/memberships
- * live alongside, not inside, an exercise: only `clearMemberships`/
- * `setMembership` touch them) and never `equipment`/`terrain` (bookmarks
- * and reference data outlive any one exercise, per the model in
- * docs/phase1-access.md). */
-const EXERCISE_DATABASES = [
-  {
-    id: 'ipb',
-    defaultDir: path.join(import.meta.dirname, '..', 'modules', 'ipb', 'state'),
-    file: 'ipb.db',
-  },
-  {
-    id: 'exercise',
-    defaultDir: path.join(import.meta.dirname, '..', 'modules', 'exercise', 'state'),
-    file: 'exercise.db',
-  },
-  {
-    id: 'orbat',
-    defaultDir: path.join(import.meta.dirname, '..', 'modules', 'orbat', 'state'),
-    file: 'orbat.db',
-  },
-];
+ * live alongside, not inside, an exercise) and never equipment bookmarks or
+ * reference data, which outlive any one exercise (docs/phase1-access.md). */
+const EXERCISE_DATABASES = STATE_DATABASES.filter((entry) => entry.exercise);
 
 function now() {
   return new Date().toISOString();
@@ -87,10 +69,6 @@ function assertExerciseName(name) {
   }
 }
 
-function archiveRoot() {
-  const stateRoot = process.env.IPB_STATE_ROOT || path.join(import.meta.dirname, '..', 'modules');
-  return path.join(stateRoot, 'archives');
-}
 
 function moduleById(id) {
   return modules.find((module) => module.id === id);
