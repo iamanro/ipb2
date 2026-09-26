@@ -26,7 +26,7 @@ IPB_BACKUP_DIR=/srv/ipb-backups   # where backups land
 6. **Backup folder:** the backup container runs as uid 1000, so it must be able to write there: `sudo mkdir -p /srv/ipb-backups && sudo chown 1000 /srv/ipb-backups`.
 7. **Start:** `docker compose up -d --build --wait`. It's done when `docker compose ps` shows `app` and `caddy` as `healthy`.
 8. **Check the data:** `curl -k https://ac.lan/healthz` must list every file as `true`. A `false` means that file is missing under `IPB_DATA_DIR`.
-9. **First sign-in:** browse to `https://ac.lan` and sign in as `admin` with the password from step 5. The app then makes you choose a new one. Afterwards delete `deploy/secrets/admin_password`, or keep it root-only; it is used only while no users exist.
+9. **First sign-in:** browse to `https://ac.lan` and sign in as `admin` with the password from step 5. The app then makes you choose a new one. Keep `deploy/secrets/admin_password` (mode 600): Compose refuses to start without it, but the app reads it only while no users exist, so after the first sign-in it no longer opens anything.
 10. **Clients:** each computer, tablet or phone installs the certificate once, from `http://ac.lan/ca.crt` (steps per OS are in the README, "First start", step 4). Without it, browsers warn that the connection is not private.
 11. **Backups:** schedule them (section 5) before the first real exercise.
 12. **Load test:** optional, but worth doing on new hardware (section 8).
@@ -106,7 +106,7 @@ docker compose start app
 - The tool refuses while the app is running, because the databases' `-wal`/`-shm` files still exist. After a crash, and only then, add `--force`.
 - Users must sign in again only if `auth` was restored.
 
-**Drill:** do this once before the first exercise (done on the pilot install on 26 Sep 2026: the restore removed the test study, and restoring `pre-restore-*` brought it back). Take a backup, create a test study, restore the backup, and check that the study is gone. Then restore the `pre-restore-*` folder and check that the study is back.
+**Drill:** do this once before the first exercise (done on the pilot install and again on the first real install, 26 Sep 2026: the restore removed the test study, and restoring `pre-restore-*` brought it back). Take a backup, create a test study, restore the backup, and check that the study is gone. Then restore the `pre-restore-*` folder and check that the study is back.
 
 ## 7. Updates
 
@@ -127,6 +127,8 @@ IPB_LOADTEST_ADMIN_PASSWORD='<admin password>' NODE_EXTRA_CA_CERTS=ca.crt \
 ```
 
 It simulates 30 users: live updates, map panning (basemap, satellite and hillshade tiles), list refreshes, a report every 20–45 s per analyst, and a viewshed every 1–2.5 min per analyst. It prints latency per request kind, and removes its users and reports at the end. Run it before an exercise, never during one.
+
+Run it from **another machine on the LAN**, as the clients will connect. Run on the server itself, its connections go through Docker's port proxy instead of the network path clients use, and the tile tail latencies come out several times worse than clients will see (measured on the first install, 26 Sep 2026: p95 3–4 s from the server itself, 0.7–1.3 s for the same burst inside Docker's network).
 
 Reference results: 30 users (2 White, 14 Blue, 14 Red) for 5 minutes, through Caddy. The host had 32 cores, but the app was capped at 6 CPUs by `compose.yaml`, and 4 terrain workers ran, as on an 8-core server.
 
