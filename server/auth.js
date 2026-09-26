@@ -1,18 +1,10 @@
 import crypto from 'node:crypto';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
+import authState from './authState.js';
 import { HttpError } from './http.js';
 import { CELLS, ROLES } from './policy.js';
-import { openState, stateDirectory, transact } from './state.js';
-
-const ID = 'auth';
-const STATE_ROOT = stateDirectory(
-  ID,
-  path.join(path.dirname(fileURLToPath(import.meta.url)), 'state'),
-);
-export const DATABASE = path.join(STATE_ROOT, 'auth.db');
+import { openState, transact } from './state.js';
 
 /** A session cookie is valid for this long since it was last used (sliding). */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -272,7 +264,7 @@ function ipGroup(ip) {
  * connection to the same file (SQLite's WAL mode makes that safe) without
  * one's `close()` pulling the handle out from under another.
  */
-export function openAuthStore(file = DATABASE) {
+export function openAuthStore(file = authState.path) {
   let database = openState(file, MIGRATIONS);
   // Login attempts live in memory, not the database: a rate limit resetting
   // on a dev-server restart is an acceptable trade for not persisting an

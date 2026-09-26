@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -233,6 +233,19 @@ describe('exercise lifecycle (C6)', () => {
     // ...but the removed user obviously isn't reanimated, and doesn't
     // block the rest of the restore.
     expect(members.willBeRemoved).toBeUndefined();
+  });
+
+  test('a damaged archive is refused before anything is archived, emptied or swapped', async () => {
+    await postJson(server.origin, '/api/ipb/studies', { name: 'Survives a bad restore' });
+    const before = await countRows(server.origin);
+    const archived = await lifecycle.archive({ note: 'to be damaged' });
+    writeFileSync(path.join(stateRoot, 'archives', archived.id, 'orbat.db'), 'not a database');
+    const archivesBefore = (await lifecycle.listArchives()).length;
+    await expect(lifecycle.restore({ archive: archived.id })).rejects.toMatchObject({ status: 422 });
+    expect(await countRows(server.origin)).toEqual(before);
+    expect(await lifecycle.listArchives()).toHaveLength(archivesBefore);
+    expect(lifecycle.isLocked()).toBeFalsy();
+    rmSync(path.join(stateRoot, 'archives', archived.id), { recursive: true });
   });
 
   test('restore 404s on an unknown archive id', async () => {

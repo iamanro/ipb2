@@ -16,18 +16,13 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { STATE_DATABASES, archiveRoot, vacuumInto } from './dbArchive.js';
+import { archiveRoot, integrityCheck } from './dbArchive.js';
 import { HttpError } from './http.js';
 import { publish } from './live.js';
-import { modules } from './modules.js';
-import { stateDirectory } from './state.js';
+import { EXERCISE_DATABASES } from './stateDatabases.js';
 
 const EXERCISE_NAME_MAX_LENGTH = 80;
 
-/** The exercise's own databases — never `auth` (users/sessions/memberships
- * live alongside, not inside, an exercise) and never equipment bookmarks or
- * reference data, which outlive any one exercise (docs/phase1-access.md). */
-const EXERCISE_DATABASES = STATE_DATABASES.filter((entry) => entry.exercise);
 
 function now() {
   return new Date().toISOString();
@@ -44,6 +39,14 @@ function slugify(name) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return slug || 'exercise';
+}
+
+function safeIntegrityCheck(file) {
+  try {
+    return integrityCheck(file);
+  } catch (error) {
+    return error.message;
+  }
 }
 
 async function fileExists(file) {
@@ -69,22 +72,6 @@ function assertExerciseName(name) {
   }
 }
 
-
-function moduleById(id) {
-  return modules.find((module) => module.id === id);
-}
-
-/** Closes a module's store and deletes its database file (plus any
- * `-wal`/`-shm` siblings still on disk from an open WAL connection); the
- * module reopens lazily, empty, on its next request (every module's own
- * `handle()` does `store ??= openStore(DATABASE)`). */
-async function emptyModule(entry) {
-  moduleById(entry.id)?.close();
-  const dbPath = path.join(stateDirectory(entry.id, entry.defaultDir), entry.file);
-  await Promise.all(
-    [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].map((file) => fsp.rm(file, { force: true })),
-  );
-}
 
 /**
  * `{ getAuthStore }`: a `server/api.js`-owned accessor for the (lazily
@@ -122,11 +109,9 @@ export function createExerciseLifecycle({ getAuthStore }) {
     const dir = path.join(archiveRoot(), id);
     await fsp.mkdir(dir, { recursive: true });
     const sizes = {};
-    for (const entry of EXERCISE_DATABASES) {
-      const source = path.join(stateDirectory(entry.id, entry.defaultDir), entry.file);
-      if (!(await fileExists(source))) continue;
-      vacuumInto(source, path.join(dir, entry.file));
-      sizes[entry.id] = (await fsp.stat(path.join(dir, entry.file))).size;
+    for (const database of EXERCISE_DATABASES) {
+      const size = database.copyInto(dir);
+      if (size !== null) sizes[database.id] = size;
       await yieldTick();
     }
     const archivedAt = now();
@@ -211,8 +196,8 @@ export function createExerciseLifecycle({ getAuthStore }) {
       try {
         await yieldTick();
         const archived = await performArchive({ note: 'auto: before reset' });
-        for (const entry of EXERCISE_DATABASES) {
-          await emptyModule(entry);
+        for (const database of EXERCISE_DATABASES) {
+          database.empty();
           await yieldTick();
         }
         store.clearMemberships();
@@ -247,15 +232,20 @@ export function createExerciseLifecycle({ getAuthStore }) {
         } catch {
           throw new HttpError(404, `No archive named "${archive}".`);
         }
+        // Every archived file must be sound before anything is swapped, so a
+        // damaged archive can never leave the exercise half restored.
+        for (const database of EXERCISE_DATABASES) {
+          const archivedFile = path.join(archiveDir, database.file);
+          if (!(await fileExists(archivedFile))) continue;
+          const check = safeIntegrityCheck(archivedFile);
+          if (check !== 'ok') throw new HttpError(422, `Archive "${archive}" is damaged (${database.file}: ${check}).`);
+        }
         await yieldTick();
         await performArchive({ note: 'auto: before restore' });
-        for (const entry of EXERCISE_DATABASES) {
-          await emptyModule(entry);
-          const archivedFile = path.join(archiveDir, entry.file);
-          if (await fileExists(archivedFile)) {
-            const dest = path.join(stateDirectory(entry.id, entry.defaultDir), entry.file);
-            await fsp.copyFile(archivedFile, dest);
-          }
+        for (const database of EXERCISE_DATABASES) {
+          const archivedFile = path.join(archiveDir, database.file);
+          if (await fileExists(archivedFile)) database.replaceFrom(archivedFile);
+          else database.empty();
           await yieldTick();
         }
         const store = getAuthStore();

@@ -2,17 +2,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { announce, EXERCISE_CONTROL } from '../../../server/dispatch.js';
-import { dataDirectory, stateDirectory } from '../../../server/state.js';
+import { dataDirectory } from '../../../server/state.js';
+import state from './state.js';
 import { openStore } from './store.js';
 
-const ID = 'exercise';
-const STATE_ROOT = stateDirectory(
-  ID,
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state'),
-);
-const DATABASE = path.join(STATE_ROOT, 'exercise.db');
 const DATA_ROOT = dataDirectory(
-  ID,
+  state.id,
   path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data'),
 );
 const REGIONS_FILE = path.join(DATA_ROOT, 'regions.json');
@@ -33,9 +28,13 @@ const COUNTRY_BODY_LIMIT = 3 << 20;
 const TICK_MS = 5000;
 let ticker = null;
 let store;
+state.onClose(() => {
+  store?.close();
+  store = undefined;
+});
 
 function ensureStore() {
-  store ??= openStore(DATABASE, { regionsFile: REGIONS_FILE });
+  store ??= openStore(state.path, { regionsFile: REGIONS_FILE });
   return store;
 }
 
@@ -56,14 +55,13 @@ function onOwnership({ kind, action, after }) {
 }
 
 export default {
-  id: ID,
+  id: state.id,
   close() {
     if (ticker) {
       clearInterval(ticker);
       ticker = null;
     }
-    store?.close();
-    store = undefined;
+    state.close();
   },
   database: () => ensureStore().database,
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { HttpError, integerParameter, sendJson } from '../../../server/http.js';
 import { referenceFile } from '../../../server/reference.js';
-import { dataDirectory, stateDirectory } from '../../../server/state.js';
+import { dataDirectory } from '../../../server/state.js';
 import { openBookmarks } from './bookmarks.js';
 import {
   KINDS,
@@ -18,18 +18,14 @@ import {
   taxonomy,
 } from './db.js';
 import { cardRanges } from './ranges.js';
+import bookmarksState from './state.js';
 
 const ID = 'equipment';
 const DATA_ROOT = dataDirectory(
   ID,
   path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data'),
 );
-const STATE_ROOT = stateDirectory(
-  ID,
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state'),
-);
 const DATABASE = path.join(DATA_ROOT, 'unitgenerator.db');
-const BOOKMARKS_DATABASE = path.join(STATE_ROOT, 'bookmarks.db');
 const ODIN_ASSET_ROOT = 'https://odin.t2com.army.mil/dotcms/';
 
 const SIGNATURES = [
@@ -213,6 +209,10 @@ function bookmarkId(text) {
 }
 
 let bookmarkStore;
+bookmarksState.onClose(() => {
+  bookmarkStore?.close();
+  bookmarkStore = undefined;
+});
 
 const reference = referenceFile(DATABASE, openDatabase);
 
@@ -234,8 +234,7 @@ export default {
   id: ID,
   close() {
     reference.close();
-    bookmarkStore?.close();
-    bookmarkStore = undefined;
+    bookmarksState.close();
   },
   routes: [
     {
@@ -298,7 +297,7 @@ export default {
       verb: 'none',
       handler: () => {
         const database = referenceDatabase();
-        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        bookmarkStore ??= openBookmarks(bookmarksState.path);
         return { items: bookmarkStore.list().map((bookmark) => enrichBookmark(database, bookmark)) };
       },
     },
@@ -310,7 +309,7 @@ export default {
       reach: 'everyone',
       handler: ({ body, response }) => {
         const database = referenceDatabase();
-        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        bookmarkStore ??= openBookmarks(bookmarksState.path);
         sendJson(response, enrichBookmark(database, bookmarkStore.create(body)), 201);
       },
     },
@@ -322,7 +321,7 @@ export default {
       reach: 'everyone',
       handler: ({ params, body }) => {
         const database = referenceDatabase();
-        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        bookmarkStore ??= openBookmarks(bookmarksState.path);
         return enrichBookmark(database, bookmarkStore.update(bookmarkId(params.bookmark), body));
       },
     },
@@ -334,7 +333,7 @@ export default {
       reach: 'everyone',
       handler: ({ params }) => {
         referenceDatabase();
-        bookmarkStore ??= openBookmarks(BOOKMARKS_DATABASE);
+        bookmarkStore ??= openBookmarks(bookmarksState.path);
         bookmarkStore.remove(bookmarkId(params.bookmark));
         return { deleted: true };
       },

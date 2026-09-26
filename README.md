@@ -1103,6 +1103,14 @@ different files with different lifetimes: deleting a `state/*.db` resets that
 module's work; deleting `data/*.db`/`.pmtiles` just means rerunning the
 matching tool above.
 
+A module with working state declares its database in
+`modules/<id>/server/state.js` (file name, and whether it belongs to the
+exercise) and is listed in `server/stateDatabases.js`; a test fails if a
+declared module is missing there. That one declaration is what backup,
+restore and the exercise archive/reset/restore use (`server/stateDatabase.js`
+owns copying, emptying and replacing the file, closing the module's store
+first), so a new module is backed up and reset without touching those tools.
+
 ## Scripts
 
 | Command            | Does                                                                                                                                                                         |

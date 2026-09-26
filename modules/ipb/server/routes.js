@@ -1,17 +1,7 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { HttpError } from '../../../server/http.js';
-import { stateDirectory } from '../../../server/state.js';
+import state from './state.js';
 import { nearestStation } from './station.js';
 import { CHILDREN, openStore, shapeStudy } from './store.js';
-
-const ID = 'ipb';
-const STATE_ROOT = stateDirectory(
-  ID,
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state'),
-);
-const DATABASE = path.join(STATE_ROOT, 'ipb.db');
 
 const EXPORT_CONTENT_TYPE = {
   geojson: 'application/geo+json',
@@ -31,10 +21,14 @@ function sendExport(response, { body, filename }, contentType) {
 }
 
 let store;
+state.onClose(() => {
+  store?.close();
+  store = undefined;
+});
 
 /** Lazy-opens the state file on first use (dispatch-contract.md's `database`). */
 function getStore() {
-  store ??= openStore(DATABASE);
+  store ??= openStore(state.path);
   return store;
 }
 
@@ -88,12 +82,9 @@ const partRoutes = Object.keys(CHILDREN).flatMap((kind) => {
 });
 
 export default {
-  id: ID,
+  id: state.id,
   database: () => getStore().database(),
-  close() {
-    store?.close();
-    store = undefined;
-  },
+  close: state.close,
   items: {
     study: {
       table: 'studies',

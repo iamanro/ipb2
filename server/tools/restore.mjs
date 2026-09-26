@@ -22,11 +22,11 @@
  *   docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs <backup> --yes
  *   docker compose start app
  */
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-import { STATE_DATABASES, archiveRoot, integrityCheck, vacuumInto } from '../dbArchive.js';
-import { stateDirectory } from '../state.js';
+import { archiveRoot, integrityCheck } from '../dbArchive.js';
+import { STATE_DATABASES } from '../stateDatabases.js';
 
 function flagValue(args, flag) {
   const index = args.indexOf(flag);
@@ -75,17 +75,17 @@ function main() {
   if (!existsSync(source)) fail(`no backup at ${source}. Run without arguments to list backups.`);
 
   const only = flagValue(args, '--only')?.split(',').map((id) => id.trim()).filter(Boolean);
-  const unknown = only?.filter((id) => !STATE_DATABASES.some((entry) => entry.id === id));
+  const unknown = only?.filter((id) => !STATE_DATABASES.some((database) => database.id === id));
   if (unknown?.length) {
-    fail(`unknown database(s): ${unknown.join(', ')}. Known: ${STATE_DATABASES.map((entry) => entry.id).join(', ')}.`);
+    fail(`unknown database(s): ${unknown.join(', ')}. Known: ${STATE_DATABASES.map((database) => database.id).join(', ')}.`);
   }
 
   const plan = [];
-  for (const entry of STATE_DATABASES) {
-    if (only && !only.includes(entry.id)) continue;
-    const from = path.join(source, entry.file);
+  for (const database of STATE_DATABASES) {
+    if (only && !only.includes(database.id)) continue;
+    const from = path.join(source, database.file);
     if (!existsSync(from)) {
-      console.log(`  ${entry.id}: not in this backup, left as is`);
+      console.log(`  ${database.id}: not in this backup, left as is`);
       continue;
     }
     let check;
@@ -95,22 +95,22 @@ function main() {
       check = error.message;
     }
     if (check !== 'ok') fail(`${from} failed its integrity check (${check}); nothing was restored.`);
-    plan.push({ ...entry, from, to: path.join(stateDirectory(entry.id, entry.defaultDir), entry.file) });
+    plan.push({ database, from });
   }
   if (!plan.length) fail('nothing to restore.');
 
   if (!args.includes('--force')) {
-    const open = plan.filter(({ to }) => existsSync(`${to}-wal`) || existsSync(`${to}-shm`));
+    const open = plan.filter(({ database }) => database.looksOpen());
     if (open.length) {
       fail(
-        `${open.map(({ to }) => to).join(', ')} look open (a -wal/-shm file exists). ` +
+        `${open.map(({ database }) => database.path).join(', ')} look open (a -wal/-shm file exists). ` +
           'Stop the app first (docker compose stop app). After a crash, --force skips this check.',
       );
     }
   }
 
   console.log(`Restore from ${source}:`);
-  for (const { id, from, to } of plan) console.log(`  ${id}: ${from} -> ${to}`);
+  for (const { database, from } of plan) console.log(`  ${database.id}: ${from} -> ${database.path}`);
   if (!args.includes('--yes')) {
     console.log('Dry run. Add --yes to restore.');
     return;
@@ -119,19 +119,13 @@ function main() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const safety = path.join(root, `pre-restore-${stamp}`);
   mkdirSync(safety, { recursive: true });
-  for (const { id, to, file } of plan) {
-    if (!existsSync(to)) continue;
-    vacuumInto(to, path.join(safety, file));
-    console.log(`  saved current ${id} to ${safety}`);
+  for (const { database } of plan) {
+    if (database.copyInto(safety) !== null) console.log(`  saved current ${database.id} to ${safety}`);
   }
 
-  for (const { id, from, to } of plan) {
-    mkdirSync(path.dirname(to), { recursive: true });
-    for (const suffix of ['-wal', '-shm', '-journal']) rmSync(`${to}${suffix}`, { force: true });
-    const partial = `${to}.restoring`;
-    copyFileSync(from, partial);
-    renameSync(partial, to);
-    console.log(`  restored ${id}`);
+  for (const { database, from } of plan) {
+    database.replaceFrom(from);
+    console.log(`  restored ${database.id}`);
   }
 
   const mirrored = path.join(root, 'archives');

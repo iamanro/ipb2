@@ -1,32 +1,23 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import { stateDirectory } from '../../../server/state.js';
+import state from './state.js';
 import { openStore, shapeOrbat } from './store.js';
 
-const ID = 'orbat';
-const STATE_ROOT = stateDirectory(
-  ID,
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'state'),
-);
-const DATABASE = path.join(STATE_ROOT, 'orbat.db');
-
 let store;
+state.onClose(() => {
+  store?.close();
+  store = undefined;
+});
 
 /** Lazily opens the state DB. Called eagerly by every route below (the
  * dispatcher itself only opens it for routes that resolve an item/part). */
 function open() {
-  store ??= openStore(DATABASE);
+  store ??= openStore(state.path);
   return store;
 }
 
 export default {
-  id: ID,
+  id: state.id,
   database: () => open().database,
-  close() {
-    store?.close();
-    store = undefined;
-  },
+  close: state.close,
   items: {
     orbat: {
       table: 'orbats',

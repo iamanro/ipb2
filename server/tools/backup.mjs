@@ -22,8 +22,8 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { STATE_DATABASES, archiveRoot, vacuumInto } from '../dbArchive.js';
-import { stateDirectory } from '../state.js';
+import { archiveRoot } from '../dbArchive.js';
+import { STATE_DATABASES } from '../stateDatabases.js';
 
 function flagValue(args, flag) {
   const index = args.indexOf(flag);
@@ -47,20 +47,15 @@ function keepCount(args) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 14;
 }
 
-function backupOne({ id: moduleId, defaultDir, file }, destDir) {
-  const source = path.join(stateDirectory(moduleId, defaultDir), file);
-  let stats;
-  try {
-    stats = statSync(source);
-  } catch {
-    console.log(`  skip ${moduleId}/${file}: not present`);
-    return null;
+function backupOne(database, destDir) {
+  if (!database.exists()) {
+    console.log(`  skip ${database.id}/${database.file}: not present`);
+    return false;
   }
-  const dest = path.join(destDir, file);
-  vacuumInto(source, dest);
-  const destStats = statSync(dest);
-  console.log(`  ${moduleId}/${file}: ${(stats.size / 1024).toFixed(0)} KiB -> ${(destStats.size / 1024).toFixed(0)} KiB`);
-  return dest;
+  const before = statSync(database.path).size;
+  const after = database.copyInto(destDir);
+  console.log(`  ${database.id}/${database.file}: ${(before / 1024).toFixed(0)} KiB -> ${(after / 1024).toFixed(0)} KiB`);
+  return true;
 }
 
 function rotate(root, keep) {
@@ -101,8 +96,8 @@ function main() {
 
   console.log(`Backing up state databases into ${destDir}`);
   let copied = 0;
-  for (const entry of STATE_DATABASES) {
-    if (backupOne(entry, destDir)) copied += 1;
+  for (const database of STATE_DATABASES) {
+    if (backupOne(database, destDir)) copied += 1;
   }
   if (copied === 0) {
     rmSync(destDir, { recursive: true, force: true });
