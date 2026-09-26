@@ -126,4 +126,227 @@ export const MIGRATIONS = [
   CREATE UNIQUE INDEX sirs_source ON sirs(source);
   CREATE UNIQUE INDEX indicators_source ON indicators(source);
   `,
+  // The one active scenario for the whole app (kraje/okresy-composed fictional
+  // countries and renamed places over real Czech terrain).
+  // `scenarios(active)` has a partial unique index, not a CHECK, because "at
+  // most one" is a cross-row invariant; store.js also deactivates the rest in
+  // the same transaction before flipping a row on, so the index never fires.
+  `
+  CREATE TABLE scenarios (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+    example INTEGER NOT NULL DEFAULT 0 CHECK (example IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX scenarios_active ON scenarios(active) WHERE active = 1;
+
+  CREATE TABLE scenario_countries (
+    id INTEGER PRIMARY KEY,
+    scenario_id INTEGER NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    affiliation TEXT NOT NULL CHECK (affiliation IN ('friendly', 'hostile', 'neutral', 'unknown')),
+    color TEXT NOT NULL,
+    regions TEXT NOT NULL DEFAULT '[]',
+    geometry TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX scenario_countries_scenario ON scenario_countries(scenario_id, position);
+
+  CREATE TABLE scenario_places (
+    id INTEGER PRIMARY KEY,
+    scenario_id INTEGER NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    real_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    lon REAL NOT NULL,
+    lat REAL NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX scenario_places_scenario ON scenario_places(scenario_id);
+
+  -- Single-row flag: has the EXAMPLE scenario ever been created? Set on
+  -- first creation (auto or explicit) so deleting it does not bring it back
+  -- on the next listing; \`POST scenarios/example\` still recreates it.
+  CREATE TABLE scenario_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    example_seeded INTEGER NOT NULL DEFAULT 0 CHECK (example_seeded IN (0, 1))
+  );
+  `,
+  // NAIs/TAIs imported from IPB, with geometry for auto point-in-polygon
+  // linking of reports (see geoMatch.js). `source`/`study_id`/`feature_id`
+  // tie a row back to the IPB feature it came from; geometry is nullable so
+  // older import payloads (label only) still land a usable row, just one
+  // that never auto-matches a report. SIRs point at the NAI/TAI their text
+  // used to name only in prose.
+  `
+  CREATE TABLE nais (
+    id INTEGER PRIMARY KEY,
+    source TEXT UNIQUE,
+    study_id INTEGER,
+    feature_id INTEGER,
+    kind TEXT NOT NULL CHECK (kind IN ('nai', 'tai')),
+    label TEXT NOT NULL,
+    geometry TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX nais_study ON nais(study_id);
+
+  ALTER TABLE sirs ADD COLUMN nai_id INTEGER REFERENCES nais(id) ON DELETE SET NULL;
+  CREATE INDEX sirs_nai ON sirs(nai_id);
+  `,
+  // The current situation: enemy/unknown/friendly tracks with a time and
+  // position history. `tracks` holds the head (most recent) position for
+  // cheap map rendering; `track_positions` is the full history a report can
+  // append to. The head only ever moves forward in `observed_at` (see
+  // store.js `addTrackPosition`), so an out-of-order report can enrich
+  // history without corrupting the current picture.
+  `
+  CREATE TABLE tracks (
+    id INTEGER PRIMARY KEY,
+    sidc TEXT NOT NULL,
+    designation TEXT,
+    status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'suspected', 'destroyed', 'lost')),
+    lon REAL NOT NULL,
+    lat REAL NOT NULL,
+    observed_at TEXT NOT NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE track_positions (
+    id INTEGER PRIMARY KEY,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    lon REAL NOT NULL,
+    lat REAL NOT NULL,
+    observed_at TEXT NOT NULL,
+    report_id INTEGER REFERENCES reports(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX track_positions_track ON track_positions(track_id, observed_at);
+  `,
+  // Reports gain a location, a typed structured payload, a reported SIDC,
+  // and links to the NAI they landed in and the track they update. `fields`
+  // is a JSON object shaped by `report_type` (see store.js FIELDS_BY_TYPE).
+  // lon/lat travel together: the CHECK enforces both-or-neither at the
+  // schema level even though the store also validates it, because this
+  // column pair is cheap to protect twice and easy to get wrong from a
+  // future direct-SQL script.
+  `
+  ALTER TABLE reports ADD COLUMN lon REAL;
+  ALTER TABLE reports ADD COLUMN lat REAL CHECK ((lat IS NULL) = (lon IS NULL));
+  ALTER TABLE reports ADD COLUMN report_type TEXT NOT NULL DEFAULT 'free' CHECK (report_type IN ('free', 'spotrep', 'salute'));
+  ALTER TABLE reports ADD COLUMN fields TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE reports ADD COLUMN sidc TEXT;
+  ALTER TABLE reports ADD COLUMN nai_id INTEGER REFERENCES nais(id) ON DELETE SET NULL;
+  ALTER TABLE reports ADD COLUMN track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL;
+  CREATE INDEX reports_nai ON reports(nai_id);
+  CREATE INDEX reports_track ON reports(track_id);
+  `,
+  // Collection plan: collectors (the ISR assets) tasked against a SIR x NAI
+  // x time window. A tasking's `report_id` is the report that answered it,
+  // set by hand once collection produces one worth citing.
+  `
+  CREATE TABLE collectors (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    discipline TEXT NOT NULL CHECK (discipline IN (
+      'HUMINT', 'SIGINT', 'IMINT', 'GEOINT', 'OSINT', 'MASINT', 'UAS', 'RECCE', 'OP', 'OTHER'
+    )),
+    unit TEXT,
+    range_km REAL,
+    available_from TEXT,
+    available_to TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE taskings (
+    id INTEGER PRIMARY KEY,
+    collector_id INTEGER NOT NULL REFERENCES collectors(id) ON DELETE CASCADE,
+    sir_id INTEGER NOT NULL REFERENCES sirs(id) ON DELETE CASCADE,
+    nai_id INTEGER REFERENCES nais(id) ON DELETE SET NULL,
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'tasked', 'active', 'complete', 'cancelled')),
+    report_id INTEGER REFERENCES reports(id) ON DELETE SET NULL,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX taskings_collector ON taskings(collector_id, start_at);
+  CREATE INDEX taskings_sir ON taskings(sir_id);
+  `,
+  // INTSUMs: the periodic intelligence summary product. `sections` is a
+  // JSON object with fixed keys (situation, significant_activity,
+  // pir_status, assessment, outlook); the draft endpoint fills the first
+  // three from tracks/reports/fulfillment, the analyst edits the rest.
+  `
+  CREATE TABLE intsums (
+    id INTEGER PRIMARY KEY,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    dtg TEXT NOT NULL,
+    author TEXT,
+    sections TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX intsums_period ON intsums(period_start);
+  `,
+  // Phase 1 cells (docs/phase1-access.md): every cell-owned table gets
+  // `owner_cell`/`releasable_to`, defaulting existing rows to White so
+  // nothing already in a running exercise leaks to Blue/Red. Child rows
+  // (sirs, indicators, evidence_links, track_positions) have no columns of
+  // their own — they inherit the parent's visibility (C3). `messages` holds
+  // fired MESSAGE injects, White-owned with `releasable_to` set to the
+  // inject's target cells. `roster` is superseded by exercise memberships
+  // (server/auth.js `memberships`, cell + role together) and is dropped —
+  // the exercise client now reads/writes members through the admin API.
+  `
+  ALTER TABLE requirements ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE requirements ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE reports ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE reports ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE rfis ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE rfis ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE tracks ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE tracks ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE collectors ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE collectors ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE taskings ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE taskings ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE intsums ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE intsums ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  ALTER TABLE nais ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';
+  ALTER TABLE nais ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+
+  CREATE TABLE messages (
+    id INTEGER PRIMARY KEY,
+    text TEXT NOT NULL,
+    fired_at TEXT NOT NULL,
+    owner_cell TEXT NOT NULL DEFAULT 'white',
+    releasable_to TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL
+  );
+
+  DROP TABLE roster;
+  `,
+  // `activity` gains the same visibility columns, populated by `mutate()`
+  // from whatever cell-owned row (if any) the mutation touched: NULL
+  // `owner_cell` means a global (non-cell) change, visible to everyone,
+  // same as it always was; a non-NULL value is filtered by `canSee` like
+  // any other cell-owned row, so Blue's activity log never mentions a Red
+  // item it can't otherwise see.
+  `
+  ALTER TABLE activity ADD COLUMN owner_cell TEXT;
+  ALTER TABLE activity ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
+  `,
 ];

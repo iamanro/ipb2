@@ -1,0 +1,495 @@
+/**
+ * Styles for the Collection and Products tabs (collection.js, products.js).
+ * Imported as a side effect by both modules; layered and token-driven like
+ * `styles.css`, never touched by that file so ownership stays clean.
+ */
+@layer components {
+  [data-module='exercise'] {
+    /* -- collectors / taskings -- */
+
+    .quick-offsets {
+      margin-top: 6px;
+    }
+
+    .tasking-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .tasking-row {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--line-dark);
+      padding: 10px 12px;
+      background: var(--surface);
+    }
+
+    .tasking-row.has-conflict {
+      border-left-color: var(--danger);
+    }
+
+    .tasking-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tasking-collector {
+      font: 600 var(--t-sm) / 1 var(--body);
+    }
+
+    .tasking-status {
+      padding: 2px 7px;
+      color: var(--on-fill);
+      background: var(--fill);
+      font: 600 var(--t-xs) / 1 var(--data);
+      text-transform: uppercase;
+    }
+
+    .tasking-status.status-planned {
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid var(--line-dark);
+    }
+
+    .tasking-status.status-complete {
+      background: var(--ok-bg);
+      color: var(--ok);
+    }
+
+    .tasking-status.status-cancelled {
+      background: var(--danger-bg);
+      color: var(--danger);
+    }
+
+    .conflict-badge {
+      padding: 2px 7px;
+      border: 1px solid var(--danger);
+      color: var(--danger);
+      font: 600 var(--t-xs) / 1 var(--data);
+    }
+
+    .sor-block {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    .sor-text {
+      flex: 1 1 auto;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      color: var(--ink);
+      font: 400 var(--t-xs) / 1.4 var(--data);
+      word-break: break-word;
+    }
+
+    /* -- sync matrix -- */
+
+    .sync-matrix-section {
+      overflow: hidden;
+    }
+
+    .sync-matrix-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .sync-matrix-svg {
+      display: block;
+      min-width: 900px;
+      color: var(--ink);
+      font: 400 var(--t-xs) / 1 var(--data);
+    }
+
+    .sync-pir-band {
+      fill: var(--surface-hover);
+    }
+
+    .sync-pir-label {
+      fill: var(--ink);
+      font-weight: 700;
+    }
+
+    .sync-sir-label {
+      fill: var(--muted);
+    }
+
+    .sync-tick {
+      stroke: var(--line);
+      stroke-width: 1;
+    }
+
+    .sync-tick-label {
+      fill: var(--muted);
+      font-size: 9px;
+    }
+
+    .sync-bar {
+      fill: var(--bar-color, var(--fill));
+      stroke: var(--bar-color, var(--fill));
+      stroke-width: 1.5;
+      cursor: default;
+    }
+
+    .sync-bar.sync-status-planned {
+      fill: none;
+    }
+
+    .sync-bar.sync-status-tasked {
+      fill: var(--bar-color, var(--fill));
+      fill-opacity: 0.55;
+    }
+
+    .sync-bar.sync-status-active {
+      fill: var(--bar-color, var(--fill));
+      fill-opacity: 1;
+    }
+
+    .sync-bar.sync-status-complete {
+      fill: url(#sync-hatch);
+      stroke: var(--bar-color, var(--fill));
+      color: var(--bar-color, var(--fill));
+    }
+
+    .sync-bar.sync-status-cancelled {
+      fill: none;
+      stroke-dasharray: 3 2;
+      opacity: 0.5;
+    }
+
+    .sync-bar.sync-conflict {
+      stroke: var(--danger);
+      stroke-width: 2.5;
+    }
+
+    .sync-bar-tag {
+      fill: var(--on-fill);
+      font-size: 9px;
+      font-weight: 600;
+      pointer-events: none;
+    }
+
+    .sync-status-planned + .sync-bar-tag,
+    .sync-bar.sync-status-planned ~ .sync-bar-tag {
+      fill: var(--ink);
+    }
+
+    .sync-conflict-icon {
+      fill: var(--danger);
+      font-size: 11px;
+    }
+
+    .sync-ltiov line {
+      stroke: var(--danger);
+      stroke-width: 2;
+    }
+
+    .sync-now-line {
+      stroke: var(--signal);
+      stroke-width: 1.5;
+      stroke-dasharray: 4 2;
+    }
+
+    .sync-now-label {
+      fill: var(--signal);
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .sync-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin: 12px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .sync-legend li {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font: 400 var(--t-xs) / 1 var(--data);
+    }
+
+    .sync-legend-swatch {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      background: var(--swatch);
+    }
+
+    .uncovered-box {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--caution);
+      background: var(--caution-bg);
+    }
+
+    .uncovered-box h4 {
+      margin: 0 0 6px;
+      color: var(--caution);
+      font: 600 var(--t-sm) / 1 var(--data);
+      text-transform: uppercase;
+    }
+
+    .uncovered-box ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--ink);
+      font: 400 var(--t-sm) / 1.4 var(--body);
+    }
+
+    .sor-print-list {
+      display: none;
+    }
+
+    /* -- INTSUM editor -- */
+
+    .intsum-editor {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .intsum-field label {
+      display: block;
+      margin-bottom: 4px;
+      font: 600 var(--t-sm) / 1 var(--body);
+    }
+
+    .intsum-field textarea {
+      width: 100%;
+      border: 1px solid var(--line-dark);
+      padding: 8px;
+      color: var(--ink);
+      background: var(--surface);
+      font: 400 var(--t-sm) / 1.4 var(--body);
+      resize: vertical;
+    }
+
+    .intsum-print-sheet {
+      display: none;
+    }
+
+    .classification-input {
+      width: 100%;
+      margin-bottom: 10px;
+      border: 1px solid var(--line-dark);
+      padding: 6px 8px;
+      color: var(--signal);
+      background: var(--surface);
+      font: 700 var(--t-sm) / 1 var(--data);
+      letter-spacing: 0.06em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    /* -- graphic INTSUM -- */
+
+    .graphic-intsum-map {
+      position: relative;
+      height: 420px;
+      margin-bottom: 10px;
+      border: 1px solid var(--line);
+    }
+
+    .graphic-intsum-target {
+      position: absolute;
+      inset: 0;
+    }
+
+    .graphic-intsum-legend h4 {
+      margin: 10px 0 4px;
+      font: 600 var(--t-sm) / 1 var(--data);
+      text-transform: uppercase;
+    }
+
+    .graphic-intsum-legend ul {
+      margin: 0;
+      padding-left: 18px;
+      font: 400 var(--t-sm) / 1.5 var(--body);
+    }
+
+    .graphic-intsum-caption {
+      margin-top: 8px;
+    }
+
+    .graphic-intsum-print-map {
+      display: none;
+      margin: 0;
+    }
+
+    /* -- SALUTE / SPOTREP print -- */
+
+    .salute-sheet {
+      margin-top: 14px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .classification-banner {
+      margin: 0 0 10px;
+      color: var(--signal);
+      font: 700 var(--t-sm) / 1 var(--data);
+      letter-spacing: 0.08em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .salute-fields {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 4px 12px;
+      margin: 10px 0;
+    }
+
+    .salute-fields dt {
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1.5 var(--data);
+      text-transform: uppercase;
+    }
+
+    .salute-fields dd {
+      margin: 0;
+      font: 400 var(--t-sm) / 1.5 var(--body);
+    }
+  }
+}
+
+@layer responsive {
+  [data-module='exercise'] {
+    @media (max-width: 980px) {
+      .sync-matrix-svg {
+        min-width: 640px;
+      }
+
+      .graphic-intsum-map {
+        height: 300px;
+      }
+
+      .salute-fields {
+        grid-template-columns: 1fr;
+      }
+    }
+  }
+}
+
+@media print {
+  [data-module='exercise'] {
+    /* The workspace's 200px sidebar column would otherwise survive print even
+       with .tab-nav hidden (CSS grid still reserves the track); collapse to a
+       single flowing column like the IPB worksheet does. */
+    .workspace {
+      display: block;
+      height: auto;
+    }
+
+    .panel {
+      padding: 0;
+      overflow: visible;
+    }
+
+    .sync-matrix-wrap {
+      overflow: visible;
+      border-color: var(--ink);
+    }
+
+    .sor-print-list {
+      display: block;
+      margin: 14px 0 0;
+      padding-left: 20px;
+      font: 400 var(--t-sm) / 1.6 var(--data);
+    }
+
+    .sor-print-list li {
+      margin-bottom: 6px;
+      break-inside: avoid;
+    }
+
+    .tab-nav,
+    .panel-header-row .chip-button,
+    .requirement-form,
+    .inline-form,
+    .field-group h3 + .requirement-form,
+    .icon-button,
+    .text-button {
+      display: none;
+    }
+
+    .classification-banner,
+    .classification-input {
+      color: var(--ink);
+    }
+
+    .field-group {
+      border-color: var(--ink);
+      break-inside: avoid;
+    }
+
+    .graphic-intsum-map {
+      display: none;
+    }
+
+    /* A product's own Print button prints that product alone (products.js printProduct). */
+    [data-print] > h2,
+    [data-print='intsum'] [data-product]:not([data-product='intsum']),
+    [data-print='graphic'] [data-product]:not([data-product='graphic']),
+    [data-print='salute'] [data-product]:not([data-product='salute']) {
+      display: none;
+    }
+
+    .graphic-intsum-print-map {
+      display: block;
+      break-inside: avoid;
+    }
+
+    .graphic-intsum-print-map canvas {
+      display: block;
+      width: 100%;
+      max-height: 15cm;
+      border: 1px solid var(--ink);
+    }
+
+    .graphic-intsum-print-map figcaption {
+      margin-top: 6px;
+      font: var(--t-xs) / 1.4 var(--data);
+    }
+
+    .salute-section select,
+    .salute-section .chip-button {
+      display: none;
+    }
+
+    .intsum-editor .intsum-field,
+    .intsum-editor .inline-form,
+    .intsum-editor h3 {
+      display: none;
+    }
+
+    .intsum-print-sheet {
+      display: block;
+      padding: 16px;
+      border: 1px solid var(--ink);
+      break-inside: avoid;
+    }
+
+    .intsum-print-sheet h4 {
+      margin: 12px 0 4px;
+      font: 700 var(--t-sm) / 1 var(--data);
+    }
+
+    .intsum-print-body {
+      margin: 0;
+      white-space: pre-wrap;
+      font: 400 var(--t-sm) / 1.5 var(--body);
+    }
+  }
+}

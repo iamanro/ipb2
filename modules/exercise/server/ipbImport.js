@@ -17,12 +17,19 @@ import { HttpError } from '../../../server/http.js';
  * indicator wording instead of being forced into the SIR's time window.
  *
  * Input is the subset of GET /api/ipb/studies/:id the client sends:
- * `{ study: { id, name }, coas: [{ id, name, kind }], nais: [{ id, label }],
+ * `{ study: { id, name }, coas: [{ id, name, kind }],
+ *    nais: [{ id, label, kind, geometry }],
  *    events: [{ id, coa_id, nai_feature_id, indicator, expected_time, observed_status }] }`.
+ * `nais[].kind` ('nai'|'tai') and `.geometry` (a GeoJSON geometry) are
+ * optional for backwards compatibility with older callers: a missing kind
+ * defaults to 'nai', a missing geometry stores NULL (the row still gets
+ * created so SIRs can reference it, it just never auto-matches a report).
+ * `input.decision_points`, if present, is accepted but not yet used here.
  * Pure: no database, no clock.
  */
 
 const COA_KIND_LABELS = { 'most-likely': 'most likely', 'most-dangerous': 'most dangerous' };
+const NAI_KINDS = ['nai', 'tai'];
 
 export function ipbSourcePrefix(studyId) {
   return `ipb:${studyId}:`;
@@ -43,6 +50,20 @@ function requireText(value, name) {
   return value.trim();
 }
 
+function isGeometryLike(value) {
+  return typeof value === 'object' && value !== null && typeof value.type === 'string' &&
+    Array.isArray(value.coordinates);
+}
+
+/**
+ * How an imported area reads in SIR and SOR text: "NAI 1" stays "NAI 1",
+ * a bare "Bridge" becomes "NAI Bridge" (or "TAI …" for a TAI).
+ */
+export function areaName(kind, label) {
+  const prefix = kind === 'tai' ? 'TAI' : 'NAI';
+  return new RegExp(`^${prefix}\\b`, 'i').test(label) ? label : `${prefix} ${label}`;
+}
+
 export function planIpbImport(input) {
   if (typeof input !== 'object' || input === null)
     throw new HttpError(400, 'Body must be an object.');
@@ -50,12 +71,27 @@ export function planIpbImport(input) {
   const studyName = requireText(input.study?.name, 'study.name');
   const prefix = ipbSourcePrefix(studyId);
 
+  const naiInputs = requireArray(input.nais, 'nais');
   const naiLabels = new Map(
-    requireArray(input.nais, 'nais').map((nai) => [
+    naiInputs.map((nai) => [
       requireId(nai.id, 'nais[].id'),
       typeof nai.label === 'string' && nai.label.trim() ? nai.label.trim() : `#${nai.id}`,
     ]),
   );
+  const nais = naiInputs.map((nai) => {
+    const id = requireId(nai.id, 'nais[].id');
+    if (nai.geometry !== undefined && nai.geometry !== null && !isGeometryLike(nai.geometry)) {
+      throw new HttpError(400, `nais[${id}].geometry must be a GeoJSON geometry or null.`);
+    }
+    return {
+      source: `${prefix}nai:${id}`,
+      feature_id: id,
+      study_id: studyId,
+      kind: NAI_KINDS.includes(nai.kind) ? nai.kind : 'nai',
+      label: naiLabels.get(id),
+      geometry: nai.geometry ?? null,
+    };
+  });
 
   const requirements = [];
   const coaById = new Map();
@@ -80,12 +116,16 @@ export function planIpbImport(input) {
     const naiId = Number.isInteger(event.nai_feature_id) ? event.nai_feature_id : null;
     const sirSource = `${coa.source}:nai:${naiId ?? 'none'}`;
     if (!sirs.has(sirSource)) {
+      const area = nais.find((nai) => nai.feature_id === naiId);
       const where =
-        naiId === null ? 'No NAI assigned' : `NAI ${naiLabels.get(naiId) ?? `#${naiId}`}`;
+        naiId === null
+          ? 'No NAI assigned'
+          : areaName(area?.kind, naiLabels.get(naiId) ?? `#${naiId}`);
       sirs.set(sirSource, {
         source: sirSource,
         requirementSource: coa.source,
         text: `${where}: indicators of ${coa.name}`,
+        naiSource: naiId === null ? null : `${prefix}nai:${naiId}`,
       });
     }
     const indicator = requireText(event.indicator, `events[${id}].indicator`);
@@ -101,5 +141,5 @@ export function planIpbImport(input) {
     });
   }
 
-  return { studyName, prefix, requirements, sirs: [...sirs.values()], indicators };
+  return { studyName, prefix, requirements, sirs: [...sirs.values()], indicators, nais };
 }
