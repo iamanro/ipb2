@@ -1095,6 +1095,12 @@ only (no LDAP/SSO), SQLite state as before. `compose.yaml` runs two
 containers: `app` (this repo, `node server/index.js`, not reachable from the
 host directly) and `caddy` (TLS + reverse proxy, the only published ports).
 
+Day-to-day operation (accounts, exercise day, reset between exercises,
+scheduled backups, restore drill, updates) is in
+[`docs/operator-runbook.md`](docs/operator-runbook.md), with measured
+30-user load-test results; `deploy/loadtest.mjs` reruns that test against
+any deployment.
+
 ### Prerequisites
 
 - Docker 24+ with the `compose` plugin, or Podman 4+ with `podman compose`
@@ -1132,14 +1138,15 @@ an NFS/SMB mount of the NAS target) before `docker compose up`.
    mkdir -p deploy/secrets
    printf '%s' 'a strong password' > deploy/secrets/admin_password
    chmod 600 deploy/secrets/admin_password
+   sudo chown 1000 deploy/secrets/admin_password   # the container's user; skip if you are uid 1000
    ```
 
    The admin name defaults to `admin` (override with `IPB_ADMIN_NAME`); the
-   first request bootstraps that one account with the `admin` role (flagged
-   must-change-password), only when no users exist yet — add the rest
-   afterward from the app's own user management, or `docker compose exec
-   app node server/tools/users.mjs add <name> --role <role>` (see "Users,
-   roles and network access" above for the full role list).
+   first request bootstraps that one account as an admin (flagged
+   must-change-password), only when no users exist yet. Add everyone else on
+   the Admin page (Users, then Members for their cell and role), or with
+   `docker compose exec app node server/tools/users.mjs add <name>` and
+   `... member <name> --cell <white|blue|red> --role <role>`.
 
 2. Point `IPB_DATA_DIR` at the packed data and start the stack:
 
@@ -1204,28 +1211,32 @@ automatically on next open, so a schema change needs no separate step.
 ### Backups and restore
 
 ```bash
-docker compose exec app node server/tools/backup.mjs        # ad hoc
-docker compose --profile backup run --rm backup             # same, one-shot container
-```
-
-Writes a dated folder of consistent SQLite snapshots (`VACUUM INTO`, safe
-against a live server) to `IPB_BACKUP_ROOT` (default `/state/../backups`,
-i.e. outside the `state` volume's own tree so a restore never overwrites the
-backup it's restoring from) and keeps the newest `IPB_BACKUP_KEEP` (default
-14). For a scheduled backup without touching the host's own cron, add:
-
-```bash
 docker compose --profile backup run --rm backup
 ```
 
-to a `systemd` timer or host `cron` entry running as whatever user owns
-Docker.
+Writes a dated folder of consistent SQLite snapshots (`VACUUM INTO`, safe
+against a live server) to `IPB_BACKUP_DIR` on the host (default
+`./deploy/backups`), keeps the newest `IPB_BACKUP_KEEP` (default 14), and
+mirrors every exercise archive into `archives/` there (never rotated), so
+losing the `state` volume loses neither current data nor past exercises.
+Don't run `backup.mjs` with `docker compose exec app`: the app container has
+no backup mount, and the files would vanish with the container. Schedule the
+command above from host `cron` or a `systemd` timer (see
+`docs/operator-runbook.md`).
 
-**Restore:** stop the app (`docker compose stop app`), copy the wanted
-dated folder's `*.db` files back into the `state` volume (`docker cp
-<file> <container>:/state/<module>/<file>.db`, or mount the volume
-directly), then `docker compose start app`. Each file is a complete,
-independent database — a partial restore (e.g. only `auth.db`) is safe.
+**Restore** (app stopped; `server/tools/restore.mjs` checks every file's
+integrity first, refuses while the databases look open, and saves the state
+it replaces to `pre-restore-<time>/` next to the backups):
+
+```bash
+docker compose stop app
+docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs            # list backups
+docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs <backup> --yes
+docker compose start app
+```
+
+`--only auth,ipb` restores just those databases; each file is a complete,
+independent database, so a partial restore is safe.
 
 ### Resource sizing (8 cores / 16 GB, ~30 users)
 
