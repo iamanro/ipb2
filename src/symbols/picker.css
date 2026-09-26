@@ -1,0 +1,319 @@
+/* The shared symbol picker dialog (openSymbolPicker, picker.js). It is appended to
+ * document.body directly, outside any module's [data-module] subtree, so every class
+ * here is self-contained: nothing depends on a module stylesheet being loaded. */
+@layer components {
+  .symbol-picker-dialog {
+    box-sizing: border-box;
+    width: min(560px, calc(100vw - 32px));
+    max-height: calc(100vh - 64px);
+    border: 1px solid var(--line-dark);
+    padding: 0;
+    color: var(--ink);
+    background: var(--paper);
+    box-shadow: var(--shadow);
+  }
+
+  .symbol-picker-dialog::backdrop {
+    background: var(--backdrop);
+  }
+
+  .symbol-picker-dialog[open] {
+    animation: symbol-picker-in var(--d-med) var(--ease-out);
+  }
+
+  .symbol-picker-dialog[open]::backdrop {
+    animation: symbol-picker-backdrop-in var(--d-med) var(--ease-out);
+  }
+
+  @keyframes symbol-picker-in {
+    from {
+      scale: 0.97;
+      opacity: 0;
+    }
+  }
+
+  @keyframes symbol-picker-backdrop-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  .symbol-picker-dialog * {
+    box-sizing: border-box;
+  }
+
+  .symbol-picker-form {
+    display: grid;
+    gap: 16px;
+    padding: 16px;
+  }
+
+  .symbol-picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .symbol-picker-title {
+    margin: 0;
+    color: var(--ink);
+    font: 600 var(--t-lg) / 1.2 'IBM Plex Sans Condensed', 'Arial Narrow', sans-serif;
+  }
+
+  .symbol-picker-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--target);
+    height: var(--target);
+    border: 1px solid var(--line-dark);
+    color: var(--muted);
+    background: var(--surface);
+    font-size: var(--t-lg);
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .symbol-picker-close:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .symbol-picker-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 16px;
+  }
+
+  .symbol-picker-fields .symbol-picker-entity-field {
+    position: relative;
+    grid-column: 1 / -1;
+  }
+
+  /* -- shared form control look (this file owns it: nothing above is loaded) -- */
+
+  .symbol-picker-dialog .field {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .symbol-picker-dialog .field > span {
+    color: var(--muted);
+    font: 500 var(--t-xs) / 1.2 var(--body);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .symbol-picker-dialog .text-input {
+    width: 100%;
+    min-height: var(--target);
+    border: 1px solid var(--line-dark);
+    padding: 5px 8px;
+    color: var(--ink);
+    background: var(--surface);
+    font: 400 var(--t-sm) / 1.3 var(--body);
+  }
+
+  .symbol-picker-dialog .text-input:focus-visible {
+    border-color: var(--blue-dark);
+  }
+
+  .symbol-picker-dialog .text-input:disabled {
+    color: var(--muted);
+    opacity: 0.6;
+  }
+
+  .symbol-picker-dialog .code {
+    font: 500 var(--t-sm) / 1.3 var(--data);
+    letter-spacing: 0.02em;
+  }
+
+  .symbol-picker-dialog .field-note {
+    margin: 0;
+    min-height: 1em;
+    color: var(--muted);
+    font: 400 var(--t-xs) / 1.4 var(--body);
+  }
+
+  /* -- affiliation / status segmented radio groups -- */
+
+  .symbol-picker-segmented {
+    display: grid;
+    gap: 4px;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+  }
+
+  .symbol-picker-segmented legend {
+    padding: 0;
+    color: var(--muted);
+    font: 500 var(--t-xs) / 1.2 var(--body);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .symbol-picker-options {
+    display: flex;
+    border: 1px solid var(--line-dark);
+  }
+
+  .symbol-picker-segment {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: var(--target);
+    padding: 0 8px;
+    color: var(--muted);
+    font: 500 var(--t-sm) / 1 var(--body);
+    cursor: pointer;
+  }
+
+  .symbol-picker-segment:not(:last-child) {
+    border-right: 1px solid var(--line-dark);
+  }
+
+  .symbol-picker-segment:has(input:checked) {
+    color: var(--on-fill);
+    background: var(--fill);
+  }
+
+  .symbol-picker-segment input {
+    /* Kept in the accessibility tree and reachable by Tab, just not drawn: the label
+     * itself carries the selected look. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+  }
+
+  /* -- entity combobox -- */
+
+  .symbol-picker-listbox {
+    position: absolute;
+    z-index: 5;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 240px;
+    margin: 4px 0 0;
+    padding: 2px;
+    overflow-y: auto;
+    list-style: none;
+    border: 1px solid var(--line-dark);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .symbol-picker-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    color: var(--ink);
+    font: 400 var(--t-sm) / 1.3 var(--body);
+    cursor: pointer;
+  }
+
+  .symbol-picker-option.is-active,
+  .symbol-picker-option:hover {
+    color: var(--on-fill);
+    background: var(--fill);
+  }
+
+  .symbol-picker-option :is(svg, .mil-symbol) {
+    flex-shrink: 0;
+  }
+
+  /* -- preview -- */
+
+  .symbol-picker-preview {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 16px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    text-align: center;
+  }
+
+  .symbol-picker-preview-symbol {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100px;
+    color: var(--ink);
+  }
+
+  .symbol-picker-preview-caption {
+    color: var(--ink);
+    font: 500 var(--t-sm) / 1.3 var(--body);
+    text-transform: capitalize;
+  }
+
+  .symbol-picker-sidc {
+    color: var(--muted);
+    font: 500 var(--t-sm) / 1 var(--data);
+    letter-spacing: 0.04em;
+  }
+
+  /* -- actions -- */
+
+  .symbol-picker-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .symbol-picker-dialog .text-button {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    border: 0;
+    padding: 0 8px;
+    color: var(--muted);
+    background: transparent;
+    font: 600 var(--t-sm) / 1 var(--body);
+    cursor: pointer;
+  }
+
+  .symbol-picker-dialog .text-button:hover {
+    color: var(--ink);
+  }
+
+  .symbol-picker-accept {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--target);
+    border: 1px solid var(--fill);
+    padding: 0 16px;
+    color: var(--on-fill);
+    background: var(--fill);
+    font: 600 var(--t-sm) / 1 var(--body);
+    cursor: pointer;
+  }
+
+  .symbol-picker-accept:hover {
+    border-color: var(--fill-hover);
+    background: var(--fill-hover);
+  }
+}
+
+@layer responsive {
+  @media (max-width: 620px) {
+    .symbol-picker-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .symbol-picker-fields .symbol-picker-entity-field {
+      grid-column: auto;
+    }
+  }
+}

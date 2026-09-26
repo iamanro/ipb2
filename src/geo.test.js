@@ -89,6 +89,20 @@ describe('formatArea', () => {
   });
 });
 
+describe('formatMgrs spaced', () => {
+  test('groups zone, square and the two halves of the digits', () => {
+    expect(formatMgrs(TARGET.lon, TARGET.lat, 5, { spaced: true })).toBe(
+      formatMgrs(TARGET.lon, TARGET.lat).replace(/^(\d+[A-Z])([A-Z]{2})(\d{5})(\d{5})$/, '$1 $2 $3 $4'),
+    );
+    expect(formatMgrs(TARGET.lon, TARGET.lat, 2, { spaced: true })).toMatch(/^\d+[A-Z] [A-Z]{2} \d{2} \d{2}$/);
+  });
+
+  test('a spaced reference copied off the screen parses back to the same point', () => {
+    const parsed = parseCoordinate(formatMgrs(TARGET.lon, TARGET.lat, 5, { spaced: true }));
+    expect(metresBetween(parsed, TARGET)).toBeLessThan(TOLERANCE_METRES);
+  });
+});
+
 describe('formatDecimal', () => {
   test('formats latitude and longitude with hemisphere letters', () => {
     expect(formatDecimal(TARGET.lon, TARGET.lat)).toBe('49.70000 N  17.50000 E');

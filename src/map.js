@@ -29,12 +29,20 @@ import CircleStyle from 'ol/style/Circle.js';
 import RegularShape from 'ol/style/RegularShape.js';
 import TextStyle from 'ol/style/Text.js';
 import IconStyle from 'ol/style/Icon.js';
-import ms from 'milsymbol';
+import { defaults as defaultControls, ScaleLine } from 'ol/control.js';
 
 import { buildMgrsGrid, mgrsGridSpacing } from './mgrsGrid.js';
 import { downwindRotation, recolourCloudMask, wmsTileUrl } from './weather.js';
+import { formatMetres } from './geo.js';
+import { formatDtg } from './dtg.js';
+import { TACTICAL_GRAPHICS, graphicColor, graphicLabel, rangeRingGeometry } from './tactical.js';
+import { createMeasureController } from './measure.js';
+import { withStatus } from './symbols/sidc.js';
+import { createSymbol } from './symbols/symbol.js';
 
 const MAP_PROJECTION = 'EPSG:3857';
+/** Amplifier text on map symbols; the symbols' light outline carries it on dark imagery. */
+const MAP_SYMBOL_INK = '#1b1b1b';
 const DATA_PROJECTION = 'EPSG:4326';
 const GEOJSON_OPTIONS = { featureProjection: MAP_PROJECTION, dataProjection: DATA_PROJECTION };
 
@@ -251,8 +259,6 @@ function topoStyle(feature) {
   }
 }
 
-const VECTOR_STYLES = { roads: basemapStyle, topo: topoStyle };
-
 // -- Reference overlays: roads & water, place names, contours ------------------
 
 /** Basemap roads with a dark casing, water as outlines, so imagery stays visible. */
@@ -300,35 +306,77 @@ const PLACE_LABEL = {
   peak: labelStyle('600 11px system-ui, sans-serif', '#5a3d1e'),
   water: labelStyle('italic 500 11px system-ui, sans-serif', '#2f5d8a'),
 };
+/**
+ * Real labels a scenario leaves unmatched, shown only in the Exercise
+ * editor: grey and italic, so they read as "not this war" but
+ * stay clickable to rename.
+ */
+const DIMMED_PLACE_LABEL = {
+  city: labelStyle('italic 700 15px system-ui, sans-serif', '#8b98a0'),
+  town: labelStyle('italic 700 13px system-ui, sans-serif', '#8b98a0'),
+  village: labelStyle('italic 600 12px system-ui, sans-serif', '#8b98a0'),
+  minor: labelStyle('italic 500 11px system-ui, sans-serif', '#8b98a0'),
+  peak: labelStyle('italic 600 11px system-ui, sans-serif', '#8b98a0'),
+  water: labelStyle('italic 500 11px system-ui, sans-serif', '#8b98a0'),
+};
 /** Hamlets and neighbourhoods only from about zoom 13, or they bury villages. */
 const MINOR_PLACE_MAX_RESOLUTION = 20;
 
-/** Place, peak and water names from an OpenMapTiles-schema basemap. */
-function placeLabelStyle(feature, resolution) {
+/**
+ * Which `PLACE_LABEL`/`DIMMED_PLACE_LABEL` bucket a place/peak/water-name
+ * feature falls into (`styleKind`), its real name, and the place class a
+ * scenario place record uses (`placeKind`: the basemap's own class for
+ * `place` features, or `'peak'`/`'water'`) — shared by the plain label
+ * style below and by the scenario-aware one in `createMap`.
+ */
+function resolvePlaceClass(feature, resolution) {
   const name = feature.get('name');
-  if (!name) return undefined;
-  let style;
-  let text = name;
+  if (!name) return null;
   switch (feature.get('layer')) {
     case 'place': {
-      const kind = feature.get('class');
-      if (kind === 'city' || kind === 'town' || kind === 'village') style = PLACE_LABEL[kind];
-      else if (resolution <= MINOR_PLACE_MAX_RESOLUTION) style = PLACE_LABEL.minor;
-      break;
+      const cls = feature.get('class');
+      if (cls === 'city' || cls === 'town' || cls === 'village') {
+        return { styleKind: cls, placeKind: cls, name };
+      }
+      if (resolution <= MINOR_PLACE_MAX_RESOLUTION) {
+        return { styleKind: 'minor', placeKind: cls || 'minor', name };
+      }
+      return null;
     }
-    case 'mountain_peak': {
-      const ele = feature.get('ele');
-      style = PLACE_LABEL.peak;
-      text = `▲ ${name}${ele ? ` ${ele} m` : ''}`;
-      break;
-    }
+    case 'mountain_peak':
+      return { styleKind: 'peak', placeKind: 'peak', name, ele: feature.get('ele') };
     case 'water_name':
-      style = PLACE_LABEL.water;
-      break;
+      return { styleKind: 'water', placeKind: 'water', name };
     default:
-      return undefined;
+      return null;
   }
-  style?.getText().setText(text);
+}
+
+/**
+ * A vector-tile feature's representative lon/lat: the point itself, or the
+ * extent's centre for a line/polygon. These features render as
+ * `ol/render/Feature`, whose `getGeometry()` returns itself rather than a
+ * real Geometry (no `getCoordinates()`) — so this reads flat coordinates
+ * and the extent off the feature directly instead of through that.
+ */
+function featureLonLat(feature) {
+  const coordinate =
+    feature.getType() === 'Point'
+      ? feature.getFlatCoordinates().slice(0, 2)
+      : extentCenter(feature.getExtent());
+  return toLonLat(coordinate, MAP_PROJECTION);
+}
+
+/** Place, peak and water names from an OpenMapTiles-schema basemap. */
+function placeLabelStyle(feature, resolution) {
+  const resolved = resolvePlaceClass(feature, resolution);
+  if (!resolved) return undefined;
+  const style = PLACE_LABEL[resolved.styleKind];
+  const text =
+    resolved.styleKind === 'peak'
+      ? `▲ ${resolved.name}${resolved.ele ? ` ${resolved.ele} m` : ''}`
+      : resolved.name;
+  style.getText().setText(text);
   return style;
 }
 
@@ -450,13 +498,39 @@ function buildArrowStyle(geometry, color) {
   });
 }
 
-function buildSymbolStyle(sidc, label, iconCache) {
-  let icon = iconCache.get(sidc);
+/**
+ * A cached milsymbol icon, keyed by every option that changes its pixels (a
+ * shared cache keyed on sidc alone would leak one feature's designation,
+ * DTG or fade onto every other feature drawn with the same code). The
+ * planned/anticipated dashed frame is a field of the SIDC itself
+ * (`src/symbols/sidc.js`'s `withStatus`), not a milsymbol render option —
+ * milsymbol derives the frame purely from the code it is given.
+ */
+function milSymbolIcon(iconCache, { sidc, size = 28, designation, dtg, opacity = 1 }) {
+  const key = `${sidc}|${size}|${designation || ''}|${dtg || ''}|${opacity}`;
+  let icon = iconCache.get(key);
   if (!icon) {
-    const canvas = new ms.Symbol(sidc, { size: 28 }).asCanvas();
-    icon = new IconStyle({ img: canvas, imgSize: [canvas.width, canvas.height] });
-    iconCache.set(sidc, icon);
+    // Same APP-6 drawing as ORBAT and the picker; a canvas can't resolve the
+    // shared default `currentColor`, so the amplifier text gets real ink.
+    const canvas = createSymbol(sidc, {
+      size,
+      uniqueDesignation: designation,
+      dtg,
+      infoColor: MAP_SYMBOL_INK,
+    }).asCanvas();
+    icon = new IconStyle({ img: canvas, imgSize: [canvas.width, canvas.height], opacity });
+    iconCache.set(key, icon);
   }
+  return icon;
+}
+
+/** A `symbol`-kind feature: the SIDC icon, plus optional `designation`/`dtg` milsymbol modifiers. */
+function buildSymbolStyle(properties, label, iconCache) {
+  const icon = milSymbolIcon(iconCache, {
+    sidc: properties.sidc,
+    designation: properties.designation,
+    dtg: properties.dtg,
+  });
   return new Style({ image: icon, text: label ? buildLabelText(label, 'Point') : undefined });
 }
 
@@ -474,15 +548,62 @@ function buildSelectionHalo(geometry) {
   return new Style({ stroke: new Stroke({ color: '#fff59d', width: 7 }) });
 }
 
-function buildFeatureStyle(feature, iconCache) {
+/** A `graphic`-kind feature: `properties.graphic` looked up in `TACTICAL_GRAPHICS`. */
+function buildGraphicStyle(feature, properties, label, darkBase) {
+  const entry = TACTICAL_GRAPHICS[properties.graphic];
+  if (!entry) return [];
+  const color = graphicColor(properties.affiliation, darkBase);
+  return entry.style(feature, { color, darkBase, label });
+}
+
+/** A `range-ring`-kind feature: one dashed geodesic circle per `properties.radii` metres, labelled at its north point. */
+function buildRangeRingStyle(feature, properties, darkBase) {
+  const radii = Array.isArray(properties.radii) ? properties.radii : [];
+  if (!radii.length) return [];
+  const center = toLonLat(feature.getGeometry().getCoordinates(), MAP_PROJECTION);
+  const color = graphicColor(properties.affiliation, darkBase);
+  const ringLabels = Array.isArray(properties.ringLabels) ? properties.ringLabels : [];
+  const styles = [];
+  radii.forEach((radiusM, index) => {
+    const ring = rangeRingGeometry(center, radiusM).transform(DATA_PROJECTION, MAP_PROJECTION);
+    styles.push(
+      new Style({ geometry: ring, stroke: new Stroke({ color, width: 1.5, lineDash: [6, 4] }) }),
+    );
+    // circular()'s first vertex is due north of the centre — exactly the label anchor we want.
+    const north = ring.getCoordinates()[0][0];
+    const text = String(ringLabels[index] ?? formatMetres(radiusM));
+    styles.push(
+      new Style({
+        geometry: new Point(north),
+        text: new TextStyle({
+          text,
+          font: '700 11px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif',
+          fill: new Fill({ color: '#1b1b1b' }),
+          backgroundFill: new Fill({ color: 'rgba(255, 255, 255, 0.9)' }),
+          backgroundStroke: new Stroke({ color, width: 1.25 }),
+          padding: [1, 4, 1, 4],
+          textBaseline: 'bottom',
+          offsetY: -4,
+        }),
+      }),
+    );
+  });
+  return styles;
+}
+
+function buildFeatureStyle(feature, iconCache, darkBase) {
   const layerName = feature.get('layer');
+  const kind = feature.get('kind');
   const properties = feature.get('properties') || {};
   const label = feature.get('label');
   const geometry = feature.getGeometry();
   if (!geometry) return [];
 
+  if (kind === 'graphic') return buildGraphicStyle(feature, properties, label || graphicLabel(properties.graphic, properties.name), darkBase);
+  if (kind === 'range-ring') return buildRangeRingStyle(feature, properties, darkBase);
+
   if (properties.sidc) {
-    return [buildSymbolStyle(properties.sidc, label, iconCache)];
+    return [buildSymbolStyle(properties, label, iconCache)];
   }
 
   const config = layerConfig(layerName);
@@ -536,6 +657,220 @@ function buildFeatureStyle(feature, iconCache) {
   }
 
   return styles;
+}
+
+// -- Situation overlay style (setSituation: Exercise's current tracks/reports) --
+
+const TRACK_ICON_SIZE = 30;
+/** `destroyed`/`lost` tracks fade instead of disappearing — still on the map, marked as no longer live. */
+const TRACK_FADED_OPACITY = 0.4;
+const SITUATION_LABEL_FONT = '700 11px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif';
+/** Report labels hide below this (OL "256px tile" resolution at zoom 12), so a busy situation doesn't bury the basemap when zoomed out. */
+const REPORT_LABEL_MAX_RESOLUTION = 38.22;
+const REPORT_INK = '#e6c229';
+
+/** A track's icon: designation + DTG via milsymbol modifiers, `suspected` dashed (planned), `destroyed`/`lost` faded. */
+function situationTrackStyle(feature, iconCache) {
+  const track = feature.get('track');
+  const opacity = track.status === 'destroyed' || track.status === 'lost' ? TRACK_FADED_OPACITY : 1;
+  const sidc = track.status === 'suspected' ? withStatus(track.sidc, 'planned') : track.sidc;
+  const icon = milSymbolIcon(iconCache, {
+    sidc,
+    size: TRACK_ICON_SIZE,
+    designation: track.designation,
+    dtg: track.observed_at ? formatDtg(new Date(track.observed_at).getTime()) : undefined,
+    opacity,
+  });
+  return new Style({ image: icon });
+}
+
+const SITUATION_HISTORY_STYLE = new Style({
+  stroke: new Stroke({ color: '#546e7a', width: 1.5, lineDash: [3, 4] }),
+});
+const SITUATION_HISTORY_DOT_STYLE = new Style({
+  image: new CircleStyle({ radius: 2.5, fill: new Fill({ color: '#546e7a' }) }),
+});
+
+/** A report marker: a rotated square, filled by credibility (1-2 solid, 3 medium, 4-6 hollow). */
+function situationReportStyle(feature, resolution) {
+  const report = feature.get('report');
+  const fillAlpha = report.credibility <= 2 ? 0.9 : report.credibility === 3 ? 0.45 : 0;
+  const styles = [
+    new Style({
+      image: new RegularShape({
+        points: 4,
+        radius: 7,
+        angle: Math.PI / 4,
+        fill: new Fill({ color: withAlpha(REPORT_INK, fillAlpha) }),
+        stroke: new Stroke({ color: REPORT_INK, width: 1.75 }),
+      }),
+    }),
+  ];
+  if (resolution <= REPORT_LABEL_MAX_RESOLUTION) {
+    styles.push(
+      new Style({
+        text: new TextStyle({
+          text: (report.report_type || 'report').toUpperCase(),
+          font: SITUATION_LABEL_FONT,
+          offsetY: -14,
+          fill: new Fill({ color: '#1b1b1b' }),
+          stroke: new Stroke({ color: '#ffffff', width: 3 }),
+        }),
+      }),
+    );
+  }
+  return styles;
+}
+
+// -- Scenario overlay style (Exercise "Geography" fictional countries) -----
+
+/** Great-circle distance in km; good enough for the ≤5 km name-match rule. */
+function haversineKm(lon1, lat1, lon2, lat2) {
+  const R = 6371;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/**
+ * Scenario places bucketed by lowercased real name, for a fast lookup before
+ * the distance check. Exported so the Exercise "Geography" editor can run
+ * the same match rule when a clicked real label is already
+ * renamed, instead of guessing from `scenario.places` itself.
+ */
+export function buildScenarioNameIndex(scenario) {
+  const index = new Map();
+  if (!scenario) return index;
+  for (const place of scenario.places) {
+    const key = place.real_name.trim().toLowerCase();
+    const bucket = index.get(key);
+    if (bucket) bucket.push(place);
+    else index.set(key, [place]);
+  }
+  return index;
+}
+
+/**
+ * Match rule: same name (case/trim-insensitive), ≤5 km apart.
+ * The name lookup narrows to a handful of candidates before any distance
+ * math runs, which is what keeps this affordable per rendered label.
+ */
+export function matchScenarioPlace(index, name, lon, lat) {
+  if (!name) return null;
+  const bucket = index.get(name.trim().toLowerCase());
+  if (!bucket) return null;
+  return bucket.find((place) => haversineKm(lon, lat, place.lon, place.lat) <= 5) ?? null;
+}
+
+/** "Arnland" -> "A R N L A N D": crude letter-spacing, canvas text has none. */
+function letterSpaced(text) {
+  return text.toLocaleUpperCase().split('').join('\u2009');
+}
+
+const COUNTRY_LABEL_FONT = '700 13px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif';
+/** Dark ink over the pale vector basemap, light ink over dark imagery — same pairing as MGRS/contours. */
+const COUNTRY_TONE = {
+  dark: {
+    label: '#1b1b1b',
+    halo: 'rgba(255, 255, 255, 0.92)',
+    casing: 'rgba(255, 255, 255, 0.9)',
+  },
+  light: { label: '#ffffff', halo: 'rgba(8, 12, 16, 0.85)', casing: 'rgba(8, 12, 16, 0.85)' },
+};
+
+/**
+ * A point safely inside a Polygon or MultiPolygon, for a country's label —
+ * `getInteriorPoint()` only exists on `Polygon`; for a MultiPolygon (most
+ * countries here, unioned from several kraje/okresy) this uses the largest
+ * constituent polygon's interior point, so the label sits in the biggest
+ * landmass rather than a sliver.
+ */
+function geometryAnchor(geometry) {
+  if (geometry.getType() === 'Polygon') return geometry.getInteriorPoint().getCoordinates();
+  const largest = geometry
+    .getPolygons()
+    .reduce(
+      (best, polygon) => (!best || polygon.getArea() > best.getArea() ? polygon : best),
+      null,
+    );
+  return largest.getInteriorPoint().getCoordinates();
+}
+
+/** EPSG:3857 resolution (m/px) → the usual 256px-tile zoom level, for style
+ * functions that only get a resolution — same tile grid this map uses
+ * everywhere else (`createXYZ()`'s default). */
+function resolutionToZoom(resolution) {
+  return Math.log2(156543.03392804097 / resolution);
+}
+
+const COUNTRY_FILL_MAX_ALPHA = 0.16;
+/** Full fill at/below this zoom, fading to none by the zoom above: inside
+ * one country the whole map isn't tinted once zoomed in to work in it. */
+const COUNTRY_FILL_FADE_START = 8;
+const COUNTRY_FILL_FADE_END = 10;
+
+/** A country fill's alpha at `zoom`: full through 8, 0 from 10, linear between. */
+function countryFillAlpha(zoom) {
+  if (zoom <= COUNTRY_FILL_FADE_START) return COUNTRY_FILL_MAX_ALPHA;
+  if (zoom >= COUNTRY_FILL_FADE_END) return 0;
+  const t = (zoom - COUNTRY_FILL_FADE_START) / (COUNTRY_FILL_FADE_END - COUNTRY_FILL_FADE_START);
+  return COUNTRY_FILL_MAX_ALPHA * (1 - t);
+}
+
+const COUNTRY_FILL_STYLE_CACHE = new Map();
+/** Cached by colour + a rounded alpha (zoom moves continuously; alpha only
+ * needs ~256 steps to look smooth), so panning/zooming doesn't allocate a
+ * new Style/Fill every frame. */
+function countryFillStyle(color, zoom) {
+  const alpha = Math.round(countryFillAlpha(zoom) * 255) / 255;
+  if (alpha <= 0) return null;
+  const key = `${color}|${alpha}`;
+  if (!COUNTRY_FILL_STYLE_CACHE.has(key)) {
+    COUNTRY_FILL_STYLE_CACHE.set(key, new Style({ fill: new Fill({ color: withAlpha(color, alpha) }) }));
+  }
+  return COUNTRY_FILL_STYLE_CACHE.get(key);
+}
+
+/** A scenario country: low-alpha fill (fading out zoomed in), a coloured
+ * border on a casing, an uppercase spaced label — the border and label stay
+ * at every zoom, only the fill fades. */
+function countryStyle(feature, tone, resolution) {
+  const color = feature.get('color') || '#8ea2a8';
+  const ink = COUNTRY_TONE[tone];
+  const anchor = geometryAnchor(feature.getGeometry());
+  const fill = countryFillStyle(color, resolutionToZoom(resolution));
+  return [
+    ...(fill ? [fill] : []),
+    new Style({ stroke: new Stroke({ color: ink.casing, width: 5 }) }),
+    new Style({ stroke: new Stroke({ color, width: 2.4 }) }),
+    new Style({
+      geometry: new Point(anchor),
+      text: new TextStyle({
+        text: letterSpaced(feature.get('name') || ''),
+        font: COUNTRY_LABEL_FONT,
+        fill: new Fill({ color: ink.label }),
+        stroke: new Stroke({ color: ink.halo, width: 4 }),
+        overflow: true,
+      }),
+    }),
+  ];
+}
+
+/** Kraj/okres outline for the Exercise "Pick regions" mode; tinted by its owning country, if any. */
+function regionStyle(ownerColor) {
+  return new Style({
+    stroke: new Stroke({
+      color: ownerColor ? withAlpha(ownerColor, 0.9) : 'rgba(159, 208, 222, 0.55)',
+      width: ownerColor ? 2 : 1,
+    }),
+    fill: new Fill({
+      color: ownerColor ? withAlpha(ownerColor, 0.22) : 'rgba(159, 208, 222, 0.05)',
+    }),
+  });
 }
 
 // -- MGRS grid style ------------------------------------------------------------
@@ -869,6 +1204,9 @@ export function createMap(options) {
     onDraw,
     onPointerMove,
     onViewChange,
+    // [top, right, bottom, left] px of the map covered by UI floating over
+    // it; fits keep their target inside the part left visible.
+    coveredInsets = () => [0, 0, 0, 0],
   } = options;
 
   const geoJsonFormat = new GeoJSON();
@@ -879,11 +1217,55 @@ export function createMap(options) {
   let selectedId = null;
   let drawInteraction = null;
   let modifyInteraction = null;
+  /** setSituation's `onSelect`, or null while the overlay is off. */
+  let situationOnSelect = null;
+
+  // The one active scenario (Exercise module), or null for the real map —
+  // see setScenario. Read by the basemap/roads/places style functions below,
+  // so toggling it just needs `.changed()`, not a new style function.
+  let currentScenario = null;
+  let editingScenario = false;
+  let scenarioIndex = new Map();
+  let countryModify = null;
+  let countryDraw = null;
+
+  /** Hides real admin boundaries (every level) while a scenario is active. */
+  function scenarioAwareStyle(baseStyleFn) {
+    return (feature, resolution) => {
+      if (currentScenario && feature.get('layer') === 'boundary') return undefined;
+      return baseStyleFn(feature, resolution);
+    };
+  }
+  const VECTOR_STYLES_SCENARIO = {
+    roads: scenarioAwareStyle(basemapStyle),
+    topo: scenarioAwareStyle(topoStyle),
+  };
+  const scenarioAwareHybridStyle = scenarioAwareStyle(hybridStyle);
+
+  /** Real place/peak/water labels: substituted, dimmed or hidden. */
+  function scenarioPlaceLabelStyle(feature, resolution) {
+    if (!currentScenario) return placeLabelStyle(feature, resolution);
+    const resolved = resolvePlaceClass(feature, resolution);
+    if (!resolved) return undefined;
+    const [lon, lat] = featureLonLat(feature);
+    const match = matchScenarioPlace(scenarioIndex, resolved.name, lon, lat);
+    if (match) {
+      const style = PLACE_LABEL[resolved.styleKind];
+      const matchedText = resolved.styleKind === 'peak' ? `▲ ${match.name}` : match.name;
+      style.getText().setText(editingScenario ? `${matchedText} (${resolved.name})` : matchedText);
+      return style;
+    }
+    if (!editingScenario) return undefined;
+    const dim = DIMMED_PLACE_LABEL[resolved.styleKind];
+    const dimText = resolved.styleKind === 'peak' ? `▲ ${resolved.name}` : resolved.name;
+    dim.getText().setText(dimText);
+    return dim;
+  }
 
   const basemapSource = new PMTilesVectorSource({ url: basemapUrl });
   const basemapLayer = new VectorTileLayer({
     source: basemapSource,
-    style: basemapStyle,
+    style: VECTOR_STYLES_SCENARIO.roads,
     declutter: false,
   });
 
@@ -896,8 +1278,30 @@ export function createMap(options) {
       if (geometry && selectedId !== null && feature.getId() === selectedId) {
         styles.push(buildSelectionHalo(geometry));
       }
-      styles.push(...buildFeatureStyle(feature, iconCache));
+      styles.push(...buildFeatureStyle(feature, iconCache, darkBase));
       return styles;
+    },
+  });
+
+  // The current situation (setSituation): tracks, their history, and reports —
+  // a separate layer above featureLayer, off until a study/study session sets it.
+  const situationSource = new VectorSource();
+  const situationLayer = new VectorLayer({
+    source: situationSource,
+    visible: false,
+    style: (feature, resolution) => {
+      switch (feature.get('situationKind')) {
+        case 'track':
+          return situationTrackStyle(feature, iconCache);
+        case 'track-history':
+          return SITUATION_HISTORY_STYLE;
+        case 'track-history-dot':
+          return SITUATION_HISTORY_DOT_STYLE;
+        case 'report':
+          return situationReportStyle(feature, resolution);
+        default:
+          return undefined;
+      }
     },
   });
 
@@ -937,13 +1341,35 @@ export function createMap(options) {
   const roadsLayer = new VectorTileLayer({
     source: basemapSource,
     visible: false,
-    style: hybridStyle,
+    style: scenarioAwareHybridStyle,
   });
   const placesLayer = new VectorTileLayer({
     source: basemapSource,
     visible: false,
     declutter: true,
-    style: placeLabelStyle,
+    style: scenarioPlaceLabelStyle,
+  });
+
+  // The active scenario's countries (setScenario), drawn in place of the
+  // real boundaries above. Kraj/okres picking (setRegions) and a country's
+  // own vertex-edit overlay (editCountry/drawArea) are separate, editor-only
+  // layers so the scenario's own render never has to be rebuilt for them.
+  const countriesSource = new VectorSource();
+  const countriesLayer = new VectorLayer({
+    source: countriesSource,
+    visible: false,
+    declutter: true,
+    style: (feature, resolution) => countryStyle(feature, darkBase ? 'light' : 'dark', resolution),
+  });
+  const regionsSource = new VectorSource();
+  const regionsLayer = new VectorLayer({ source: regionsSource, visible: false });
+  const countryEditSource = new VectorSource();
+  const countryEditLayer = new VectorLayer({
+    source: countryEditSource,
+    style: new Style({
+      stroke: new Stroke({ color: '#ffffff', width: 2, lineDash: [4, 4] }),
+      fill: new Fill({ color: 'rgba(255, 255, 255, 0.1)' }),
+    }),
   });
 
   // Weather, all off until setWeather: over the terrain, under the roads and
@@ -974,11 +1400,24 @@ export function createMap(options) {
       radarGroup,
       lightningLayer,
       roadsLayer,
+      countriesLayer,
+      regionsLayer,
       placesLayer,
       mgrsLayer,
       windLayer,
       featureLayer,
+      situationLayer,
+      countryEditLayer,
     ],
+    // The default Zoom and Attribution controls stay put (view.js's status
+    // bar proxy-clicks/reads them rather than duplicating their behaviour);
+    // ScaleLine is added bare so the host can relocate and restyle it into
+    // that same status bar instead of leaving it in its own corner.
+    // 40-80 px keeps the scale inside the status bar's budget between both
+    // open sheets (OL's default can grow it to ~160 px).
+    controls: defaultControls().extend([
+      new ScaleLine({ className: 'ipb-scale', bar: false, minWidth: 40, maxWidth: 80 }),
+    ]),
     view: new View({
       projection: MAP_PROJECTION,
       center: fromLonLat(center, MAP_PROJECTION),
@@ -986,17 +1425,53 @@ export function createMap(options) {
     }),
   });
 
-  if (onClick) {
-    listenerKeys.push(
-      map.on('singleclick', (event) => {
-        const [lon, lat] = toLonLat(event.coordinate, MAP_PROJECTION);
-        const hit = map.forEachFeatureAtPixel(event.pixel, (feature) => feature, {
-          layerFilter: (layer) => layer === featureLayer,
+  // Live measurement (startMeasure/stopMeasure): never conflicts with
+  // startDraw/startModify — each stops the other first.
+  const measureController = createMeasureController(map);
+
+  // Always registered (not gated on `onClick`) so setSituation's onSelect
+  // works even for a caller that never passes onClick.
+  listenerKeys.push(
+    map.on('singleclick', (event) => {
+      // Situation features (setSituation) sit above the analyst's own
+      // features and take priority: a click on a track or report calls
+      // onSelect instead of the normal onClick feature routing.
+      if (situationOnSelect) {
+        const situationHit = map.forEachFeatureAtPixel(event.pixel, (feature) => feature, {
+          layerFilter: (layer) => layer === situationLayer,
           hitTolerance: 6,
         });
-        onClick({ lon, lat, featureId: hit ? hit.getId() : null });
-      }),
-    );
+        const situationKind = situationHit?.get('situationKind');
+        if (situationKind === 'track' || situationKind === 'report') {
+          situationOnSelect({ kind: situationKind, id: situationHit.get('situationId') });
+          return;
+        }
+      }
+      if (!onClick) return;
+      const [lon, lat] = toLonLat(event.coordinate, MAP_PROJECTION);
+      const hit = map.forEachFeatureAtPixel(event.pixel, (feature) => feature, {
+        layerFilter: (layer) => layer === featureLayer,
+        hitTolerance: 6,
+      });
+      // pixel lets a caller follow up with regionAt/placeAt without a
+      // second listener (the Exercise "Geography" editor's pick modes).
+      onClick({ lon, lat, pixel: event.pixel, featureId: hit ? hit.getId() : null });
+    }),
+  );
+
+  // Right-click finishes/stops an active measurement (like Escape), instead
+  // of opening the analyst's usual context menu — registered ahead of
+  // `onContextMenu` below and `stopImmediatePropagation`s past it.
+  {
+    const viewport = map.getViewport();
+    const handleMeasureContextMenu = (event) => {
+      if (!measureController.isActive()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      measureController.stop();
+    };
+    viewport.addEventListener('contextmenu', handleMeasureContextMenu);
+    domCleanups.push(() => viewport.removeEventListener('contextmenu', handleMeasureContextMenu));
   }
 
   if (onContextMenu) {
@@ -1066,18 +1541,76 @@ export function createMap(options) {
     featureLayer.changed();
   }
 
+  /**
+   * The current situation — Exercise tracks and reports — on its own layer
+   * above the analyst's own features: `null` clears and hides it.
+   *   tracks   `[{ id, sidc, designation, lon, lat, observed_at, status, history: [{lon,lat,observed_at}] }]`
+   *            a milsymbol icon (designation + a `formatDtg` DTG label);
+   *            `status: 'suspected'` draws the planned (dashed) frame,
+   *            `'destroyed'`/`'lost'` fades the icon; `history` draws as a
+   *            thin dashed polyline with a small dot at each past position.
+   *   reports  `[{ id, lon, lat, report_type, occurred_at, reliability, credibility }]`
+   *            a small rotated-square marker, filled solid for credibility
+   *            1-2, half-filled for 3, hollow for 4-6; its type label hides
+   *            below zoom 12.
+   * `onSelect({ kind: 'track'|'report', id })` fires on a click that hits a
+   * track or report; such a click takes priority over the normal `onClick`
+   * feature routing (see the `singleclick` handler above).
+   */
+  function setSituation(data, { onSelect } = {}) {
+    situationSource.clear(true);
+    situationOnSelect = data ? onSelect || null : null;
+    situationLayer.setVisible(Boolean(data));
+    if (!data) return;
+    const features = [];
+    for (const track of data.tracks || []) {
+      if (Array.isArray(track.history) && track.history.length > 1) {
+        const historyCoords = track.history.map((point) =>
+          fromLonLat([point.lon, point.lat], MAP_PROJECTION),
+        );
+        const historyLine = new Feature(new LineString(historyCoords));
+        historyLine.set('situationKind', 'track-history');
+        features.push(historyLine);
+        for (const point of track.history) {
+          const dot = new Feature(new Point(fromLonLat([point.lon, point.lat], MAP_PROJECTION)));
+          dot.set('situationKind', 'track-history-dot');
+          features.push(dot);
+        }
+      }
+      const trackFeature = new Feature(new Point(fromLonLat([track.lon, track.lat], MAP_PROJECTION)));
+      trackFeature.set('situationKind', 'track');
+      trackFeature.set('situationId', track.id);
+      trackFeature.set('track', track);
+      features.push(trackFeature);
+    }
+    for (const report of data.reports || []) {
+      const reportFeature = new Feature(
+        new Point(fromLonLat([report.lon, report.lat], MAP_PROJECTION)),
+      );
+      reportFeature.set('situationKind', 'report');
+      reportFeature.set('situationId', report.id);
+      reportFeature.set('report', report);
+      features.push(reportFeature);
+    }
+    situationSource.addFeatures(features);
+  }
+
   function fitFeature(id) {
     const feature = findFeature(id);
     const geometry = feature && feature.getGeometry();
     if (!geometry) return;
     map
       .getView()
-      .fit(geometry.getExtent(), { padding: [48, 48, 48, 48], maxZoom: 18, duration: 250 });
+      .fit(geometry.getExtent(), { padding: fitPadding(48), maxZoom: 18, duration: 250 });
+  }
+
+  function fitPadding(margin) {
+    return coveredInsets().map((inset) => inset + margin);
   }
 
   function fitExtent(extent) {
     const extent3857 = transformExtent(extent, DATA_PROJECTION, MAP_PROJECTION);
-    map.getView().fit(extent3857, { padding: [24, 24, 24, 24], duration: 250 });
+    map.getView().fit(extent3857, { padding: fitPadding(24), duration: 250 });
   }
 
   function getBounds() {
@@ -1096,8 +1629,33 @@ export function createMap(options) {
     sketchSource.clear();
   }
 
+  /** A sketch style previewing `graphicKey`'s own `TACTICAL_GRAPHICS` style, falling back to a plain dashed line until the sketch has enough vertices for it (e.g. an axis of advance before its second point). */
+  function graphicSketchStyle(graphicKey, drawOptions, color) {
+    const entry = TACTICAL_GRAPHICS[graphicKey];
+    const fallback = new Style({
+      stroke: new Stroke({ color, width: 2, lineDash: [6, 4] }),
+      fill: new Fill({ color: withAlpha(color, 0.15) }),
+      image: new CircleStyle({
+        radius: 6,
+        fill: new Fill({ color }),
+        stroke: new Stroke({ color: '#ffffff', width: 1.5 }),
+      }),
+    });
+    if (!entry) return fallback;
+    return (feature) => {
+      feature.set('properties', { ...drawOptions, graphic: graphicKey });
+      try {
+        const styles = entry.style(feature, { color, darkBase, label: drawOptions.name });
+        return styles.length ? styles : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+  }
+
   function startDraw(kind, drawOptions = {}) {
     cancelDraw();
+    measureController.stop();
     // Draw inserts the finished feature into its source right after dispatching
     // 'drawend', i.e. after our handler below has already cleared it once —
     // wipe any such leftover here so the headless sketch source never grows.
@@ -1105,18 +1663,21 @@ export function createMap(options) {
     const geometryType = DRAW_GEOMETRY_TYPE[kind];
     if (!geometryType) throw new Error(`createMap: unknown draw kind "${kind}"`);
     const config = layerConfig(drawOptions.layer);
+    const style = drawOptions.graphic
+      ? graphicSketchStyle(drawOptions.graphic, drawOptions, graphicColor(drawOptions.affiliation, darkBase))
+      : new Style({
+          stroke: new Stroke({ color: config.color, width: 2, lineDash: [6, 4] }),
+          fill: new Fill({ color: withAlpha(config.color, 0.15) }),
+          image: new CircleStyle({
+            radius: 6,
+            fill: new Fill({ color: config.color }),
+            stroke: new Stroke({ color: '#ffffff', width: 1.5 }),
+          }),
+        });
     drawInteraction = new Draw({
       source: sketchSource,
       type: geometryType,
-      style: new Style({
-        stroke: new Stroke({ color: config.color, width: 2, lineDash: [6, 4] }),
-        fill: new Fill({ color: withAlpha(config.color, 0.15) }),
-        image: new CircleStyle({
-          radius: 6,
-          fill: new Fill({ color: config.color }),
-          stroke: new Stroke({ color: '#ffffff', width: 1.5 }),
-        }),
-      }),
+      style,
     });
     drawInteraction.on('drawend', (event) => {
       const geometry = geoJsonFormat.writeGeometryObject(
@@ -1139,6 +1700,7 @@ export function createMap(options) {
 
   function startModify(id) {
     stopModify();
+    measureController.stop();
     const feature = findFeature(id);
     if (!feature) return;
     const modifySource = new VectorSource({ features: [feature] });
@@ -1148,6 +1710,170 @@ export function createMap(options) {
       if (onFeatureChange) onFeatureChange({ id, geometry });
     });
     map.addInteraction(modifyInteraction);
+  }
+
+  /**
+   * Live geodesic measurement (`src/measure.js`), drawn on its own layer as
+   * on-map labels: `mode` is `'distance'` (per-segment and total),
+   * `'area'` (km²/ha) or `'bearing'` (click-A, click-B: true degrees and
+   * mils). `onResult(payload)` fires on every change and once finished
+   * (`payload.done`); nothing is ever saved. Cancels any `startDraw`/
+   * `startModify` in progress; Escape or a right-click on the map stops it.
+   */
+  function startMeasure({ mode, onResult }) {
+    cancelDraw();
+    stopModify();
+    measureController.start({ mode, onResult });
+  }
+
+  /** Stops measuring and clears its labels; a no-op when idle. */
+  function stopMeasure() {
+    measureController.stop();
+  }
+
+  /**
+   * The single active scenario (Exercise module), or `null` for the real
+   * map. Real admin boundaries (every level) hide; the
+   * scenario's countries draw instead (low-alpha fill, a coloured border on
+   * a casing, an uppercase spaced label at the interior point of its
+   * largest part). A real place/peak/water-name label whose name matches
+   * a scenario place within 5 km shows the scenario name; every other real
+   * label is hidden.
+   *
+   * `editing: true` (the Exercise "Geography" tab) instead keeps unmatched
+   * real labels visible, grey and italic, and shows a match as
+   * "Scenario (Real)", so both can be found and clicked — see `placeAt`.
+   */
+  function setScenario(scenario, { editing = false } = {}) {
+    currentScenario = scenario || null;
+    editingScenario = Boolean(editing);
+    scenarioIndex = buildScenarioNameIndex(currentScenario);
+    countriesSource.clear();
+    if (currentScenario) {
+      countriesSource.addFeatures(
+        currentScenario.countries
+          .filter((country) => country.geometry)
+          .map((country) => {
+            const feature = new Feature(
+              geoJsonFormat.readGeometry(country.geometry, GEOJSON_OPTIONS),
+            );
+            feature.setId(country.id);
+            feature.set('name', country.name);
+            feature.set('color', country.color);
+            return feature;
+          }),
+      );
+    }
+    countriesLayer.setVisible(Boolean(currentScenario));
+    // The boundary/place style functions read currentScenario/editingScenario
+    // directly (closures), so a redraw is all these three layers need.
+    basemapLayer.changed();
+    roadsLayer.changed();
+    placesLayer.changed();
+  }
+
+  /**
+   * Kraj or okres outlines for the Exercise "Pick regions" mode, tinted by
+   * the country that already owns each one (`owner: Map<regionId, color>`);
+   * `null` clears them. A click is reported through `onClick`'s `pixel`,
+   * resolved with `regionAt(pixel)`.
+   */
+  function setRegions(featureCollection, { level = 'kraj', owner = new Map() } = {}) {
+    regionsSource.clear();
+    if (!featureCollection) {
+      regionsLayer.setVisible(false);
+      return;
+    }
+    const features = geoJsonFormat
+      .readFeatures(featureCollection, GEOJSON_OPTIONS)
+      .filter((feature) => feature.get('level') === level);
+    features.forEach((feature) => feature.setId(feature.get('id')));
+    regionsSource.addFeatures(features);
+    regionsLayer.setStyle((feature) => regionStyle(owner.get(feature.getId())));
+    regionsLayer.setVisible(true);
+  }
+
+  /** The region id (setRegions) under a pixel, or null. */
+  function regionAt(pixel) {
+    if (!regionsLayer.getVisible()) return null;
+    const hit = map.forEachFeatureAtPixel(pixel, (feature) => feature, {
+      layerFilter: (layer) => layer === regionsLayer,
+      hitTolerance: 4,
+    });
+    return hit ? hit.getId() : null;
+  }
+
+  /**
+   * The real place/peak/water-name label under a pixel, as
+   * `{ real_name, kind, lon, lat }` (`kind` matches the scenario places API:
+   * the basemap's own class for a `place` feature, or `'peak'`/`'water'`),
+   * or null. Needs `setOverlays({ places: true })` — the Exercise editor
+   * turns that on so real labels are there to click.
+   */
+  function placeAt(pixel) {
+    if (!placesLayer.getVisible()) return null;
+    const hit = map.forEachFeatureAtPixel(pixel, (feature) => feature, {
+      layerFilter: (layer) => layer === placesLayer,
+      hitTolerance: 8,
+    });
+    if (!hit) return null;
+    const resolved = resolvePlaceClass(hit, map.getView().getResolution());
+    if (!resolved) return null;
+    const [lon, lat] = featureLonLat(hit);
+    return { real_name: resolved.name, kind: resolved.placeKind, lon, lat };
+  }
+
+  /**
+   * Vertex-edit a country's polygon on its own overlay (separate from the
+   * scenario's own render, so a half-finished edit is never sent):
+   * `onChange(geometry)` fires after every drag. `drawArea({ onDone })`
+   * freehand-draws a new polygon instead of editing one; either is
+   * cancelled the same way, `stopEditing()`, which is always safe to call.
+   */
+  function editCountry(geometry, { onChange }) {
+    stopEditing();
+    const feature = new Feature(geoJsonFormat.readGeometry(geometry, GEOJSON_OPTIONS));
+    countryEditSource.addFeature(feature);
+    countryModify = new Modify({ source: countryEditSource });
+    countryModify.on('modifyend', () => {
+      onChange(geoJsonFormat.writeGeometryObject(feature.getGeometry(), GEOJSON_OPTIONS));
+    });
+    map.addInteraction(countryModify);
+  }
+
+  function drawArea({ onDone }) {
+    stopEditing();
+    countryDraw = new Draw({
+      source: new VectorSource(),
+      type: 'Polygon',
+      style: new Style({
+        stroke: new Stroke({ color: '#ffffff', width: 2, lineDash: [6, 4] }),
+        fill: new Fill({ color: 'rgba(255, 255, 255, 0.12)' }),
+      }),
+    });
+    countryDraw.on('drawend', (event) => {
+      const drawnGeometry = geoJsonFormat.writeGeometryObject(
+        event.feature.getGeometry(),
+        GEOJSON_OPTIONS,
+      );
+      map.removeInteraction(countryDraw);
+      countryDraw = null;
+      onDone(drawnGeometry);
+    });
+    map.addInteraction(countryDraw);
+  }
+
+  /** Cancels `editCountry`/`drawArea`; a no-op if neither is running. */
+  function stopEditing() {
+    if (countryModify) {
+      map.removeInteraction(countryModify);
+      countryModify = null;
+    }
+    if (countryDraw) {
+      map.removeInteraction(countryDraw);
+      countryDraw = null;
+    }
+    countryEditSource.clear();
   }
 
   function setGrid(name, grid, gridOptions = {}) {
@@ -1220,7 +1946,7 @@ export function createMap(options) {
     basemapLayer.setVisible(Boolean(vector));
     if (vector) {
       basemapSource.setAttributions(vector.attributions);
-      const style = VECTOR_STYLES[vector.style ?? 'roads'];
+      const style = VECTOR_STYLES_SCENARIO[vector.style ?? 'roads'];
       if (basemapLayer.getStyle() !== style) basemapLayer.setStyle(style);
     }
     applyTileSpec(imageryLayer, imagery);
@@ -1228,6 +1954,7 @@ export function createMap(options) {
     darkBase = Boolean(imagery?.dark);
     contourLayer.changed();
     windLayer.changed();
+    featureLayer.changed();
     if (cloudSpec) applyClouds(cloudSpec);
     if (mgrsLayer.getVisible()) renderMgrsGrid();
   }
@@ -1391,7 +2118,10 @@ export function createMap(options) {
    * The last fully rendered view as one canvas, for print, or null before the
    * first frame: every layer canvas composited at device resolution, plus a
    * scale bar (and a north arrow if rotated). Returns
-   * `{ canvas, attributions, metresPerPixel }`.
+   * `{ canvas, attributions, metresPerPixel }`. Tactical graphics, range
+   * rings and the situation overlay (`setSituation`) are ordinary vector
+   * layers over the basemap, so they are included the same way as every
+   * other layer — no special-casing needed here.
    *
    * Taken after each `rendercomplete` rather than at print time: once the
    * print stylesheet hides the map, OpenLayers resizes it to nothing and
@@ -1518,6 +2248,8 @@ export function createMap(options) {
   function destroy() {
     cancelDraw();
     stopModify();
+    stopEditing();
+    measureController.destroy();
     listenerKeys.forEach((key) => unByKey(key));
     listenerKeys.length = 0;
     domCleanups.forEach((cleanup) => cleanup());
@@ -1526,10 +2258,13 @@ export function createMap(options) {
     gridLayers.clear();
     iconCache.clear();
     featureSource.clear();
+    situationSource.clear();
     sketchSource.clear();
     mgrsSource.clear(true);
     windSource.clear(true);
     radarLayers.clear();
+    countriesSource.clear();
+    regionsSource.clear();
     map.setTarget(null);
   }
 
@@ -1544,12 +2279,22 @@ export function createMap(options) {
     cancelDraw,
     startModify,
     stopModify,
+    startMeasure,
+    stopMeasure,
     setGrid,
     clearGrid,
     setBasemap,
     setOverlays,
     setWeather,
     setMgrsGrid,
+    setScenario,
+    setSituation,
+    setRegions,
+    regionAt,
+    placeAt,
+    editCountry,
+    drawArea,
+    stopEditing,
     exportCanvas,
     destroy,
   };

@@ -1,7 +1,11 @@
 // Pure coordinate parsing and formatting helpers. No DOM, no OpenLayers.
-// The mgrs package's ESM build (its "module" entry, which the bundler resolves)
-// exposes named exports.
-import { forward, toPoint } from 'mgrs';
+// mgrs ships an ESM build with named exports only (the bundler's "module"
+// entry) and a UMD build with a default export only (Node's "main" entry,
+// whose names Node can't detect). A namespace import works in both: the
+// server modules import this file too.
+import * as mgrsModule from 'mgrs';
+
+const { forward, toPoint } = mgrsModule.forward ? mgrsModule : mgrsModule.default;
 
 const MGRS_BAND_LETTERS = 'CDEFGHJKLMNPQRSTUVWX';
 const MGRS_100K_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
@@ -243,11 +247,19 @@ export function parseCoordinate(text) {
   return parseMgrs(trimmed) || parseUtm(trimmed) || parseDms(trimmed) || parseDecimal(trimmed);
 }
 
-/** Format a point as an MGRS grid reference at the given digit precision (1-5). */
-export function formatMgrs(lon, lat, precision = 5) {
+/**
+ * Format a point as an MGRS grid reference at the given digit precision (1-5).
+ * `spaced` groups it for reading ("33U XR 73666 10699"); the default compact
+ * form is what gets copied and parsed back.
+ */
+export function formatMgrs(lon, lat, precision = 5, { spaced = false } = {}) {
   if (!Number.isFinite(lon) || !Number.isFinite(lat)) return '—';
   try {
-    return forward([lon, lat], precision);
+    const compact = forward([lon, lat], precision);
+    if (!spaced) return compact;
+    const [, zone, square, digits] = /^(\d{1,2}[A-Z])([A-Z]{2})(\d*)$/.exec(compact);
+    const half = digits.length / 2;
+    return [zone, square, digits.slice(0, half), digits.slice(half)].filter(Boolean).join(' ');
   } catch {
     return '—';
   }
