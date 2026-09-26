@@ -1,7 +1,3 @@
-import { existsSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import {
   HttpError,
   numberParameter,
@@ -10,29 +6,22 @@ import {
   sendJson,
   serveFile,
 } from '../../../server/http.js';
-import { encodePng } from '../../../server/png.js';
-import { contourTile } from './contours.js';
-import { suggestAvenues } from './corridors.js';
-import { openTerrain } from './dem.js';
-import { elevationExtremes } from './extremes.js';
-import { SLOPE_LEGEND, renderHillshade, renderSlopeClasses } from './rasterTiles.js';
+import { currentElevationModel, openElevationSource } from './elevationSource.js';
+import { BASEMAP, ID, IMAGERY_DATABASE, ORTHO_DATABASE } from './paths.js';
+import { SLOPE_LEGEND } from './rasterTiles.js';
 import { openImagery } from './imagery.js';
-import { keyTerrainCandidates } from './keyTerrain.js';
 import { namedPeaks, vectorLayerNames } from './landcover.js';
 import { metresBetween } from './lattice.js';
-import { LEGEND, mobilityOverlay } from './mobility.js';
+import { LEGEND } from './mobility.js';
+import { createTerrainPool } from './pool.js';
+import { referenceFile } from '../../../server/reference.js';
 
-const ID = 'terrain';
-const DATA_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
-const ELEVATION_DATABASE = path.join(DATA_ROOT, 'terrain.db');
-const BASEMAP = path.join(DATA_ROOT, 'vector.pmtiles');
 const BASEMAP_URL = `/api/${ID}/tiles/vector.pmtiles`;
-const IMAGERY_DATABASE = path.join(DATA_ROOT, 'satellite.mbtiles');
 
 /** Raster overlays rendered from the elevation model, by URL segment. */
-const RASTER_RENDERERS = { hillshade: renderHillshade, slope: renderSlopeClasses };
 const RASTER_TILE = /^(hillshade|slope)\/(\d+)\/(\d+)\/(\d+)\.png$/;
 const SATELLITE_TILE = /^satellite\/(\d+)\/(\d+)\/(\d+)\.jpg$/;
+const ORTHO_TILE = /^ortho\/(\d+)\/(\d+)\/(\d+)\.jpg$/;
 const CONTOUR_TILE = /^contours\/(\d+)\/(\d+)\/(\d+)\.json$/;
 /** contours.js draws nothing below 10; past 14 the client reuses zoom-14 tiles. */
 const CONTOUR_MIN_ZOOM = 10;
@@ -40,6 +29,9 @@ const CONTOUR_MAX_ZOOM = 14;
 /** Past this the 30 m DEM has no more detail; the client upscales. */
 const RASTER_MAX_ZOOM = 14;
 const RASTER_MIN_ZOOM = 5;
+/** With the 5 m DMR4G detail layer built, both raster and contour tiles hold up two zooms further. */
+const DETAIL_RASTER_MAX_ZOOM = 16;
+const DETAIL_CONTOUR_MAX_ZOOM = 16;
 const TILE_CACHE_LIMIT = 1024;
 /** Observation posts in one combined viewshed; each adds a full visibility pass. */
 const MAX_OBSERVERS = 10;
@@ -84,26 +76,85 @@ function gridPayload(grid) {
   return { ...rest, values: Buffer.from(values).toString('base64') };
 }
 
-let terrain;
-
-function elevationModel() {
-  try {
-    terrain ??= openTerrain(ELEVATION_DATABASE);
-  } catch {
-    throw new HttpError(
-      503,
-      'No elevation data. Build it with modules/terrain/tools/build_terrain.mjs.',
-    );
-  }
-  return terrain;
+/** Version string for tile URLs and cache keys: both built_at times, so either rebuild busts them. */
+function elevationVersion(model) {
+  return model.meta.detail ? `${model.meta.built_at}+${model.meta.detail.built_at}` : model.meta.built_at;
 }
 
-let imagery;
+// The main thread keeps its own elevation-model handle for cheap point
+// lookups (`elevation`, `meta`) and the tile-address/version bookkeeping
+// below; every heavy analysis and tile render below runs in the worker
+// pool instead, each worker holding its own separate handle (see
+// elevationSource.js and pool.js).
+const terrain = openElevationSource();
+const imagery = referenceFile(IMAGERY_DATABASE, openImagery);
+const ortho = referenceFile(ORTHO_DATABASE, openImagery);
+/**
+ * Created on the first job, not at import: `vite.config.js` imports this
+ * module for every `vp` command (test, lint, build), and live worker threads
+ * would keep each of those processes from exiting.
+ */
+let pool = null;
+
+function elevationModel() {
+  return currentElevationModel(terrain);
+}
+
+/** `request.user?.name` set by the api middleware, or the client IP when signed out — the pool's fairness key. */
+function userKey(request) {
+  return request.user?.name || request.socket?.remoteAddress || 'unknown';
+}
+
+/**
+ * An `AbortSignal` that fires if `request` disconnects before the response
+ * is sent, for cancelling the matching pool job; `dispose()` once the
+ * request is done (successfully or not) so a normal `close` after the
+ * response is sent doesn't matter.
+ */
+function abortSignal(request, response) {
+  const controller = new AbortController();
+  const onClose = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  request.once('close', onClose);
+  return { signal: controller.signal, dispose: () => request.off('close', onClose) };
+}
+
+/**
+ * Runs one job on the worker pool for this request: fair-queued per user,
+ * cancelled if the client disconnects first. The worker already tags
+ * domain errors with the right HTTP status (see worker.js), so this just
+ * forwards whatever `pool.submit` settles with.
+ */
+async function poolJob(kind, payload, request, response) {
+  const { signal, dispose } = abortSignal(request, response);
+  try {
+    pool ??= createTerrainPool();
+    return await pool.submit(kind, payload, { user: userKey(request), signal });
+  } finally {
+    dispose();
+  }
+}
+
+/**
+ * Renders one map tile on the pool's tile lane. Never cancelled: browsers
+ * drop tile requests all the time while panning, the render takes
+ * milliseconds and fills the shared tile cache, and `cachedTile` may have
+ * handed this same render to other users' requests too.
+ */
+function tileJob(kind, payload) {
+  pool ??= createTerrainPool();
+  return pool.submit(kind, payload, { lane: 'tile' });
+}
 
 /** The satellite archive, or null until tools/build_satellite.mjs has run. */
 function imageryArchive() {
-  if (!imagery && existsSync(IMAGERY_DATABASE)) imagery = openImagery(IMAGERY_DATABASE);
-  return imagery ?? null;
+  return imagery.get();
+}
+
+/** The ČÚZK ortho archive, or null until build_satellite.mjs --source cuzk has run. */
+function orthoArchive() {
+  return ortho.get();
 }
 
 /** `{ z, x, y }` from the last three captures of a tile-route match. */
@@ -116,16 +167,26 @@ function tileAddress(match) {
 /** Encoded tiles generated on request, least recently used evicted first. */
 const tileCache = new Map();
 
-function cachedTile(key, render) {
-  let body = tileCache.get(key);
-  if (body) {
+/**
+ * Caches `render()`'s (a promise, backed by a pool job) result under `key`,
+ * least-recently-used evicted first. Concurrent requests for the same
+ * missing key share one in-flight promise instead of rendering twice.
+ */
+async function cachedTile(key, render) {
+  let pending = tileCache.get(key);
+  if (pending) {
     tileCache.delete(key);
   } else {
-    body = render();
+    pending = render();
     if (tileCache.size >= TILE_CACHE_LIMIT) tileCache.delete(tileCache.keys().next().value);
   }
-  tileCache.set(key, body);
-  return body;
+  tileCache.set(key, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    tileCache.delete(key);
+    throw error;
+  }
 }
 
 export default {
@@ -140,12 +201,13 @@ export default {
     if (match) {
       const kind = match[1];
       const { z, x, y } = tileAddress(match);
-      if (z < RASTER_MIN_ZOOM || z > RASTER_MAX_ZOOM) {
+      const model = elevationModel();
+      const maxZoom = model.meta.detail ? DETAIL_RASTER_MAX_ZOOM : RASTER_MAX_ZOOM;
+      if (z < RASTER_MIN_ZOOM || z > maxZoom) {
         throw new HttpError(404, `No ${kind} tiles at this zoom.`);
       }
-      const model = elevationModel();
-      const png = cachedTile(`${kind}/${z}/${x}/${y}`, () =>
-        encodePng(256, 256, RASTER_RENDERERS[kind](model.elevation, z, x, y)),
+      const png = await cachedTile(`${elevationVersion(model)}/${kind}/${z}/${x}/${y}`, () =>
+        tileJob('raster', { renderer: kind, z, x, y }),
       );
       sendBytes(response, png, 'image/png', IMMUTABLE);
       return;
@@ -153,12 +215,13 @@ export default {
     match = CONTOUR_TILE.exec(route);
     if (match) {
       const { z, x, y } = tileAddress(match);
-      if (z < CONTOUR_MIN_ZOOM || z > CONTOUR_MAX_ZOOM) {
+      const model = elevationModel();
+      const maxZoom = model.meta.detail ? DETAIL_CONTOUR_MAX_ZOOM : CONTOUR_MAX_ZOOM;
+      if (z < CONTOUR_MIN_ZOOM || z > maxZoom) {
         throw new HttpError(404, 'No contours at this zoom.');
       }
-      const model = elevationModel();
-      const json = cachedTile(`contours/${z}/${x}/${y}`, () =>
-        Buffer.from(JSON.stringify(contourTile(model.elevation, z, x, y))),
+      const json = await cachedTile(`${elevationVersion(model)}/contours/${z}/${x}/${y}`, () =>
+        tileJob('contour', { z, x, y }),
       );
       sendBytes(response, json, 'application/geo+json', IMMUTABLE);
       return;
@@ -175,10 +238,29 @@ export default {
       sendBytes(response, tile, 'image/jpeg', IMMUTABLE);
       return;
     }
+    match = ORTHO_TILE.exec(route);
+    if (match) {
+      const archive = orthoArchive();
+      if (!archive) {
+        throw new HttpError(
+          404,
+          'No ortho imagery. Build it with tools/build_satellite.mjs --source cuzk.',
+        );
+      }
+      const { z, x, y } = tileAddress(match);
+      const tile = archive.tile(z, x, y);
+      if (!tile) throw new HttpError(404, 'No imagery tile here.');
+      sendBytes(response, tile, 'image/jpeg', IMMUTABLE);
+      return;
+    }
     if (route === 'meta') {
       const model = elevationModel();
       const archive = imageryArchive();
+      const orthoImagery = orthoArchive();
       const version = (value) => `?v=${encodeURIComponent(value ?? '')}`;
+      const elevationTileVersion = version(elevationVersion(model));
+      const rasterMaxZoom = model.meta.detail ? DETAIL_RASTER_MAX_ZOOM : RASTER_MAX_ZOOM;
+      const contourMaxZoom = model.meta.detail ? DETAIL_CONTOUR_MAX_ZOOM : CONTOUR_MAX_ZOOM;
       sendJson(response, {
         elevation: {
           dataset: model.meta.dataset,
@@ -186,6 +268,14 @@ export default {
           verticalDatum: model.meta.vertical_datum,
           attribution: model.meta.attribution,
           builtAt: model.meta.built_at,
+          detail: model.meta.detail
+            ? {
+                dataset: model.meta.detail.dataset,
+                bounds: JSON.parse(model.meta.detail.bounds || '[0,0,0,0]'),
+                cellsPerDegree: Number(model.meta.detail.cells_per_degree),
+                builtAt: model.meta.detail.built_at,
+              }
+            : null,
         },
         basemap: {
           url: BASEMAP_URL,
@@ -193,20 +283,20 @@ export default {
           layers: await vectorLayerNames(BASEMAP),
         },
         hillshade: {
-          url: `/api/${ID}/hillshade/{z}/{x}/{y}.png${version(model.meta.built_at)}`,
+          url: `/api/${ID}/hillshade/{z}/{x}/{y}.png${elevationTileVersion}`,
           minZoom: RASTER_MIN_ZOOM,
-          maxZoom: RASTER_MAX_ZOOM,
+          maxZoom: rasterMaxZoom,
         },
         slope: {
-          url: `/api/${ID}/slope/{z}/{x}/{y}.png${version(model.meta.built_at)}`,
+          url: `/api/${ID}/slope/{z}/{x}/{y}.png${elevationTileVersion}`,
           minZoom: RASTER_MIN_ZOOM,
-          maxZoom: RASTER_MAX_ZOOM,
+          maxZoom: rasterMaxZoom,
           legend: SLOPE_LEGEND,
         },
         contours: {
-          url: `/api/${ID}/contours/{z}/{x}/{y}.json${version(model.meta.built_at)}`,
+          url: `/api/${ID}/contours/{z}/{x}/{y}.json${elevationTileVersion}`,
           minZoom: CONTOUR_MIN_ZOOM,
-          maxZoom: CONTOUR_MAX_ZOOM,
+          maxZoom: contourMaxZoom,
         },
         imagery: archive && {
           url: `/api/${ID}/satellite/{z}/{x}/{y}.jpg${version(archive.meta.builtAt)}`,
@@ -214,6 +304,13 @@ export default {
           minZoom: archive.meta.minZoom,
           maxZoom: archive.meta.maxZoom,
           attribution: archive.meta.attribution,
+        },
+        ortho: orthoImagery && {
+          url: `/api/${ID}/ortho/{z}/{x}/{y}.jpg${version(orthoImagery.meta.builtAt)}`,
+          bounds: orthoImagery.meta.bounds,
+          minZoom: orthoImagery.meta.minZoom,
+          maxZoom: orthoImagery.meta.maxZoom,
+          attribution: orthoImagery.meta.attribution,
         },
         legend: LEGEND,
       });
@@ -232,13 +329,8 @@ export default {
     if (route === 'extremes') {
       // POST, because an AOI polygon can outgrow a query string.
       if (request.method !== 'POST') throw new HttpError(405, 'Method not allowed.');
-      const model = elevationModel();
       const body = await readJson(request);
-      try {
-        sendJson(response, elevationExtremes(model.elevation, body?.area));
-      } catch (error) {
-        throw new HttpError(422, error.message);
-      }
+      sendJson(response, await poolJob('extremes', { area: body?.area }, request, response));
       return;
     }
     if (route === 'line-of-sight') {
@@ -255,63 +347,58 @@ export default {
       return;
     }
     if (route === 'viewshed') {
-      const model = elevationModel();
       const observers = pointList(query, 'at', MAX_OBSERVERS);
-      try {
-        const grid = model.viewshed({
+      const grid = await poolJob(
+        'viewshed',
+        {
           observers,
           radiusMetres: numberParameter(query, 'radius', 5000, 200, 25000),
           observerHeight: numberParameter(query, 'observer', 1.8, 0, 500),
           targetHeight: numberParameter(query, 'target', 1.8, 0, 500),
           cellMetres: numberParameter(query, 'cell', 50, 20, 250),
-        });
-        sendJson(response, gridPayload(grid));
-      } catch (error) {
-        throw new HttpError(422, error.message);
-      }
+        },
+        request,
+        response,
+      );
+      sendJson(response, gridPayload(grid));
       return;
     }
     if (route === 'avenues') {
-      const model = elevationModel();
       // The corridor search runs on the same MCOO the analyst sees in step 2.
-      const grid = await mobilityOverlay({
-        terrain: model,
-        basemapFile: BASEMAP,
-        bounds: boundsParameter(query),
-        cellMetres: numberParameter(query, 'cell', 100, 20, 500),
-      });
-      try {
-        sendJson(
-          response,
-          suggestAvenues(grid, {
+      const result = await poolJob(
+        'avenues',
+        {
+          bounds: boundsParameter(query),
+          cellMetres: numberParameter(query, 'cell', 100, 20, 500),
+          avenues: {
             from: point(query, 'from'),
             to: point(query, 'to'),
             corridorWidth: numberParameter(query, 'width', 500, 50, 10000),
             count: numberParameter(query, 'count', 3, 1, 5),
-          }),
-        );
-      } catch (error) {
-        throw new HttpError(422, error.message);
-      }
+          },
+        },
+        request,
+        response,
+      );
+      sendJson(response, result);
       return;
     }
     if (route === 'key-terrain') {
-      const model = elevationModel();
       const bounds = boundsParameter(query);
       // Ranked by what each summit overlooks: a coarse (100 m) single-post
       // viewshed is enough to compare candidates and keeps 16 runs quick.
       const radiusMetres = numberParameter(query, 'radius', 3000, 500, 10000);
-      const visibleArea = (lon, lat) => {
-        const grid = model.viewshed({ observers: [{ lon, lat }], radiusMetres, cellMetres: 100 });
-        return (grid.visibleCells * grid.cellMetres ** 2) / 1e6;
-      };
-      const candidates = keyTerrainCandidates({
-        elevation: model.elevation,
-        bounds,
-        minProminence: numberParameter(query, 'prominence', 30, 5, 500),
-        limit: numberParameter(query, 'limit', 8, 1, 20),
-        visibleArea,
-      });
+      const candidates = await poolJob(
+        'key-terrain',
+        {
+          bounds,
+          radiusMetres,
+          minProminence: numberParameter(query, 'prominence', 30, 5, 500),
+          limit: numberParameter(query, 'limit', 8, 1, 20),
+        },
+        request,
+        response,
+      );
       const peaks = await namedPeaks(BASEMAP, bounds);
       sendJson(response, {
         radiusMetres,
@@ -326,23 +413,26 @@ export default {
       return;
     }
     if (route === 'mobility') {
-      const model = elevationModel();
-      const grid = await mobilityOverlay({
-        terrain: model,
-        basemapFile: BASEMAP,
-        bounds: boundsParameter(query),
-        cellMetres: numberParameter(query, 'cell', 50, 20, 500),
-      });
+      const grid = await poolJob(
+        'mobility',
+        {
+          bounds: boundsParameter(query),
+          cellMetres: numberParameter(query, 'cell', 50, 20, 500),
+        },
+        request,
+        response,
+      );
       sendJson(response, gridPayload(grid));
       return;
     }
     throw new HttpError(404, 'Unknown API route.');
   },
   close() {
-    terrain?.close();
-    terrain = undefined;
-    imagery?.close();
-    imagery = undefined;
+    pool?.close();
+    pool = null;
+    terrain.close();
+    imagery.close();
+    ortho.close();
     tileCache.clear();
   },
 };
