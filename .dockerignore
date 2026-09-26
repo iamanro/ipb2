@@ -1,0 +1,15 @@
+node_modules
+dist
+modules/*/data
+modules/*/state
+server/state
+test-results
+playwright-report
+.git
+*.pmtiles
+*.tif
+__pycache__
+docs
+deploy/data
+deploy/secrets
+deploy/backups

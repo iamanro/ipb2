@@ -2,8 +2,12 @@ node_modules/
 dist/
 modules/*/data/
 modules/*/state/
+server/state/
 *.pmtiles
 *.tif
 __pycache__/
 test-results/
 playwright-report/
+deploy/secrets/
+deploy/data/
+deploy/backups/

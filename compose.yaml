@@ -1,0 +1,102 @@
+# Docker Compose v2 spec; also runs unmodified under `podman compose`.
+#
+#   IPB_DATA_DIR    host path with {terrain,equipment,exercise}/ (see
+#                   deploy/pack-data.sh), default ./deploy/data
+#   IPB_STATE_DIR   host path for the writable SQLite state, default a
+#                   named volume so it survives a rebuild without needing a
+#                   host directory
+#
+# First start: put the admin password in deploy/secrets/admin_password
+# (chmod 600, gitignored) before `docker compose up -d` — see README
+# "Deployment" for the full walkthrough.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ipb:latest
+    restart: unless-stopped
+    # Internal network only — nothing but `caddy` can reach this port; the
+    # host never gets a mapped port for it (verified: `docker compose ps`
+    # shows no host binding, and the app is unreachable on the LAN except
+    # through Caddy's TLS).
+    expose:
+      - '8000'
+    environment:
+      IPB_HOST: 0.0.0.0
+      IPB_PORT: '8000'
+      IPB_AUTH: on
+      IPB_DATA_ROOT: /data
+      IPB_STATE_ROOT: /state
+      IPB_TRUST_PROXY: '1'
+      IPB_ADMIN_NAME: ${IPB_ADMIN_NAME:-admin}
+      IPB_ADMIN_PASSWORD_FILE: /run/secrets/ipb_admin_password
+    volumes:
+      - ${IPB_DATA_DIR:-./deploy/data}:/data:ro
+      - state:/state
+    secrets:
+      - ipb_admin_password
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://127.0.0.1:8000/healthz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    # 8-core / 16 GB host, up to 30 users: the terrain worker pool sizes
+    # itself to clamp(cores - 2, 1, 4) (modules/terrain/server/pool.js), so
+    # 6 CPUs leaves room for Caddy/TLS and the OS page cache that the
+    # ~27 GB read-only DEM/imagery mounts ride on.
+    deploy:
+      resources:
+        limits:
+          cpus: '6.0'
+          memory: 8g
+        reservations:
+          cpus: '1.0'
+          memory: 1g
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - '${IPB_HTTP_PORT:-80}:80'
+      - '${IPB_HTTPS_PORT:-443}:443'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512m
+
+  # Optional: `docker compose --profile backup run --rm backup` runs an
+  # on-demand consistent backup without needing a host cron. Same image, no
+  # network exposure, no restart policy (it exits when done).
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ipb:latest
+    profiles: [backup]
+    environment:
+      IPB_STATE_ROOT: /state
+      IPB_BACKUP_ROOT: /backups
+      IPB_BACKUP_KEEP: ${IPB_BACKUP_KEEP:-14}
+    volumes:
+      - state:/state
+      - ${IPB_BACKUP_DIR:-./deploy/backups}:/backups
+    entrypoint: ['node', 'server/tools/backup.mjs']
+
+secrets:
+  ipb_admin_password:
+    file: ${IPB_ADMIN_PASSWORD_FILE:-./deploy/secrets/admin_password}
+
+volumes:
+  state:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,60 @@
+# Reverse proxy + TLS terminator for the `app` service. `ac.lan` is the LAN
+# hostname (point the router's local DNS at this host); `localhost` is kept
+# for testing straight off the machine running Compose.
+{
+	admin off
+	auto_https disable_redirects
+}
+
+# Plain HTTP: only `/ca.crt` (Caddy's own local root certificate, so a
+# client can install it once and stop seeing "insecure site" warnings for
+# `tls internal`) is served over HTTP; everything else redirects to HTTPS.
+http://ac.lan, http://localhost {
+	@cacert path /ca.crt
+	handle @cacert {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type "application/x-x509-ca-cert"
+		file_server
+	}
+	handle {
+		redir https://{host}{uri} permanent
+	}
+}
+
+ac.lan, localhost {
+	tls internal
+
+	# Short HSTS max-age: this is an internal CA on a LAN, not a public
+	# domain — a long max-age would make the browser refuse the plain-HTTP
+	# `/ca.crt` fetch above until it expires, on a network where the
+	# certificate can legitimately change (host rebuild, moved to new
+	# hardware).
+	header {
+		Strict-Transport-Security "max-age=3600"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		# `unsafe-inline` for style-src: OpenLayers sets element `style`
+		# attributes directly (layer opacity/transform, popup positioning),
+		# not a build-time choice this app can route around. Every other
+		# directive is closed to `'self'` plus the specific third-party
+		# hosts the client actually calls (basemap/weather/imagery — see
+		# `src`/`modules/*/client` for the literal URLs): CUZK basemap
+		# tiles, Esri world imagery, RainViewer radar, Open-Meteo,
+		# aviationweather.gov METAR/TAF, EUMETSAT imagery, and ODIN
+		# equipment images (server-proxied images fall under `/api/`,
+		# `'self'`; only images the app links to directly need the host
+		# here). Radar tiles come from the `host` RainViewer's API returns
+		# (currently tilecache.rainviewer.com): if radar stops drawing, check
+		# that value against img-src first.
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob: https://server.arcgisonline.com https://ags.cuzk.gov.cz https://*.tile.opentopomap.org https://tilecache.rainviewer.com https://view.eumetsat.int https://odin.t2com.army.mil; connect-src 'self' https://api.open-meteo.com https://api.rainviewer.com https://aviationweather.gov https://ags.cuzk.gov.cz https://view.eumetsat.int; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; worker-src 'self' blob:; object-src 'none'"
+	}
+
+	# SSE-friendly: `flush_interval -1` flushes every write immediately
+	# instead of buffering, so `/api/live` events reach the browser as soon
+	# as the app sends them rather than waiting for a buffer to fill.
+	reverse_proxy app:8000 {
+		flush_interval -1
+	}
+}
