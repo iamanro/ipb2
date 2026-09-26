@@ -114,7 +114,9 @@ test('printing includes a snapshot of the map although print styles hide the map
 
 test('the MGRS grid toggle survives a reload', async ({ page, request }) => {
   await openStudy(page, request);
-  const toggle = page.locator('#grid-toggle');
+  // The grid switch lives in the Map popover, with the other overlays.
+  await page.locator('#map-menu-toggle').click();
+  const toggle = page.getByRole('button', { name: 'MGRS grid', exact: true });
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
