@@ -410,8 +410,19 @@ Step 1's **Weather** block (button **Get weather**) then shows:
 - **Across the AOI**: temperature, wind, low cloud and visibility at the
   weather point / highest / lowest ground side by side (ridge exposure,
   hill fog, valley fog and frost);
-- **Nearest observation**: the latest measured report (METAR) of the
-  closest reporting airfield, with distance and bearing, decoded to metric
+- **Measured nearest the weather point**: the latest 10-minute values of
+  the Czech Hydrometeorological Institute's stations (opendata.chmi.cz, CC
+  BY 4.0, ~300 stations), each quantity — temperature and humidity, wind
+  and gusts, precipitation over the last hour, station pressure — from the
+  nearest station that measured it in the last 2 h, with its distance,
+  direction and time. Many stations are rain gauges only, so the stations
+  can differ per row; around Libavá they are 9–11 km away. Only stations
+  within 60 km count, so outside Czechia this row is absent. Through this
+  server (`GET /api/ipb/weather/measured?at=lon,lat`), which loads the
+  station list once a day and a station's file at most every 5 min;
+- **Nearest airfield report**: the latest measured report (METAR) of the
+  closest reporting airfield (cloud, ceiling and visibility, which the
+  ČHMÚ 10-minute data does not include), with distance and bearing, decoded to metric
   (wind m/s, visibility km, cloud and ceiling in metres above the station)
   plus the raw report. It comes from aviationweather.gov (NOAA) through this
   server (`GET /api/ipb/weather/station?at=lon,lat`), because that service
@@ -426,7 +437,8 @@ its own: every request tells the service which area is being looked at
 (the weather point and the AOI's highest and lowest ground), so use these
 only where that is acceptable. Terms: RainViewer's free API is for personal
 and educational use; Open-Meteo's free API is non-commercial (data CC BY
-4.0); EUMETSAT imagery is credited on the map; NOAA data is public domain.
+4.0); ČHMÚ open data is CC BY 4.0; EUMETSAT imagery is credited on the map;
+NOAA data is public domain.
 
 ### Custom layers
 

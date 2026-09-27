@@ -432,6 +432,8 @@ function createState() {
       forecast: { key: null, dataKey: null, data: null, fetchedAt: 0, loading: false, error: null },
       /** Latest report of the nearest station, for the weather point `dataKey`. */
       station: { key: null, dataKey: null, data: null, loading: false, error: null },
+      /** ČHMÚ measurements nearest the weather point, per quantity (modules/ipb/server/chmi.js). */
+      measured: { key: null, dataKey: null, data: null, loading: false, error: null },
     },
   };
 }
@@ -3017,9 +3019,10 @@ function replaceForecastBlock() {
 async function loadWeatherReport() {
   const study = state.study.study;
   const key = siteKey(study);
-  const { forecast, station } = state.weather;
+  const { forecast, station, measured } = state.weather;
   Object.assign(forecast, { key, loading: true, error: null });
   Object.assign(station, { key, loading: true, error: null });
+  Object.assign(measured, { key, loading: true, error: null });
   replaceForecastBlock();
   const site = await resolveSite(study);
   if (!site || forecast.key !== key) return;
@@ -3051,6 +3054,16 @@ async function loadWeatherReport() {
       })
       .finally(() => {
         if (current(station)) station.loading = false;
+      }),
+    requestJson(`${API}/weather/measured?at=${site.point.lon},${site.point.lat}`)
+      .then((data) => {
+        if (current(measured)) Object.assign(measured, { data, dataKey: key });
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError' && current(measured)) measured.error = error.message;
+      })
+      .finally(() => {
+        if (current(measured)) measured.loading = false;
       }),
   ]);
   if (!state.session.signal.aborted) replaceForecastBlock();
@@ -3119,10 +3132,10 @@ function renderForecast(study) {
       createElement(
         'p',
         'panel-note',
-        'A 48-hour model forecast (open-meteo.com) at the weather point and the AOI’s highest and lowest ground, and the latest measurement of the nearest reporting station (aviationweather.gov). Getting it sends those locations to both services. Set the weather point in the tool panel or by right-clicking the map.',
+        'A 48-hour model forecast (open-meteo.com) at the weather point and the AOI’s highest and lowest ground; the latest measurements of the ČHMÚ stations nearest the weather point (opendata.chmi.cz, through this server); and the nearest airfield report (aviationweather.gov). Getting it sends those locations to the services. Set the weather point in the tool panel or by right-clicking the map.',
       ),
     );
-    block.append(renderStation(key));
+    block.append(renderMeasured(key), renderStation(key));
     return block;
   }
 
@@ -3156,7 +3169,7 @@ function renderForecast(study) {
     ),
   );
   if (points.length > 1) block.append(renderSpread(points));
-  block.append(renderStation(key));
+  block.append(renderMeasured(key), renderStation(key));
   return block;
 }
 
@@ -3249,14 +3262,109 @@ function renderSpread(points) {
   return wrap;
 }
 
-/** The nearest station's latest METAR, decoded, with the raw report. */
+const MEASURED_ROWS = [
+  {
+    group: 'temperature',
+    label: 'Temperature',
+    text: ({ T, H }) =>
+      [`${formatNumber(T?.value, 1)} °C`, H ? `humidity ${formatNumber(H.value)} %` : null]
+        .filter(Boolean)
+        .join(', '),
+  },
+  {
+    group: 'wind',
+    label: 'Wind',
+    text: ({ F, D, Fmax }) =>
+      [
+        `${Number.isFinite(D?.value) && F?.value > 0 ? `${compassPoint(D.value)} ` : ''}${formatNumber(F?.value, 1)} m/s`,
+        Fmax ? `gusts ${formatNumber(Fmax.value, 1)} m/s` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+  },
+  {
+    group: 'precipitation',
+    label: 'Precipitation',
+    text: ({ SRA10M }) => `${formatNumber(SRA10M?.lastHour, 1)} mm in the last hour`,
+  },
+  {
+    group: 'pressure',
+    label: 'Station pressure',
+    text: ({ P }) => `${formatNumber(P?.value, 1)} hPa (at the station's height, not QNH)`,
+  },
+];
+
+/**
+ * Measured now, as near the weather point as the ČHMÚ network allows: each
+ * quantity from the nearest station that measures it, with that station's
+ * distance and the time of its value.
+ */
+function renderMeasured(key) {
+  const measured = state.weather.measured;
+  const wrap = createElement('div', 'weather-measured');
+  if (measured.key !== key && measured.dataKey !== key) return wrap;
+  wrap.append(createElement('h5', null, 'Measured nearest the weather point'));
+  if (measured.key === key && measured.loading) {
+    wrap.append(createElement('p', 'panel-note', 'Asking the nearest ČHMÚ stations…'));
+    return wrap;
+  }
+  if (measured.key === key && measured.error) {
+    wrap.append(createElement('p', 'panel-note', measured.error));
+    return wrap;
+  }
+  const groups = measured.dataKey === key ? measured.data?.groups : null;
+  if (!groups) return wrap;
+  const table = createElement('table', 'data-table weather-measured-table');
+  const head = createElement('thead');
+  const headRow = createElement('tr');
+  ['', 'Now', 'Where and when'].forEach((label) =>
+    headRow.append(createElement('th', null, label)),
+  );
+  head.append(headRow);
+  const body = createElement('tbody');
+  for (const row of MEASURED_ROWS) {
+    const entry = groups[row.group];
+    if (!entry) continue;
+    const at = Math.max(...Object.values(entry.values).map((value) => value.time));
+    const tr = createElement('tr');
+    tr.append(
+      createElement('th', null, row.label),
+      createElement('td', null, row.text(entry.values)),
+      createElement(
+        'td',
+        'weather-measured-where',
+        [
+          // A real, named place: hidden while a scenario is active, like the METAR station.
+          state.scenario
+            ? `station ${heightText(entry.station.elevation)}`
+            : `${entry.station.name} (${heightText(entry.station.elevation)})`,
+          `${entry.distanceKm.toFixed(0)} km ${compassPoint(entry.bearing)}`,
+          `${CLOCK.format(at)}, ${minutesAgo(at)}`,
+        ].join(' · '),
+      ),
+    );
+    body.append(tr);
+  }
+  table.append(head, body);
+  wrap.append(
+    table,
+    createElement(
+      'p',
+      'panel-note',
+      'Each value from the nearest ČHMÚ station that measures it, published every 10 minutes with up to an hour’s delay. Data: Czech Hydrometeorological Institute (opendata.chmi.cz, CC BY 4.0).',
+    ),
+  );
+  return wrap;
+}
+
+/** The nearest airfield's latest METAR, decoded, with the raw report. */
 function renderStation(key) {
   const station = state.weather.station;
   const wrap = createElement('div', 'weather-station');
   if (station.key !== key && station.dataKey !== key) return wrap;
-  wrap.append(createElement('h5', null, 'Nearest observation (measured)'));
+  wrap.append(createElement('h5', null, 'Nearest airfield report (METAR)'));
   if (station.key === key && station.loading) {
-    wrap.append(createElement('p', 'panel-note', 'Asking for the nearest station…'));
+    wrap.append(createElement('p', 'panel-note', 'Asking for the nearest airfield…'));
     return wrap;
   }
   if (station.key === key && station.error) {

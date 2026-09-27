@@ -1573,7 +1573,20 @@
       font: var(--t-sm) / 1.5 var(--data);
     }
 
+    .weather-measured .data-table.weather-measured-table {
+      min-width: 0;
+    }
+
+    .weather-measured-table :is(th, td) {
+      padding: 5px 6px;
+    }
+
+    .weather-measured-where {
+      color: var(--muted);
+    }
+
     .weather-spread h5,
+    .weather-measured h5,
     .weather-station h5 {
       margin: 14px 0 4px;
       color: var(--blue-dark);

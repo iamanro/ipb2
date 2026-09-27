@@ -1,5 +1,6 @@
 import { HttpError } from '../../../server/http.js';
 import state from './state.js';
+import { MAX_DISTANCE_KM, nearestMeasurements } from './chmi.js';
 import { nearestStation } from './station.js';
 import { CHILDREN, openStore, shapeStudy } from './store.js';
 
@@ -178,6 +179,27 @@ export default {
         }
         if (!station) throw new HttpError(404, 'No reporting station within about 500 km.');
         return station;
+      },
+    },
+    {
+      method: 'GET',
+      path: 'weather/measured',
+      verb: 'none',
+      handler: async ({ query }) => {
+        const [lon, lat] = (query.get('at') || '').split(',').map(Number);
+        if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lat) > 90) {
+          throw new HttpError(400, 'The at must be "lon,lat".');
+        }
+        let measured;
+        try {
+          measured = await nearestMeasurements({ lon, lat });
+        } catch (error) {
+          throw new HttpError(502, `ČHMÚ open data did not answer (${error.message}).`);
+        }
+        if (!measured) {
+          throw new HttpError(404, `No ČHMÚ station reporting within ${MAX_DISTANCE_KM} km.`);
+        }
+        return measured;
       },
     },
   ],
