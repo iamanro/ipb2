@@ -36,6 +36,10 @@ const TARGET_KINDS = ['requirement', 'sir'];
 const RELATIONS = ['confirms', 'denies', 'partial', 'context'];
 const RFI_PRIORITIES = ['routine', 'priority', 'immediate'];
 const SCENARIO_EVENT_KINDS = ['message', 'report'];
+const DELIVERY_MODES = ['draft', 'scheduled'];
+
+// -- instructor authoring: story + situations --------------------------------
+const SITUATION_STATUSES = ['planned', 'active', 'complete'];
 
 // -- reports: type, structured fields, SIDC, location ------------------------
 const REPORT_TYPES = ['free', 'spotrep', 'salute'];
@@ -131,9 +135,17 @@ export function openStore(file, { regionsFile } = {}) {
     patchClock,
     listScenarioEvents,
     createScenarioEvent,
+    updateScenarioEvent,
     cancelScenarioEvent,
     fireScenarioEvent,
     dueScenarioEventIds,
+    getInstructorData,
+    readStory,
+    patchStory,
+    listSituations,
+    createSituation,
+    updateSituation,
+    deleteSituation,
     getRegions,
     listScenarios,
     createScenario,
@@ -193,6 +205,11 @@ function optionalString(value, name) {
 function requireEnum(value, name, values) {
   if (!values.includes(value))
     throw new HttpError(400, `${name} must be one of: ${values.join(', ')}.`);
+  return value;
+}
+
+function requireInteger(value, name) {
+  if (!Number.isInteger(value)) throw new HttpError(400, `${name} must be an integer.`);
   return value;
 }
 
@@ -2082,10 +2099,20 @@ function injectReleaseTo(cells) {
   return normalizeRelease(cells ?? ['blue'], 'white');
 }
 
-function createScenarioEvent({ trigger_at: triggerAt, kind, payload }) {
-  const triggerMs = new Date(triggerAt).getTime();
-  if (Number.isNaN(triggerMs)) throw new HttpError(400, 'trigger_at must be a valid timestamp.');
-  requireEnum(kind, 'kind', SCENARIO_EVENT_KINDS);
+/** A situation id from the body: null (no linked situation), or an existing
+ * situation's id — 404 if it doesn't name a live row (situations are
+ * White-only and never cell-owned, so there's no `access.see` for this). */
+function resolveSituationId(value) {
+  if (value === undefined || value === null) return null;
+  const row = fetchRow('situations', value);
+  if (!row) throw new HttpError(404, `Situation ${value} not found.`);
+  return row.id;
+}
+
+/** Validates a report/message inject payload against its `kind` — shared by
+ * create and update, since an edited pending event must stay just as valid
+ * as a freshly created one. */
+function validateEventPayload(kind, payload) {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
     throw new HttpError(400, 'payload must be a JSON object.');
   }
@@ -2108,6 +2135,24 @@ function createScenarioEvent({ trigger_at: triggerAt, kind, payload }) {
       sidc: payload.sidc,
     });
   }
+}
+
+function createScenarioEvent({
+  trigger_at: triggerAt,
+  kind,
+  payload,
+  situation_id: situationId,
+  delivery_mode: deliveryMode,
+}) {
+  const triggerMs = new Date(triggerAt).getTime();
+  if (Number.isNaN(triggerMs)) throw new HttpError(400, 'trigger_at must be a valid timestamp.');
+  requireEnum(kind, 'kind', SCENARIO_EVENT_KINDS);
+  validateEventPayload(kind, payload);
+  const cleanDeliveryMode =
+    deliveryMode !== undefined
+      ? requireEnum(deliveryMode, 'delivery_mode', DELIVERY_MODES)
+      : 'scheduled';
+  const cleanSituationId = resolveSituationId(situationId);
   // The cells a fired inject reaches: both report and message injects are
   // White-owned (the game-master schedules them), released to `release_to`
   // (defaulting to Blue — the usual training audience) on firing. Scheduling
@@ -2122,13 +2167,15 @@ function createScenarioEvent({ trigger_at: triggerAt, kind, payload }) {
     () => {
       const { lastInsertRowid } = database
         .prepare(
-          `INSERT INTO scenario_events (trigger_at, kind, payload, state, created_at, updated_at)
-         VALUES (?, ?, ?, 'pending', ?, ?)`,
+          `INSERT INTO scenario_events (trigger_at, kind, payload, state, situation_id, delivery_mode, created_at, updated_at)
+         VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
         )
         .run(
           new Date(triggerMs).toISOString(),
           kind,
           JSON.stringify({ ...payload, release_to: releaseTo }),
+          cleanSituationId,
+          cleanDeliveryMode,
           timestamp,
           timestamp,
         );
@@ -2142,6 +2189,48 @@ function assertPendingEvent(id) {
   if (!row) throw new HttpError(404, `Scenario event ${id} not found.`);
   if (row.state !== 'pending') throw new HttpError(409, `Event ${id} is already ${row.state}.`);
   return row;
+}
+
+/** `PATCH scenario-events/:id`: only a still-pending event may be edited —
+ * once fired or cancelled it's a historical record, not a draft, so
+ * `assertPendingEvent` (409) is the whole "no editing a fired/cancelled
+ * event" rule. Every field is optional; only the ones given change,
+ * `payload` replaced wholesale (like create) rather than merged, since a
+ * partial payload could silently keep a stale `release_to` or field the
+ * instructor meant to drop. */
+function updateScenarioEvent(id, patch) {
+  const row = assertPendingEvent(id);
+  const fields = [];
+  const params = [];
+  if (patch.trigger_at !== undefined) {
+    const triggerMs = new Date(patch.trigger_at).getTime();
+    if (Number.isNaN(triggerMs)) throw new HttpError(400, 'trigger_at must be a valid timestamp.');
+    fields.push('trigger_at = ?');
+    params.push(new Date(triggerMs).toISOString());
+  }
+  if (patch.payload !== undefined) {
+    validateEventPayload(row.kind, patch.payload);
+    const releaseTo = injectReleaseTo(patch.payload.release_to);
+    fields.push('payload = ?');
+    params.push(JSON.stringify({ ...patch.payload, release_to: releaseTo }));
+  }
+  if (patch.situation_id !== undefined) {
+    fields.push('situation_id = ?');
+    params.push(resolveSituationId(patch.situation_id));
+  }
+  if (patch.delivery_mode !== undefined) {
+    fields.push('delivery_mode = ?');
+    params.push(requireEnum(patch.delivery_mode, 'delivery_mode', DELIVERY_MODES));
+  }
+  if (!fields.length) return shapeScenarioEvent(row);
+  return mutate('scenario:update', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
+    fields.push('updated_at = ?');
+    params.push(now());
+    database
+      .prepare(`UPDATE scenario_events SET ${fields.join(', ')} WHERE id = ?`)
+      .run(...params, id);
+    return shapeScenarioEvent(fetchRow('scenario_events', id));
+  });
 }
 
 function cancelScenarioEvent(id) {
@@ -2234,8 +2323,216 @@ function fireScenarioEvent(id, access) {
 function dueScenarioEventIds() {
   const clock = readClockRow();
   const nowMs = scenarioNowMs(clock);
-  const pending = database.prepare("SELECT * FROM scenario_events WHERE state = 'pending'").all();
+  // Draft events never auto-fire, no matter how far in the past their
+  // `trigger_at` sits — a draft is only sent by an explicit fire.
+  const pending = database
+    .prepare(
+      "SELECT * FROM scenario_events WHERE state = 'pending' AND delivery_mode = 'scheduled'",
+    )
+    .all();
   return dueEvents(pending, nowMs).map((row) => row.id);
+}
+
+// -- instructor authoring: story + situations ---------------------------------
+//
+// White-only narrative content (routes.js gates every one of these behind
+// `access.white`, on top of the `game-master` role check, since `role`
+// alone doesn't imply White — a Blue game-master must never reach this).
+// Neither table is cell-owned: `story` is the one exercise-wide row (same
+// lazy-insert-on-first-read pattern as `scenario_clock`), `situations` are
+// plain White rows with no `owner_cell`/`releasable_to` to check.
+
+function shapeStory(row) {
+  return {
+    title: row.title,
+    briefing: row.briefing,
+    objectives: row.objectives,
+    instructor_notes: row.instructor_notes,
+  };
+}
+
+function readStoryRow() {
+  const row = fetchRow('story', 1);
+  if (row) return row;
+  database
+    .prepare(
+      "INSERT INTO story (id, title, briefing, objectives, instructor_notes, updated_at) VALUES (1, '', '', '', '', ?)",
+    )
+    .run(now());
+  return fetchRow('story', 1);
+}
+
+function readStory() {
+  return shapeStory(readStoryRow());
+}
+
+/** Every field is optional and free text (Blue-facing briefing, private
+ * objectives/notes) — no length bound beyond the dispatcher's body cap;
+ * an instructor authoring a briefing needs more room than a name field. */
+function patchStory(patch) {
+  const fields = [];
+  const params = [];
+  for (const key of ['title', 'briefing', 'objectives', 'instructor_notes']) {
+    if (patch[key] !== undefined) {
+      fields.push(`${key} = ?`);
+      params.push(optionalString(patch[key], key) ?? '');
+    }
+  }
+  return mutate('instructor:story', 'story', { owner_cell: 'white', releasable_to: [] }, () => {
+    readStoryRow(); // ensures the singleton row exists before this UPDATE
+    if (fields.length) {
+      fields.push('updated_at = ?');
+      params.push(now());
+      database.prepare(`UPDATE story SET ${fields.join(', ')} WHERE id = 1`).run(...params);
+    }
+    return readStory();
+  });
+}
+
+function shapeSituation(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    ground_truth: row.ground_truth,
+    expected_response: row.expected_response,
+    status: row.status,
+    sort_order: row.sort_order,
+  };
+}
+
+function listSituations() {
+  return database
+    .prepare('SELECT * FROM situations ORDER BY sort_order, id')
+    .all()
+    .map(shapeSituation);
+}
+
+function nextSituationSortOrder() {
+  const row = database.prepare('SELECT MAX(sort_order) AS m FROM situations').get();
+  return (row.m ?? -1) + 1;
+}
+
+/** Setting a situation active deactivates whichever one was active before
+ * (the partial unique index on `situations(status)` allows only one), same
+ * pattern as `scenarios(active)` — the prior active situation moves to
+ * 'complete' rather than back to 'planned': the instructor is advancing the
+ * story to its next beat, not un-scheduling the one just finished. */
+function deactivatePriorSituation(excludeId, timestamp) {
+  database
+    .prepare(
+      "UPDATE situations SET status = 'complete', updated_at = ? WHERE status = 'active' AND id <> ?",
+    )
+    .run(timestamp, excludeId ?? -1);
+}
+
+function createSituation({
+  title,
+  ground_truth: groundTruth,
+  expected_response: expectedResponse,
+  status,
+  sort_order: sortOrder,
+}) {
+  const cleanTitle = requireBoundedString(title, 'title', 200);
+  const cleanGroundTruth = optionalString(groundTruth, 'ground_truth') ?? '';
+  const cleanExpected = optionalString(expectedResponse, 'expected_response') ?? '';
+  const cleanStatus =
+    status !== undefined ? requireEnum(status, 'status', SITUATION_STATUSES) : 'planned';
+  const cleanSort = sortOrder !== undefined ? requireInteger(sortOrder, 'sort_order') : undefined;
+  return mutate(
+    'situation:create',
+    () => cleanTitle,
+    { owner_cell: 'white', releasable_to: [] },
+    () => {
+      const timestamp = now();
+      if (cleanStatus === 'active') deactivatePriorSituation(null, timestamp);
+      const order = cleanSort ?? nextSituationSortOrder();
+      const { lastInsertRowid } = database
+        .prepare(
+          `INSERT INTO situations (title, ground_truth, expected_response, status, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(cleanTitle, cleanGroundTruth, cleanExpected, cleanStatus, order, timestamp, timestamp);
+      return shapeSituation(fetchRow('situations', Number(lastInsertRowid)));
+    },
+  );
+}
+
+function updateSituation(id, patch) {
+  const existing = fetchRow('situations', id);
+  if (!existing) throw new HttpError(404, `Situation ${id} not found.`);
+  const cleanTitle = 'title' in patch ? requireBoundedString(patch.title, 'title', 200) : undefined;
+  const cleanGroundTruth =
+    'ground_truth' in patch
+      ? (optionalString(patch.ground_truth, 'ground_truth') ?? '')
+      : undefined;
+  const cleanExpected =
+    'expected_response' in patch
+      ? (optionalString(patch.expected_response, 'expected_response') ?? '')
+      : undefined;
+  const cleanStatus =
+    'status' in patch ? requireEnum(patch.status, 'status', SITUATION_STATUSES) : undefined;
+  const cleanSort =
+    'sort_order' in patch ? requireInteger(patch.sort_order, 'sort_order') : undefined;
+  return mutate('situation:update', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
+    const timestamp = now();
+    if (cleanStatus === 'active') deactivatePriorSituation(id, timestamp);
+    const fields = [];
+    const params = [];
+    if (cleanTitle !== undefined) {
+      fields.push('title = ?');
+      params.push(cleanTitle);
+    }
+    if (cleanGroundTruth !== undefined) {
+      fields.push('ground_truth = ?');
+      params.push(cleanGroundTruth);
+    }
+    if (cleanExpected !== undefined) {
+      fields.push('expected_response = ?');
+      params.push(cleanExpected);
+    }
+    if (cleanStatus !== undefined) {
+      fields.push('status = ?');
+      params.push(cleanStatus);
+    }
+    if (cleanSort !== undefined) {
+      fields.push('sort_order = ?');
+      params.push(cleanSort);
+    }
+    if (fields.length) {
+      fields.push('updated_at = ?');
+      params.push(timestamp);
+      database
+        .prepare(`UPDATE situations SET ${fields.join(', ')} WHERE id = ?`)
+        .run(...params, id);
+    }
+    return shapeSituation(fetchRow('situations', id));
+  });
+}
+
+/** Rejects deletion if any scenario event (any state) still names this
+ * situation, rather than silently detaching it (`ON DELETE SET NULL` in the
+ * schema exists only as a defensive backstop, never reached through this
+ * route) — losing the link would be losing which authored beat a fired or
+ * still-pending inject belongs to. */
+function deleteSituation(id) {
+  const existing = fetchRow('situations', id);
+  if (!existing) throw new HttpError(404, `Situation ${id} not found.`);
+  const { n: referenced } = database
+    .prepare('SELECT COUNT(*) AS n FROM scenario_events WHERE situation_id = ?')
+    .get(id);
+  if (referenced > 0) {
+    throw new HttpError(
+      409,
+      `Situation ${id} has ${referenced} scenario event(s) attached; detach or remove them first.`,
+    );
+  }
+  mutate('situation:delete', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
+    database.prepare('DELETE FROM situations WHERE id = ?').run(id);
+  });
+}
+
+function getInstructorData() {
+  return { story: readStory(), situations: listSituations(), events: listScenarioEvents() };
 }
 
 // -- exercise scenarios (fictional countries + renamed places over Czechia) ---

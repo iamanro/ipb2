@@ -61,8 +61,10 @@ A password or account change made from the shell reaches that user's open browse
 1. `docker compose ps`: both containers `healthy`.
 2. Run a backup (section 5) before users arrive.
 3. Admin → Members: everyone has a cell and role.
-4. White sets the scenario clock, and schedules injects with their **Release to** cells.
-5. During the exercise: `docker stats ipb-app-1` shows the load. The load test (section 8) gives the normal range.
+4. White game-masters open Exercise → **Instructor desk**. Save the private story, objectives, notes, and ordered situations with ground truth and expected responses. Saving does not publish the briefing. **Preview Blue briefing → Send now → Confirm send** sends only the previewed text.
+5. Compose a situation's message or located report, inspect its recipient preview, then **Save draft**, **Schedule** at a scenario DTG, or **Send now**. Drafts never fire automatically. Pending injects can be edited or cancelled. Mark situations **Current** manually; selecting a new current situation completes the previous one. Situation names, ground truth, notes, and the pending queue stay White-only, including in activity.
+6. Set the scenario clock in the desk. A clock jump can make scheduled items due, even while paused. Blue/Red use **Briefing & clock** for delivered messages and **Reports & evidence** for delivered reports; they cannot alter the clock or inspect private drafts, even with the game-master role.
+7. During the exercise: `docker stats ipb-app-1` shows the load. The load test (section 8) gives the normal range.
 
 ## 4. Between exercises
 

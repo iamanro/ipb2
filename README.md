@@ -615,11 +615,29 @@ already in a running exercise leaks. Membership in the current exercise (a
 cell plus a role, distinct from the global `admin` flag) is managed on the
 **Admin** page, which superseded the exercise's own roster tab.
 
-1. **EXCON sets the stage** (game-master): Exercise → Geography activates a
-   scenario; Scenario sets the clock (start DTG, rate) and schedules injects,
-   including located SALUTE/SPOTREP reports, each with a **Release to** cell
-   list (defaulting to Blue) that becomes the fired item's release list —
-   see "Located injects" below.
+1. **EXCON sets the stage** (White game-master): Exercise opens the
+   **Instructor desk** (`?tab=instructor`). Save the story's background and
+   mission, training objectives, and private instructor notes. **Saving does
+   not publish anything.** **Preview Blue briefing** copies only the briefing
+   into the composer; **Send now → Confirm send** releases that text to Blue.
+   - Add ordered **Story situations** with White-only ground truth and
+     expected responses. Mark one **Current** when ready; the previous current
+     situation becomes **Complete**. Progression is instructor-controlled,
+     not automatic branching. Situation titles and notes stay private,
+     including in the activity feed.
+   - **Compose inject for this situation…** creates a linked message or
+     located SALUTE/SPOTREP. Inspect **What recipients will receive**, select
+     **Release to** cells (Blue by default), then **Save draft**, **Schedule**
+     at a scenario DTG, or **Send now** with a final confirmation. Drafts never
+     fire automatically. Pending injects can be edited or cancelled; delivered
+     items remain in the situation's development history. A situation with
+     linked injects cannot be deleted.
+   - Clock controls live here too. Blue/Red read delivered messages in
+     **Briefing & clock** and reports in **Reports & evidence**; even their
+     game-masters cannot read the desk or pending injects, or alter the clock.
+     White observers can read the desk but cannot author or send.
+   - Exercise → Geography still activates the map scenario; story situations
+     are narrative developments, separate from the **Situation** track map.
 2. **IPB** (analyst): each exercise has exactly one automatic IPB study for
    White, Blue and Red. New and reset exercises create the three studies on
    first use; restored or older exercises safely gain any missing cell study
@@ -729,10 +747,12 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
 DTG takes its month and year from scenario time. Products are stamped with
 scenario time, not the wall clock.
 
-**Injects fire on their own.** The server fires due injects every 5 seconds of
-real time while the scenario clock runs, whether or not anyone has the
-Exercise tab open, and every open view refreshes. The Scenario tab's **Fire
-due events now** does the same immediately.
+**Scheduled injects fire on their own; drafts do not.** The server checks
+scheduled injects against scenario time every 5 seconds of real time,
+whether or not anyone has the Exercise tab open, and open views refresh.
+The Instructor desk's **Fire due events now** fires due scheduled items
+immediately. Moving the clock forward can make scheduled items due even
+while paused; a draft still requires an explicit send.
 
 ## Reports and the current situation
 
@@ -784,7 +804,7 @@ wall clock). Clicking a report opens its own detail card with a jump back to
 its Reports tab entry. Every change here or in Reports refreshes live for
 every other open tab.
 
-**Located injects**: on the Scenario tab, a 'report' inject reuses the same
+**Located injects**: in the Instructor desk, a 'report' inject reuses the same
 type/fields/location/SIDC form, so the Game Master can pre-script a located
 SALUTE/SPOTREP to fire at a set time; the inject list shows its location as
 MGRS. A 'message' inject is a short free-text line instead (a scripted
@@ -792,11 +812,10 @@ radio call, a SITREP snippet, an EXCON note) — both kinds carry a
 **Release to** cell list, White-owned until fired and released to exactly
 those cells on firing (defaulting to Blue). A fired report inject lands in
 Reports/Situation as usual, cell-scoped like a hand-entered one; a fired
-message inject lands in the **Messages** panel (Exercise → Scenario),
-visible only to the cells it was released to (and White/admins) — the place
-a Blue or Red cell reads EXCON's scripted narrative without ever seeing
-Scenario events themselves (game-master-only, see below). Scheduling an
-inject needs the Game Master role.
+message inject lands in **Briefing & clock** (Exercise → `?tab=scenario`),
+visible only to the cells it was released to (and White/admins). Blue and
+Red never see the private event queue. Authoring, scheduling, and sending
+require White access and the game-master role.
 
 ## ORBAT
 
@@ -888,12 +907,14 @@ stays unrestricted regardless). Each route declares the role it needs in
 its module's route table (`modules/<id>/server/routes.js`); the dispatcher
 enforces it regardless of what a view shows or hides.
 
-**Scenario events (injects) are game-master-only, including to read them**
-— unlike every other exercise GET — so the training audience can never see
-what is coming, or that anything was scheduled, cancelled or fired ahead of
-time. The Exercise module's Scenario tab shows the training audience only
-the clock; its Activity (AAR) log strips any row about a scheduled/
-cancelled/fired inject for anyone below game-master.
+**Instructor content is White-only.** `GET /api/exercise/instructor` returns
+White's private story, ordered situations, and inject queue. White observers
+may read it; mutations and clock changes require game-master too. The legacy
+`GET /api/exercise/scenario-events` also requires White and game-master.
+Blue/Red game-masters cannot inspect instructor content. **Briefing & clock**
+shows the training audience the clock and messages actually released to
+their cell, never the queue. Story/situation activity is White-scoped;
+event scheduling/cancellation/firing activity remains private.
 
 **Managing users** (`IPB_AUTH=on` mode only): the **Admin** module (nav
 item shown only to a signed-in admin; `/admin/`) has four tabs. **Users**:
@@ -1145,10 +1166,14 @@ for a point NAI, within 250 m), unless `nai_id` is given explicitly; moving a
 report's location re-runs the match. Scenario injects (`scenario_events` of
 kind `report`) take the same payload, including location, and are validated
 the same way when scheduled, not just when they fire. Firing one — by hand
-(`POST /api/exercise/scenario-events/:id/fire`, game-master role) or by the
-scenario clock itself once its trigger time arrives — creates the report or
-message owned by White and released to the inject's own `release_to` cells,
-announced only to them; nothing is exposed before it fires.
+(`POST /api/exercise/scenario-events/:id/fire`, White game-master) or by the
+scenario clock once a **scheduled** event's trigger time arrives — creates
+the report or message owned by White and released to the inject's own
+`payload.release_to` cells, announced only to them; nothing is exposed before
+it fires. `delivery_mode: 'draft'` excludes an event from the ticker;
+`'scheduled'` remains the default for existing API clients. Optional
+`situation_id` links it to a private story situation. Pending events accept
+`PATCH /api/exercise/scenario-events/:id`; fired/cancelled events are immutable.
 
 `exercise` also owns the app-wide **current situation**: `tracks` (each with
 a head position, status, and DTG) and their `track_positions` history.

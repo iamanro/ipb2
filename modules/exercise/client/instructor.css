@@ -1,0 +1,237 @@
+/**
+ * Styles for the Instructor desk (instructor.js): the White-only story +
+ * story-situations + composer + inject-history tab. Layered and
+ * token-driven like styles.css/situation.css/staff.css; imported as a
+ * side effect by instructor.js.
+ */
+@layer components {
+  [data-module='exercise'] {
+    .instructor-title {
+      margin: 0 0 14px;
+      font: 700 var(--t-xl) / 1.2 var(--display);
+    }
+
+    .instructor-clock,
+    .instructor-story,
+    .instructor-composer,
+    .instructor-situations,
+    .instructor-history {
+      margin-bottom: 20px;
+    }
+
+    .instructor-story-summary {
+      cursor: pointer;
+      font: 700 var(--t-lg) / 1.4 var(--display);
+      padding: 4px 0;
+    }
+    .instructor-story[open] > summary {
+      margin-bottom: 12px;
+    }
+    .instructor-story > button + button {
+      margin-left: 8px;
+    }
+    .instructor-situations .scenario-event-row,
+    .instructor-history .scenario-event-row {
+      flex-wrap: wrap;
+    }
+    .instructor-event-text {
+      flex: 1 1 100%;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .instructor-composer-preview p {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .instructor-send-dialog {
+      width: min(600px, calc(100vw - 32px));
+      max-height: 85vh;
+      overflow-y: auto;
+    }
+    .instructor-composer textarea {
+      width: 100%;
+      min-height: 96px;
+    }
+    .instructor-clock .inline-form {
+      flex-wrap: wrap;
+    }
+    .instructor-clock input {
+      min-width: 0;
+      max-width: 100%;
+    }
+    .instructor-situation-toggle {
+      min-height: var(--target);
+    }
+
+    /* -- story -- */
+
+    .instructor-story-textarea {
+      resize: vertical;
+      border: 1px solid var(--line-dark);
+      padding: 8px 9px;
+      color: var(--ink);
+      background: var(--surface);
+      font: 400 var(--t-sm) / 1.45 var(--body);
+    }
+
+    /* Blue-facing text gets the same "this leaves the desk" affordance as a
+     * report/message narrative; private text is quietly flagged instead so
+     * an instructor never mistakes objectives/notes for something Blue sees. */
+    .instructor-story-textarea.blue-facing {
+      border-color: var(--blue-dark);
+    }
+
+    .instructor-story-textarea.private {
+      border-color: var(--line);
+      background: var(--paper);
+    }
+
+    /* -- story situations -- */
+
+    .instructor-situations-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .instructor-situations-header h2 {
+      margin: 0;
+    }
+
+    .instructor-situation-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .instructor-situation-card {
+      border: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .instructor-situation-card.open {
+      border-color: var(--blue-dark);
+      padding: 0 12px 12px;
+    }
+
+    .instructor-situation-card.status-active {
+      border-left: 4px solid var(--signal);
+    }
+
+    .instructor-situation-card.status-complete {
+      opacity: 0.75;
+    }
+
+    .instructor-situation-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+    }
+
+    .instructor-situation-toggle {
+      flex: 1 1 auto;
+      border: none;
+      padding: 0;
+      background: none;
+      color: var(--ink);
+      text-align: left;
+      font: 600 var(--t-md) / 1.3 var(--display);
+      cursor: pointer;
+    }
+
+    .situation-status-badge {
+      padding: 2px 8px;
+      border: 1px solid var(--line-dark);
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1.4 var(--data);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .situation-status-badge.status-active {
+      border-color: var(--signal);
+      color: var(--signal);
+    }
+
+    .situation-status-badge.status-complete {
+      color: var(--muted);
+    }
+
+    .instructor-situation-events {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    .instructor-situation-events h4 {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1 var(--data);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* -- composer -- */
+
+    .instructor-composer {
+      border: 1px solid var(--blue-dark);
+    }
+
+    .instructor-composer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .instructor-composer-header h2 {
+      margin: 0;
+    }
+
+    .instructor-composer-preview {
+      margin: 10px 0;
+      padding: 10px 12px;
+      border: 1px dashed var(--line-dark);
+      background: var(--surface);
+    }
+
+    .instructor-composer-preview h4 {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1 var(--data);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* -- inject/delivery badges (shared by the per-situation history and the
+       all-injects list) -- */
+
+    .instructor-delivery-badge {
+      padding: 2px 8px;
+      border: 1px solid var(--line-dark);
+      font: 600 var(--t-xs) / 1.4 var(--data);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .instructor-delivery-badge.delivery-draft {
+      border-color: var(--muted);
+      color: var(--muted);
+    }
+
+    .instructor-delivery-badge.delivery-scheduled {
+      border-color: var(--blue-dark);
+      color: var(--blue-dark);
+    }
+
+    .scenario-event-row.delivery-draft {
+      background: var(--paper);
+    }
+  }
+}

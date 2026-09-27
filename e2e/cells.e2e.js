@@ -175,6 +175,56 @@ test('a report stays in its cell until released, a release is read-only, and rea
     await expect(reportRows(white).locator('.cell-badge')).toHaveText('White');
   });
 
+  await test.step('White authors privately, then sends only the previewed development to Blue', async () => {
+    await white.goto('/exercise/');
+    await expect(white.getByRole('heading', { name: 'Instructor desk' })).toBeVisible();
+    const story = white.locator('.instructor-story');
+    await story.getByLabel('Title', { exact: true }).fill('Private exercise story');
+    await story
+      .getByLabel('Blue briefing', { exact: false })
+      .fill('Assess movement near the bridge.');
+    await story
+      .getByLabel('Instructor notes (White only)')
+      .fill('SECRET: reserve force arrives tomorrow');
+    await story.getByRole('button', { name: 'Save story' }).click();
+    await expect(story).not.toHaveAttribute('open');
+    await white.getByRole('button', { name: 'New situation', exact: true }).click();
+    await white.locator('dialog[open] input').fill('Private decoy situation');
+    await white.getByRole('button', { name: 'Create situation', exact: true }).click();
+    const situation = white.locator('.instructor-situation-card.open');
+    await situation.getByLabel('Ground truth (White only)').fill('SECRET: this patrol is a decoy');
+    await situation.getByRole('button', { name: 'Save situation', exact: true }).click();
+    await situation.getByRole('button', { name: 'Compose inject for this situation…' }).click();
+    await white.getByLabel('Message text').fill('Patrol reports two vehicles at the bridge.');
+    await expect(white.locator('.instructor-composer-preview')).toContainText(
+      'Patrol reports two vehicles',
+    );
+    await white.getByRole('button', { name: 'Save draft', exact: true }).click();
+    const history = white.locator('.instructor-history');
+    await expect(history).toContainText('Draft — not sent');
+    for (const page of [blue, red]) {
+      expect((await page.context().request.get('/api/exercise/instructor')).status()).toBe(403);
+      expect(await (await page.context().request.get('/api/exercise/messages')).json()).toEqual([]);
+      expect(
+        JSON.stringify(await (await page.context().request.get('/api/exercise/activity')).json()),
+      ).not.toContain('Private decoy situation');
+      await page.goto('/exercise/?tab=scenario');
+      await expect(page.getByRole('heading', { name: 'Briefing & scenario clock' })).toBeVisible();
+      await expect(page.locator('[data-tab="instructor"]')).toBeHidden();
+    }
+    await history.getByRole('button', { name: 'Send now', exact: true }).click();
+    const confirmation = white.getByRole('dialog', { name: 'Confirm delivery' });
+    await expect(confirmation).toContainText('Patrol reports two vehicles at the bridge.');
+    await expect(confirmation).not.toContainText('SECRET');
+    await confirmation.getByRole('button', { name: 'Confirm send', exact: true }).click();
+    await expect(blue.locator('.message-text')).toHaveText([
+      'Patrol reports two vehicles at the bridge.',
+    ]);
+    await expect(red.locator('.message-text')).toHaveCount(0);
+    await expect(blue.locator('#panel')).not.toContainText('SECRET');
+    await expect(history).toContainText('Delivered');
+  });
+
   await test.step("An admin's reset reloads every member's browser into the emptied exercise", async () => {
     const { name } = await (await admin.get('/api/auth/exercise')).json();
     await postOk(admin, '/api/auth/exercise/reset', { name: 'After the e2e run', confirm: name });

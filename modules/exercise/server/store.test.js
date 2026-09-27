@@ -422,6 +422,173 @@ describe('scenario clock and events', () => {
     expect(store.dueScenarioEventIds()).toHaveLength(0);
     expectStatus(() => store.fireScenarioEvent(event.id, WHITE_ACCESS), 409);
   });
+
+  test('a draft event never comes due, no matter how far past its trigger time — only an explicit fire sends it', () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const draft = store.createScenarioEvent({
+      trigger_at: past,
+      kind: 'message',
+      payload: { text: 'Blue briefing draft' },
+      delivery_mode: 'draft',
+    });
+    expect(draft.delivery_mode).toBe('draft');
+    expect(store.dueScenarioEventIds()).toHaveLength(0);
+    // "Send now" fires a draft directly, exactly once.
+    const fired = store.fireScenarioEvent(draft.id, WHITE_ACCESS);
+    expect(fired.event.state).toBe('fired');
+    expectStatus(() => store.fireScenarioEvent(draft.id, WHITE_ACCESS), 409);
+  });
+
+  test('a scheduled event delivers exactly once: due, fired, then never due or fireable again', () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const event = store.createScenarioEvent({
+      trigger_at: past,
+      kind: 'message',
+      payload: { text: 'once only' },
+    });
+    expect(store.dueScenarioEventIds()).toEqual([event.id]);
+    store.fireScenarioEvent(event.id, WHITE_ACCESS);
+    expect(store.dueScenarioEventIds()).toHaveLength(0);
+    expectStatus(() => store.fireScenarioEvent(event.id, WHITE_ACCESS), 409);
+  });
+
+  test('editing a pending event works, including draft->scheduled; a fired or cancelled event can no longer be edited', () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const event = store.createScenarioEvent({
+      trigger_at: past,
+      kind: 'message',
+      payload: { text: 'v1' },
+      delivery_mode: 'draft',
+    });
+    const edited = store.updateScenarioEvent(event.id, {
+      payload: { text: 'v2' },
+      delivery_mode: 'scheduled',
+    });
+    expect(edited.payload.text).toBe('v2');
+    expect(edited.delivery_mode).toBe('scheduled');
+    expect(store.dueScenarioEventIds()).toEqual([event.id]);
+
+    store.fireScenarioEvent(event.id, WHITE_ACCESS);
+    expectStatus(() => store.updateScenarioEvent(event.id, { payload: { text: 'v3' } }), 409);
+
+    const cancelled = store.createScenarioEvent({
+      trigger_at: past,
+      kind: 'message',
+      payload: { text: 'x' },
+    });
+    store.cancelScenarioEvent(cancelled.id);
+    expectStatus(() => store.updateScenarioEvent(cancelled.id, { payload: { text: 'y' } }), 409);
+  });
+
+  test('a scenario event can link to an existing situation, or reject an unknown one', () => {
+    const situation = store.createSituation({ title: 'Ambush at the bridge' });
+    const event = store.createScenarioEvent({
+      trigger_at: new Date(Date.now() + 3_600_000).toISOString(),
+      kind: 'message',
+      payload: { text: 'x' },
+      situation_id: situation.id,
+    });
+    expect(event.situation_id).toBe(situation.id);
+    expectStatus(
+      () =>
+        store.createScenarioEvent({
+          trigger_at: new Date(Date.now() + 3_600_000).toISOString(),
+          kind: 'message',
+          payload: { text: 'x' },
+          situation_id: 999999,
+        }),
+      404,
+    );
+  });
+});
+
+describe('instructor authoring: story + situations (private, White-only ground truth)', () => {
+  test('the story starts blank; reading it twice does not create two rows; patch changes only given fields', () => {
+    const first = store.readStory();
+    expect(first).toEqual({ title: '', briefing: '', objectives: '', instructor_notes: '' });
+    expect(store.readStory()).toEqual(first);
+
+    const patched = store.patchStory({
+      title: 'Operation Falcon',
+      briefing: 'Blue-facing background and mission.',
+      objectives: 'Secret objective only White should ever see.',
+    });
+    expect(patched).toEqual({
+      title: 'Operation Falcon',
+      briefing: 'Blue-facing background and mission.',
+      objectives: 'Secret objective only White should ever see.',
+      instructor_notes: '',
+    });
+
+    const again = store.patchStory({
+      instructor_notes: 'Future development: reinforcements arrive.',
+    });
+    expect(again).toMatchObject({
+      title: 'Operation Falcon',
+      instructor_notes: 'Future development: reinforcements arrive.',
+    });
+  });
+
+  test('creating situations appends them in sort order; the aggregate view assembles story, situations, and events together', () => {
+    const s1 = store.createSituation({ title: 'Beat one', ground_truth: 'Truth one' });
+    const s2 = store.createSituation({ title: 'Beat two', ground_truth: 'Truth two' });
+    expect(s1.sort_order).toBe(0);
+    expect(s2.sort_order).toBe(1);
+    expect(store.listSituations().map((s) => s.title)).toEqual(['Beat one', 'Beat two']);
+
+    store.patchStory({ title: 'Operation Falcon' });
+    store.createScenarioEvent({
+      trigger_at: new Date(Date.now() + 3_600_000).toISOString(),
+      kind: 'message',
+      payload: { text: 'inject tied to a beat' },
+      situation_id: s1.id,
+    });
+
+    const aggregate = store.getInstructorData();
+    expect(aggregate.story.title).toBe('Operation Falcon');
+    expect(aggregate.situations.map((s) => s.title)).toEqual(['Beat one', 'Beat two']);
+    expect(aggregate.events).toHaveLength(1);
+    expect(aggregate.events[0].situation_id).toBe(s1.id);
+  });
+
+  test('setting a situation active deactivates whichever one was active before (only one active at a time)', () => {
+    const s1 = store.createSituation({ title: 'Beat one', status: 'active' });
+    const s2 = store.createSituation({ title: 'Beat two' });
+    expect(store.listSituations().find((s) => s.id === s1.id).status).toBe('active');
+
+    const updated = store.updateSituation(s2.id, { status: 'active' });
+    expect(updated.status).toBe('active');
+    const after = store.listSituations();
+    expect(after.find((s) => s.id === s1.id).status).toBe('complete');
+    expect(after.find((s) => s.id === s2.id).status).toBe('active');
+  });
+
+  test('deleting a situation with no attached events succeeds; one with attached events (any state) is rejected', () => {
+    const lone = store.createSituation({ title: 'Unused beat' });
+    store.deleteSituation(lone.id);
+    expect(store.listSituations()).toHaveLength(0);
+
+    const used = store.createSituation({ title: 'Used beat' });
+    const event = store.createScenarioEvent({
+      trigger_at: new Date(Date.now() + 3_600_000).toISOString(),
+      kind: 'message',
+      payload: { text: 'x' },
+      situation_id: used.id,
+    });
+    expectStatus(() => store.deleteSituation(used.id), 409);
+
+    // Firing the event doesn't free the situation up either — a fired
+    // event is a historical record still naming its situation.
+    store.fireScenarioEvent(event.id, WHITE_ACCESS);
+    expectStatus(() => store.deleteSituation(used.id), 409);
+  });
+
+  test('unknown story field values and situation ids 404/400 as usual', () => {
+    expectStatus(() => store.createSituation({ title: '' }), 400);
+    expectStatus(() => store.createSituation({ title: 'x', status: 'urgent' }), 400);
+    expectStatus(() => store.updateSituation(999999, { title: 'y' }), 404);
+    expectStatus(() => store.deleteSituation(999999), 404);
+  });
 });
 
 describe('IPB event-matrix import', () => {

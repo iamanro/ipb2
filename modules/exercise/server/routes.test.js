@@ -12,9 +12,15 @@ let routes;
 let dispatcher;
 
 const GM = { name: 'gm', admin: true, cell: 'white', role: 'game-master' };
+const WHITE_GM = { name: 'wgm', admin: false, cell: 'white', role: 'game-master' };
 const WHITE_OBSERVER = { name: 'wo', admin: false, cell: 'white', role: 'observer' };
 const BLUE_ANALYST = { name: 'ba', admin: false, cell: 'blue', role: 'analyst' };
 const BLUE_OBSERVER = { name: 'bo', admin: false, cell: 'blue', role: 'observer' };
+// The role level alone ("game-master") doesn't imply White — a training
+// audience cell can have its own game-master role for its own purposes.
+// Every White-only route must reject this actor even though `role:
+// 'game-master'` alone would let it through.
+const BLUE_GM = { name: 'bgm', admin: false, cell: 'blue', role: 'game-master' };
 
 const call = (actor, method, route, body) =>
   dispatcher.runAs(actor, 'exercise', method, route, body);
@@ -47,8 +53,27 @@ afterEach(() => {
   routes.close();
 });
 
+describe('instructor clock control', () => {
+  test('a Blue game-master can read but cannot advance the clock to reveal future injects', async () => {
+    const frozen = await call(WHITE_GM, 'PATCH', 'clock', {
+      paused: true,
+      jump_to: '2026-09-27T12:00:00Z',
+      rate: 1,
+    });
+    await expect(
+      call(BLUE_GM, 'PATCH', 'clock', {
+        jump_to: '2026-09-28T12:00:00Z',
+        paused: false,
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    const seen = await call(BLUE_GM, 'GET', 'clock');
+    expect(seen.now).toBe(frozen.now);
+    expect(seen.paused).toBe(true);
+  });
+});
+
 describe('scenario-events: game-master only, even for a plain GET', () => {
-  test('an analyst is refused; a game-master (any cell) reads the schedule', async () => {
+  test('an analyst is refused; a White game-master reads the schedule', async () => {
     await expect(call(BLUE_ANALYST, 'GET', 'scenario-events')).rejects.toMatchObject({
       status: 403,
     });
@@ -59,6 +84,123 @@ describe('scenario-events: game-master only, even for a plain GET', () => {
     });
     const list = await call(GM, 'GET', 'scenario-events');
     expect(list.map((e) => e.id)).toContain(event.id);
+  });
+
+  test('a Blue-cell game-master is refused every scenario-events route, even though the role level alone would pass', async () => {
+    await expect(call(BLUE_GM, 'GET', 'scenario-events')).rejects.toMatchObject({ status: 403 });
+    await expect(
+      call(BLUE_GM, 'POST', 'scenario-events', {
+        trigger_at: new Date(Date.now() + 3_600_000).toISOString(),
+        kind: 'message',
+        payload: { text: 'x' },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    const event = await call(GM, 'POST', 'scenario-events', {
+      trigger_at: new Date(Date.now() + 3_600_000).toISOString(),
+      kind: 'message',
+      payload: { text: 'x' },
+    });
+    await expect(
+      call(BLUE_GM, 'PATCH', `scenario-events/${event.id}`, { payload: { text: 'y' } }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(call(BLUE_GM, 'POST', `scenario-events/${event.id}/cancel`)).rejects.toMatchObject(
+      { status: 403 },
+    );
+    await expect(call(BLUE_GM, 'POST', `scenario-events/${event.id}/fire`)).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
+  test('editing a pending event through the route works; a fired event 409s instead', async () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const event = await call(GM, 'POST', 'scenario-events', {
+      trigger_at: past,
+      kind: 'message',
+      payload: { text: 'v1' },
+      delivery_mode: 'draft',
+    });
+    const edited = await call(GM, 'PATCH', `scenario-events/${event.id}`, {
+      delivery_mode: 'scheduled',
+    });
+    expect(edited.delivery_mode).toBe('scheduled');
+    await call(GM, 'POST', `scenario-events/${event.id}/fire`);
+    await expect(
+      call(GM, 'PATCH', `scenario-events/${event.id}`, { payload: { text: 'v2' } }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('instructor: story + situations, White-only including Blue game-master', () => {
+  test('GET /instructor is White-only; a White observer may read, a Blue game-master (any role level) may not', async () => {
+    const seen = await call(WHITE_OBSERVER, 'GET', 'instructor');
+    expect(seen).toMatchObject({ situations: [] });
+    expect(Array.isArray(seen.events)).toBe(true);
+    await expect(call(BLUE_GM, 'GET', 'instructor')).rejects.toMatchObject({ status: 403 });
+    await expect(call(BLUE_ANALYST, 'GET', 'instructor')).rejects.toMatchObject({ status: 403 });
+  });
+
+  test('editing the story and situations needs a White game-master; a White observer or Blue game-master is refused', async () => {
+    await expect(
+      call(WHITE_OBSERVER, 'PATCH', 'instructor/story', { title: 'x' }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(call(BLUE_GM, 'PATCH', 'instructor/story', { title: 'x' })).rejects.toMatchObject({
+      status: 403,
+    });
+
+    const patched = await call(WHITE_GM, 'PATCH', 'instructor/story', {
+      title: 'Operation Falcon',
+      objectives: 'Private objective',
+    });
+    expect(patched).toMatchObject({ title: 'Operation Falcon', objectives: 'Private objective' });
+
+    await expect(
+      call(BLUE_GM, 'POST', 'instructor/situations', { title: 'x' }),
+    ).rejects.toMatchObject({ status: 403 });
+    const situation = await call(WHITE_GM, 'POST', 'instructor/situations', {
+      title: 'Ambush at the bridge',
+      ground_truth: 'The convoy is a decoy.',
+    });
+    expect(situation).toMatchObject({ title: 'Ambush at the bridge', status: 'planned' });
+
+    await expect(
+      call(BLUE_GM, 'PATCH', `instructor/situations/${situation.id}`, { status: 'active' }),
+    ).rejects.toMatchObject({ status: 403 });
+    const activated = await call(WHITE_GM, 'PATCH', `instructor/situations/${situation.id}`, {
+      status: 'active',
+    });
+    expect(activated.status).toBe('active');
+
+    await expect(
+      call(BLUE_GM, 'DELETE', `instructor/situations/${situation.id}`),
+    ).rejects.toMatchObject({ status: 403 });
+
+    const aggregate = await call(WHITE_GM, 'GET', 'instructor');
+    expect(aggregate.situations).toEqual([activated]);
+    expect(aggregate.story.title).toBe('Operation Falcon');
+  });
+});
+
+describe('instructor activity privacy', () => {
+  test('Blue cannot infer private situation titles or story changes through activity', async () => {
+    await call(WHITE_GM, 'PATCH', 'instructor/story', { instructor_notes: 'Private assessment' });
+    const situation = await call(WHITE_GM, 'POST', 'instructor/situations', {
+      title: 'Secret second-echelon attack',
+    });
+    await call(WHITE_GM, 'PATCH', `instructor/situations/${situation.id}`, { status: 'active' });
+    await call(WHITE_GM, 'DELETE', `instructor/situations/${situation.id}`);
+    const privateAction = (entry) =>
+      entry.action.startsWith('instructor:') || entry.action.startsWith('situation:');
+    const white = await call(WHITE_GM, 'GET', 'activity');
+    expect(white.filter(privateAction).map((entry) => entry.action)).toEqual(
+      expect.arrayContaining([
+        'instructor:story',
+        'situation:create',
+        'situation:update',
+        'situation:delete',
+      ]),
+    );
+    const blue = await call(BLUE_GM, 'GET', 'activity');
+    expect(blue.filter(privateAction)).toEqual([]);
   });
 });
 

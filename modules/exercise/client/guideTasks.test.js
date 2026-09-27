@@ -6,8 +6,6 @@ const empty = () => ({
   requirements: [],
   reports: [],
   rfis: [],
-  scenarioEvents: [],
-  clock: { paused: true },
   tracks: [],
   intsums: [],
   collectors: [],
@@ -46,18 +44,10 @@ describe('taskStatuses', () => {
   test('exercise control: RFIs are done while none waits; following the activity never ends', () => {
     const progress = empty();
     progress.activeScenario = { id: 1 };
-    progress.clock = { paused: false };
-    progress.scenarioEvents.push({});
     progress.rfis.push({ state: 'answered' });
     let statuses = taskStatuses('excon', progress);
-    expect(statuses).toEqual({
-      geography: 'done',
-      clock: 'done',
-      injects: 'done',
-      'answer-rfis': 'done',
-      activity: 'ongoing',
-    });
-    expect(firstOpenTask('excon', statuses)).toBe('activity');
+    expect(statuses['answer-rfis']).toBe('done');
+    expect(statuses.activity).toBe('ongoing');
     const pending = { state: 'submitted' };
     progress.rfis.push(pending);
     for (const state of ['submitted', 'assigned', 'in_collection', 'reopened']) {

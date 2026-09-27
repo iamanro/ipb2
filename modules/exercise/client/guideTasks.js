@@ -19,17 +19,17 @@ const TASKS = {
     why: 'Pick or build the exercise scenario: its countries and renamed places, used by the maps and reports.',
     done: (p) => Boolean(p.activeScenario),
   },
-  clock: {
-    title: 'Scenario clock',
-    tab: 'scenario',
-    why: 'Set the scenario time and rate, then start the clock. Injects fire on scenario time.',
-    done: (p) => Boolean(p.clock && !p.clock.paused),
+  instructor: {
+    title: 'Story & situations',
+    tab: 'instructor',
+    why: 'Prepare the private story, build situations, and decide when Blue receives each report or message.',
+    ongoing: true,
   },
-  injects: {
-    title: 'Injects',
+  briefing: {
+    title: 'Read your briefing',
     tab: 'scenario',
-    why: 'Prepare the reports and messages that fire at scenario times, released to the chosen cells.',
-    done: (p) => p.scenarioEvents.length > 0,
+    why: 'Your mission and updates released by the instructors. Only delivered messages appear here.',
+    ongoing: true,
   },
   'answer-rfis': {
     title: 'Answer RFIs',
@@ -122,15 +122,16 @@ const TASKS = {
 export const GUIDE_LISTS = {
   excon: {
     label: 'Exercise control',
-    tasks: ['geography', 'clock', 'injects', 'answer-rfis', 'activity'],
+    tasks: ['instructor', 'geography', 'answer-rfis', 'activity'],
   },
   analyst: {
     label: 'Analyst',
-    tasks: ['requirements', 'reports', 'evidence', 'situation', 'rfi', 'intsum'],
+    tasks: ['briefing', 'requirements', 'reports', 'evidence', 'situation', 'rfi', 'intsum'],
   },
   collection: {
     label: 'Collection manager',
     tasks: [
+      'briefing',
       'requirements',
       'collectors',
       'taskings',
@@ -143,7 +144,7 @@ export const GUIDE_LISTS = {
   },
   observer: {
     label: 'Observer',
-    tasks: ['watch-situation', 'read-products'],
+    tasks: ['briefing', 'watch-situation', 'read-products'],
   },
 };
 

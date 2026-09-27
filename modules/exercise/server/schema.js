@@ -414,4 +414,49 @@ export const MIGRATIONS = [
   UPDATE indicators SET requirement_id = (SELECT s.requirement_id FROM sirs s WHERE s.id = indicators.sir_id);
   CREATE INDEX indicators_requirement ON indicators(requirement_id);
   `,
+  // Instructor authoring (White-only, never releasable): `story` is the
+  // single-row exercise narrative — `briefing` is Blue-facing background
+  // and mission, `objectives`/`instructor_notes` are ground truth the
+  // training audience must never see, same singleton-row pattern as
+  // `scenario_clock`. `situations` are instructor-authored beats within
+  // that story; `status` tracks which one is currently live, with a
+  // partial unique index enforcing at most one 'active' row at a time
+  // (same pattern as `scenarios(active)`). Neither table gets
+  // `owner_cell`/`releasable_to` — they are never cell-owned items, only
+  // ever reached through the White-only `instructor` routes, so there is
+  // nothing for `canSee`/`visibilitySql` to check.
+  //
+  // `scenario_events` gains `situation_id` (which authored situation this
+  // inject belongs to, nullable — an instructor can still fire an ad hoc
+  // inject with no situation) and `delivery_mode`: 'draft' events are
+  // never picked up by the scheduled tick (store.js `dueScenarioEventIds`)
+  // regardless of `trigger_at`, only ever sent by an explicit fire; existing
+  // rows default to 'scheduled', preserving today's behavior exactly.
+  `
+  CREATE TABLE story (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    title TEXT NOT NULL DEFAULT '',
+    briefing TEXT NOT NULL DEFAULT '',
+    objectives TEXT NOT NULL DEFAULT '',
+    instructor_notes TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE situations (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    ground_truth TEXT NOT NULL DEFAULT '',
+    expected_response TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'active', 'complete')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX situations_active ON situations(status) WHERE status = 'active';
+  CREATE INDEX situations_sort ON situations(sort_order, id);
+
+  ALTER TABLE scenario_events ADD COLUMN situation_id INTEGER REFERENCES situations(id) ON DELETE SET NULL;
+  ALTER TABLE scenario_events ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'scheduled' CHECK (delivery_mode IN ('draft', 'scheduled'));
+  CREATE INDEX scenario_events_situation ON scenario_events(situation_id);
+  `,
 ];

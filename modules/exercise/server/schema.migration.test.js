@@ -86,9 +86,10 @@ describe.skipIf(!existsSync(REAL_DB))(
 
 describe('evidence_links rebuild: orphan handling, re-parenting, and the dropped report_id cascade', () => {
   function seedPreMigrationDatabase(file) {
-    // Every migration except the two new ones (evidence_links rebuild +
-    // indicators.requirement_id), so this seeds pre-migration shape.
-    const database = openState(file, MIGRATIONS.slice(0, MIGRATIONS.length - 2));
+    // Every migration except the last three (evidence_links rebuild,
+    // indicators.requirement_id, and the instructor authoring migration),
+    // so this seeds pre-migration shape.
+    const database = openState(file, MIGRATIONS.slice(0, MIGRATIONS.length - 3));
     const now = new Date().toISOString();
     database.exec(`
       INSERT INTO requirements (id, kind, text, priority, owner_cell, releasable_to, created_at, updated_at)

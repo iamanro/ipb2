@@ -16,13 +16,8 @@ import {
 import { createCollectionController } from './collection.js';
 import { appendOwnerReassign } from './ownerReassign.js';
 import { createProductsController } from './products.js';
-import {
-  appendCredibilityOptions,
-  appendReliabilityOptions,
-  createReportFieldset,
-  createReportsController,
-  formatReportLocationMgrs,
-} from './reportForm.js';
+import { createReportsController } from './reportForm.js';
+import { createInstructorController } from './instructor.js';
 import { renderExerciseGuide } from './guide.js';
 import {
   GUIDE_LISTS,
@@ -40,6 +35,7 @@ const API = '/api/exercise';
 const IPB_API = '/api/ipb';
 const TERRAIN_API = '/api/terrain';
 const TABS = [
+  'instructor',
   'requirements',
   'geography',
   'reports',
@@ -90,11 +86,7 @@ let collectionController;
 let productsController;
 let reportsController;
 let situationController;
-/** The Scenario tab's 'report'-kind inject form fieldset (reportForm.js's
- * createReportFieldset): owns a locationField + its map-pick dialog, so it must be
- * destroyed before the next one is built — renderScenarioPanel runs on every
- * loadAll()+renderPanel() cycle, not just on entering the tab. */
-let injectReportFieldset;
+let instructorController;
 
 /** True when the user may create a cell-owned item at all: off mode's
  * fixed operator and White always can; a member of any cell can; an admin
@@ -119,7 +111,6 @@ function createState() {
     rfis: [],
     messages: [],
     clock: null,
-    scenarioEvents: [],
     activity: [],
     importSummary: null,
     guide: { list: 'analyst', open: null, progress: null, refresh: null },
@@ -266,7 +257,8 @@ function askConfirm(message, accept = 'Delete') {
 function readLocation() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get('tab');
-  state.tab = TABS.includes(tab) ? tab : 'requirements';
+  const allowed = TABS.includes(tab) && (tab !== 'instructor' || isWhite());
+  state.tab = allowed ? tab : isWhite() ? 'instructor' : 'requirements';
 }
 
 function writeLocation() {
@@ -278,26 +270,19 @@ function writeLocation() {
 // --- Loading -----------------------------------------------------------------
 
 async function loadAll() {
-  // Scenario events carry inject text — the server itself needs game-master
-  // to read them (server/access.js), so a training-audience role never even
-  // asks; the Scenario tab shows only the clock to them (renderScenarioPanel).
-  const canSeeInjects = can('game-master');
-  const [requirements, reports, rfis, messages, clock, scenarioEvents, activity] =
-    await Promise.all([
-      requestJson(`${API}/requirements`),
-      requestJson(`${API}/reports`),
-      requestJson(`${API}/rfis`),
-      requestJson(`${API}/messages`),
-      requestJson(`${API}/clock`),
-      canSeeInjects ? requestJson(`${API}/scenario-events`) : Promise.resolve([]),
-      requestJson(`${API}/activity`),
-    ]);
+  const [requirements, reports, rfis, messages, clock, activity] = await Promise.all([
+    requestJson(`${API}/requirements`),
+    requestJson(`${API}/reports`),
+    requestJson(`${API}/rfis`),
+    requestJson(`${API}/messages`),
+    requestJson(`${API}/clock`),
+    requestJson(`${API}/activity`),
+  ]);
   state.requirements = requirements;
   state.reports = reports;
   state.rfis = rfis;
   state.messages = messages;
   state.clock = clock;
-  state.scenarioEvents = scenarioEvents;
   state.activity = activity;
 }
 
@@ -306,6 +291,7 @@ async function loadAll() {
 function renderTabNav() {
   elements.tabNav.querySelectorAll('.tab-button').forEach((button) => {
     button.classList.toggle('active', button.dataset.tab === state.tab);
+    if (button.dataset.tab === 'instructor') button.hidden = !isWhite();
   });
 }
 
@@ -357,8 +343,6 @@ async function loadGuideProgress() {
     requirements: state.requirements,
     reports: state.reports,
     rfis: state.rfis,
-    scenarioEvents: state.scenarioEvents,
-    clock: state.clock,
     tracks,
     intsums,
     collectors,
@@ -438,9 +422,11 @@ const CONTROLLER_TABS = {
   products: () => productsController,
   reports: () => reportsController,
   situation: () => situationController,
+  instructor: () => instructorController,
 };
 
 function switchTab(tab) {
+  if (tab === 'instructor' && !isWhite()) return;
   // The map controller lives across renders of the Geography tab (see
   // renderGeographyPanel); every other tab is a plain wipe-and-redraw, so it
   // only needs tearing down when actually leaving the tab that owns it.
@@ -2132,109 +2118,11 @@ function updateMastheadStatus() {
     : `Clock running ×${state.clock.rate}`;
 }
 
-async function patchClock(body, container) {
-  try {
-    await requestJson(`${API}/clock`, { method: 'PATCH', body });
-    await loadAll();
-    renderPanel();
-    updateMastheadStatus();
-  } catch (error) {
-    showError(container, error.message);
-  }
-}
-
-async function createScenarioEvent(refs, container) {
-  const kind = refs.kindSelect.value;
-  let triggerAt;
-  try {
-    triggerAt = readDtgValue(refs.triggerInput);
-  } catch (error) {
-    showError(container, error.message);
-    return;
-  }
-  if (!triggerAt) return;
-  let payload;
-  if (kind === 'message') {
-    const text = refs.textInput.value.trim();
-    if (!text) return;
-    payload = { text };
-  } else {
-    const values = refs.reportFieldset.getValue();
-    if (!values.text) {
-      showError(container, 'Narrative text is required.');
-      return;
-    }
-    payload = {
-      text: values.text,
-      report_type: values.report_type,
-      fields: values.fields,
-      sidc: values.sidc,
-      lon: values.lon,
-      lat: values.lat,
-      reliability: refs.reliabilitySelect.value,
-      credibility: Number.parseInt(refs.credibilitySelect.value, 10),
-    };
-  }
-  payload.release_to = refs.releaseTo;
-  try {
-    await requestJson(`${API}/scenario-events`, {
-      method: 'POST',
-      body: { trigger_at: triggerAt, kind, payload },
-    });
-    await loadAll();
-    renderPanel();
-  } catch (error) {
-    showError(container, error.message);
-  }
-}
-
-async function fireEventNow(id) {
-  await requestJson(`${API}/scenario-events/${id}/fire`, { method: 'POST' });
-  await loadAll();
-  renderPanel();
-}
-
-async function cancelEvent(id) {
-  await requestJson(`${API}/scenario-events/${id}/cancel`, { method: 'POST' });
-  await loadAll();
-  renderPanel();
-}
-
-function renderScenarioEventRow(event) {
-  const row = createElement('div', `scenario-event-row state-${event.state}`);
-  const mgrs = formatReportLocationMgrs(event.payload);
-  const targets = event.payload.release_to || [];
-  row.append(
-    createElement('span', `scenario-event-kind kind-${event.kind}`, event.kind),
-    createElement('span', null, formatDate(event.trigger_at)),
-    createElement('span', null, event.payload.text || ''),
-    createElement('span', 'panel-note', mgrs || ''),
-    createElement(
-      'span',
-      'panel-note',
-      `To: ${targets.length ? targets.map((cell) => cell[0].toUpperCase() + cell.slice(1)).join(', ') : '—'}`,
-    ),
-    createElement('span', `scenario-event-state`, event.state),
-  );
-  if (event.state === 'pending') {
-    const fireButton = createElement('button', 'icon-button', 'Fire now');
-    fireButton.type = 'button';
-    fireButton.addEventListener('click', () => fireEventNow(event.id));
-    const cancelButton = createElement('button', 'icon-button danger', 'Cancel');
-    cancelButton.type = 'button';
-    cancelButton.addEventListener('click', () => cancelEvent(event.id));
-    row.append(fireButton, cancelButton);
-  }
-  return row;
-}
-
 function renderScenarioPanel() {
   const container = elements.panel;
-  container.append(createElement('h2', null, 'Scenario clock & injects'));
-
-  const clockSection = createElement('section', 'field-group clock-panel');
+  container.append(createElement('h2', null, 'Briefing & scenario clock'));
   const clock = state.clock;
-  clockSection.append(
+  container.append(
     createElement('p', 'clock-now', `Scenario time: ${formatDate(clock.now)}`),
     createElement(
       'p',
@@ -2242,152 +2130,12 @@ function renderScenarioPanel() {
       `Rate ${clock.rate}× · ${clock.paused ? 'Paused' : 'Running'}`,
     ),
   );
-  const controls = createElement('div', 'inline-form');
-  const toggleButton = createElement('button', 'primary-button', clock.paused ? 'Resume' : 'Pause');
-  toggleButton.type = 'button';
-  toggleButton.addEventListener('click', () => patchClock({ paused: !clock.paused }, clockSection));
-  const rateInput = document.createElement('input');
-  rateInput.type = 'number';
-  rateInput.min = '0.1';
-  rateInput.step = '0.1';
-  rateInput.value = String(clock.rate);
-  const rateButton = createElement('button', 'chip-button', 'Set rate');
-  rateButton.type = 'button';
-  rateButton.addEventListener('click', () =>
-    patchClock({ rate: Number.parseFloat(rateInput.value) }, clockSection),
-  );
-  const jumpInput = createDtgInput({ name: 'jump_to', label: 'Jump to', reference: scenarioNow });
-  const jumpButton = createElement('button', 'chip-button', 'Jump to');
-  jumpButton.type = 'button';
-  jumpButton.addEventListener('click', () => {
-    try {
-      const jumpTo = readDtgValue(jumpInput);
-      if (jumpTo) patchClock({ jump_to: jumpTo }, clockSection);
-    } catch (error) {
-      showError(clockSection, error.message);
-    }
-  });
-  const tickButton = createElement('button', 'chip-button', 'Fire due events now');
-  tickButton.type = 'button';
-  tickButton.addEventListener('click', async () => {
-    // No bulk tick route (docs/adr/0002-item-scoped-requests.md): each due
-    // event is announced only to its own inject's cells, so it's fired one
-    // request at a time — exactly what the server's own 5-second ticker
-    // does internally, just triggered now instead of waited for.
-    const nowMs = scenarioNow();
-    const due = state.scenarioEvents.filter(
-      (event) => event.state === 'pending' && new Date(event.trigger_at).getTime() <= nowMs,
-    );
-    for (const event of due) {
-      await requestJson(`${API}/scenario-events/${event.id}/fire`, { method: 'POST' });
-    }
-    await loadAll();
-    renderPanel();
-  });
-  controls.append(toggleButton, rateInput, rateButton, jumpInput, jumpButton, tickButton);
-  // Running the scenario clock is exercise control, the game-master's job.
-  if (can('game-master')) clockSection.append(controls);
-  container.append(clockSection);
-
-  injectReportFieldset?.destroy();
-  injectReportFieldset = null;
-  const formSection = createElement('section', 'field-group');
-  formSection.append(createElement('h3', null, 'Schedule an inject'));
-  if (!can('game-master')) {
-    formSection.append(
-      createElement('p', 'panel-note', 'Game Master role required to schedule injects.'),
-    );
-    container.append(formSection);
-  } else {
-    const form = createElement('div', 'requirement-form inject-form');
-    const kindSelect = document.createElement('select');
-    kindSelect.setAttribute('aria-label', 'Inject kind');
-    kindSelect.append(new Option('Message', 'message'), new Option('Report', 'report'));
-    const triggerInput = createDtgInput({
-      name: 'trigger_at',
-      label: 'Trigger time',
-      reference: scenarioNow,
-    });
-    const textInput = document.createElement('input');
-    textInput.type = 'text';
-    textInput.placeholder = 'Inject text…';
-    textInput.setAttribute('aria-label', 'Inject text');
-    // 'report'-kind injects reuse the Reports tab's type/fields/location/sidc
-    // fieldset, so the Game Master can pre-script a located SALUTE/SPOTREP.
-    injectReportFieldset = createReportFieldset({ ariaLabel: 'Inject location' });
-    injectReportFieldset.element.hidden = true;
-    const reliabilitySelect = document.createElement('select');
-    reliabilitySelect.setAttribute('aria-label', 'Reliability');
-    reliabilitySelect.hidden = true;
-    appendReliabilityOptions(reliabilitySelect);
-    const credibilitySelect = document.createElement('select');
-    credibilitySelect.setAttribute('aria-label', 'Credibility');
-    credibilitySelect.hidden = true;
-    appendCredibilityOptions(credibilitySelect);
-    kindSelect.addEventListener('change', () => {
-      const isReport = kindSelect.value === 'report';
-      textInput.hidden = isReport;
-      injectReportFieldset.element.hidden = !isReport;
-      reliabilitySelect.hidden = !isReport;
-      credibilitySelect.hidden = !isReport;
-    });
-    // Who the fired inject reaches (C3): Blue by default, the usual
-    // training audience; White is never offered — a White-released inject
-    // to White is a no-op the owner already sees.
-    const releaseFieldset = document.createElement('fieldset');
-    releaseFieldset.className = 'inject-release';
-    releaseFieldset.append(createElement('legend', null, 'Release to'));
-    const releaseChecks = { blue: null, red: null };
-    ['blue', 'red'].forEach((cell) => {
-      const label = document.createElement('label');
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.value = cell;
-      checkbox.checked = cell === 'blue';
-      releaseChecks[cell] = checkbox;
-      label.append(checkbox, ` ${cell[0].toUpperCase()}${cell.slice(1)}`);
-      releaseFieldset.append(label);
-    });
-    const addButton = createElement('button', 'primary-button', 'Schedule');
-    addButton.type = 'button';
-    addButton.addEventListener('click', () =>
-      createScenarioEvent(
-        {
-          kindSelect,
-          triggerInput,
-          textInput,
-          reportFieldset: injectReportFieldset,
-          reliabilitySelect,
-          credibilitySelect,
-          releaseTo: Object.entries(releaseChecks)
-            .filter(([, checkbox]) => checkbox.checked)
-            .map(([cell]) => cell),
-        },
-        formSection,
-      ),
-    );
-    form.append(
-      kindSelect,
-      triggerInput,
-      textInput,
-      injectReportFieldset.element,
-      reliabilitySelect,
-      credibilitySelect,
-      releaseFieldset,
-      addButton,
-    );
-    formSection.append(form);
-    container.append(formSection);
+  if (isWhite()) {
+    const desk = createElement('button', 'chip-button', 'Open Instructor desk');
+    desk.type = 'button';
+    desk.addEventListener('click', () => switchTab('instructor'));
+    container.append(desk);
   }
-
-  if (!state.scenarioEvents.length) {
-    container.append(createElement('p', 'panel-note', 'No injects scheduled.'));
-  } else {
-    const list = createElement('div', 'scenario-event-list');
-    state.scenarioEvents.forEach((event) => list.append(renderScenarioEventRow(event)));
-    container.append(list);
-  }
-
   renderMessagesSection(container);
 }
 
@@ -2580,6 +2328,7 @@ export function mount({ root, status }) {
   productsController = createProductsController(ctx);
   reportsController = createReportsController(ctx);
   situationController = createSituationController(ctx);
+  instructorController = createInstructorController(ctx);
 
   const statusLight = createElement('span', 'status-light');
   const statusText = createElement('span', null, 'Exercise workbench');
@@ -2598,7 +2347,7 @@ export function mount({ root, status }) {
   readLocation();
   renderTabNav();
   const { chosen } = guideLists();
-  state.guide.list = chosen;
+  state.guide.list = state.tab === 'instructor' ? 'excon' : chosen;
   renderGuide();
 
   loadAll()
@@ -2606,7 +2355,11 @@ export function mount({ root, status }) {
       renderPanel();
       updateMastheadStatus();
       refreshGuide().then(() => {
-        if (!session.signal.aborted && !new URLSearchParams(window.location.search).has('tab')) {
+        if (
+          !session.signal.aborted &&
+          !isWhite() &&
+          !new URLSearchParams(window.location.search).has('tab')
+        ) {
           const task = listTasks(state.guide.list).find((entry) => entry.id === state.guide.open);
           if (task && task.tab !== state.tab) switchTab(task.tab);
         }
@@ -2659,7 +2412,7 @@ export function mount({ root, status }) {
     productsController.leave();
     reportsController.leave();
     situationController.leave();
-    injectReportFieldset?.destroy();
+    instructorController.leave();
     session.abort();
     root.replaceChildren();
   };

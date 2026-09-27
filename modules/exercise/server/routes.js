@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { announce, EXERCISE_CONTROL } from '../../../server/dispatch.js';
+import { HttpError } from '../../../server/http.js';
 import { dataDirectory } from '../../../server/state.js';
 import state from './state.js';
 import { openStore } from './store.js';
@@ -527,32 +528,55 @@ export default {
       verb: 'none',
       role: 'game-master',
       reach: 'everyone',
-      handler: ({ body }) => ensureStore().patchClock(body),
+      handler: ({ body, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may control the scenario clock.');
+        return ensureStore().patchClock(body);
+      },
     },
 
     // Gated at game-master even for a plain GET (unlike every other
     // exercise read): inject text the training audience must not see ahead
-    // of time, or cancelled, at all.
+    // of time, or cancelled, at all. `role: 'game-master'` alone only
+    // checks the requester's role level, not their cell — a Blue-cell
+    // game-master would otherwise pass it, so every one of these also
+    // checks `access.white` explicitly.
     {
       method: 'GET',
       path: 'scenario-events',
       verb: 'none',
       role: 'game-master',
-      handler: () => ensureStore().listScenarioEvents(),
+      handler: ({ access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may see scenario events.');
+        return ensureStore().listScenarioEvents();
+      },
     },
     {
       method: 'POST',
       path: 'scenario-events',
       verb: 'none',
       role: 'game-master',
-      handler: ({ body }) => ensureStore().createScenarioEvent(body),
+      handler: ({ body, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may schedule scenario events.');
+        return ensureStore().createScenarioEvent(body);
+      },
+    },
+    {
+      method: 'PATCH',
+      path: 'scenario-events/:id',
+      verb: 'none',
+      role: 'game-master',
+      handler: ({ params, body, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may edit scenario events.');
+        return ensureStore().updateScenarioEvent(parseId(params.id), body);
+      },
     },
     {
       method: 'POST',
       path: 'scenario-events/:id/cancel',
       verb: 'none',
       role: 'game-master',
-      handler: ({ params }) => {
+      handler: ({ params, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may cancel scenario events.');
         ensureStore().cancelScenarioEvent(parseId(params.id));
         return { cancelled: true };
       },
@@ -564,8 +588,69 @@ export default {
       role: 'game-master',
       reach: 'handler',
       handler: ({ params, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may fire scenario events.');
         const { event, cells } = ensureStore().fireScenarioEvent(parseId(params.id), access);
         return announce(event, cells);
+      },
+    },
+
+    // -- instructor authoring: story + situations (White-only) ------------------
+    //
+    // GET is reachable at `observer` (a White observer may read, per the
+    // shared contract) but still requires `access.white` — the role check
+    // alone doesn't imply the cell. Every mutation requires `game-master`
+    // (or admin/off-mode, which `isWhite`/`roleAtLeast` already grant) and
+    // the same explicit `access.white` guard, so a Blue-cell game-master
+    // never reaches instructor content either.
+    {
+      method: 'GET',
+      path: 'instructor',
+      verb: 'none',
+      role: 'observer',
+      handler: ({ access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may see instructor content.');
+        return ensureStore().getInstructorData();
+      },
+    },
+    {
+      method: 'PATCH',
+      path: 'instructor/story',
+      verb: 'none',
+      role: 'game-master',
+      handler: ({ body, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may edit the story.');
+        return ensureStore().patchStory(body ?? {});
+      },
+    },
+    {
+      method: 'POST',
+      path: 'instructor/situations',
+      verb: 'none',
+      role: 'game-master',
+      handler: ({ body, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may create situations.');
+        return ensureStore().createSituation(body ?? {});
+      },
+    },
+    {
+      method: 'PATCH',
+      path: 'instructor/situations/:id',
+      verb: 'none',
+      role: 'game-master',
+      handler: ({ params, body, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may edit situations.');
+        return ensureStore().updateSituation(parseId(params.id), body ?? {});
+      },
+    },
+    {
+      method: 'DELETE',
+      path: 'instructor/situations/:id',
+      verb: 'none',
+      role: 'game-master',
+      handler: ({ params, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may delete situations.');
+        ensureStore().deleteSituation(parseId(params.id));
+        return { deleted: true };
       },
     },
 
