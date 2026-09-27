@@ -188,3 +188,16 @@ test('holding the right button while drawing traces an area, simplified, with no
   expect(corners).toBeGreaterThanOrEqual(8);
   expect(corners).toBeLessThan(80);
 });
+
+test('coming back to IPB from another module reopens the study and step', async ({
+  page,
+  request,
+}) => {
+  const study = await openStudy(page, request);
+  await page.getByRole('button', { name: /3\s*Threat/ }).click();
+  await page.getByRole('link', { name: 'Exercise' }).click();
+  await expect(page).toHaveURL(/\/exercise\//);
+  await page.getByRole('link', { name: 'IPB' }).click();
+  await expectStudyOpen(page, study);
+  await expect(page).toHaveURL(new RegExp(`study=${study.id}&step=3`));
+});

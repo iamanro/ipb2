@@ -607,7 +607,10 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
    including located SALUTE/SPOTREP reports, each with a **Release to** cell
    list (defaulting to Blue) that becomes the fired item's release list —
    see "Located injects" below.
-2. **IPB** (analyst), one study per AOI:
+2. **IPB** (analyst), normally one study per cell for the exercise:
+   - IPB reopens the study and step each user last had open (remembered per
+     browser and account); when a cell can see only one study it opens that
+     one, and otherwise the study menu opens to pick one.
    - Every study belongs to a cell (White/Blue/Red): it defaults to the
      creator's own cell (White may pick any cell when creating one), is
      visible only to that cell, White/admins, and any cell it's been

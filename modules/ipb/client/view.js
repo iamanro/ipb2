@@ -779,10 +779,42 @@ function jumpToCoordinate(lon, lat) {
 
 // --- URL state ---------------------------------------------------------------
 
+/**
+ * The study and step each signed-in user last had open, per browser: the
+ * module link in the masthead is a bare `/ipb/`, so without this every
+ * return to IPB started with no study open.
+ */
+const LAST_STUDY_KEY = 'ipb.lastStudy';
+
+function lastStudyOwner() {
+  return currentUser()?.name ?? 'local';
+}
+
+function loadLastStudy() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LAST_STUDY_KEY) ?? 'null');
+    return saved?.[lastStudyOwner()] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastStudy() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(LAST_STUDY_KEY) ?? 'null') ?? {};
+    saved[lastStudyOwner()] = state.studyId ? { study: state.studyId, step: state.step } : null;
+    window.localStorage.setItem(LAST_STUDY_KEY, JSON.stringify(saved));
+  } catch {
+    // Storage full or blocked: IPB just opens without a study next time.
+  }
+}
+
+/** The URL's study and step; with no study in it, the one last open. */
 function readLocation() {
   const params = new URLSearchParams(window.location.search);
-  state.studyId = params.get('study') || null;
-  const step = Number.parseInt(params.get('step'), 10);
+  const last = params.has('study') ? null : loadLastStudy();
+  state.studyId = params.get('study') || last?.study || null;
+  const step = Number.parseInt(params.get('step') ?? last?.step, 10);
   state.step = [1, 2, 3, 4].includes(step) ? step : 1;
   const hash = window.location.hash;
   state.selectedFeatureId = hash.startsWith('#feature=') ? hash.slice(9) : null;
@@ -793,6 +825,7 @@ function writeLocation() {
   if (state.studyId) params.set('study', state.studyId);
   params.set('step', String(state.step));
   const search = params.toString();
+  saveLastStudy();
   const hash = state.selectedFeatureId ? `#feature=${state.selectedFeatureId}` : '';
   window.history.replaceState(
     null,
@@ -5958,7 +5991,15 @@ export function mount({ root, status }) {
       ) {
         return selectStudy(initialStudyId, { preserveFeature: true });
       }
-      if (!state.studies.length) toggleStudyMenu(true);
+      // The only study this cell can see: open it rather than ask.
+      if (state.studies.length === 1) return selectStudy(state.studies[0].id);
+      if (state.studyId) {
+        // Remembered or linked, but gone or not visible to this cell.
+        state.studyId = null;
+        switchStep(1);
+      }
+      writeLocation();
+      toggleStudyMenu(true);
       return null;
     })
     .catch((error) => {
