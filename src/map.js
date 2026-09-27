@@ -20,6 +20,7 @@ import Draw from 'ol/interaction/Draw.js';
 import Modify from 'ol/interaction/Modify.js';
 import Feature from 'ol/Feature.js';
 import LineString from 'ol/geom/LineString.js';
+import Polygon from 'ol/geom/Polygon.js';
 import Point from 'ol/geom/Point.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import Style from 'ol/style/Style.js';
@@ -499,6 +500,20 @@ function buildArrowStyle(geometry, color) {
       rotateWithView: true,
     }),
   });
+}
+
+/** How far (screen px) a traced line may stray from the trace once simplified. */
+const TRACE_TOLERANCE_PX = 2;
+
+/**
+ * A traced line or area with only the vertices that matter at `tolerance`
+ * (map units): Douglas–Peucker on the line or the area's outline. OL's own
+ * Polygon simplify only quantizes, which keeps most points of a smooth trace.
+ */
+function simplifyTrace(geometry, tolerance) {
+  if (geometry.getType() !== 'Polygon') return geometry.simplify(tolerance);
+  const outline = new LineString(geometry.getCoordinates()[0]).simplify(tolerance).getCoordinates();
+  return outline.length >= 4 ? new Polygon([outline]) : geometry;
 }
 
 /** Map symbol sizes (milsymbol `size`, the frame's height in px), chosen per map. */
@@ -1493,6 +1508,12 @@ export function createMap(options) {
   {
     const viewport = map.getViewport();
     const handleMeasureContextMenu = (event) => {
+      // While drawing, the right button traces (startDraw): no menu.
+      if (drawInteraction) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       if (!measureController.isActive()) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -1711,16 +1732,29 @@ export function createMap(options) {
             stroke: new Stroke({ color: '#ffffff', width: 1.5 }),
           }),
         });
+    // Holding the right mouse button traces a line or area freehand; the
+    // left button still places one vertex per click. The two mix: trace
+    // part of an outline, then click the rest.
+    let traced = false;
     drawInteraction = new Draw({
       source: sketchSource,
       type: geometryType,
       style,
+      freehandCondition: (event) => {
+        const pointer = event.originalEvent;
+        const right =
+          pointer.pointerType === 'mouse' && ((pointer.buttons & 2) !== 0 || pointer.button === 2);
+        if (right && event.type === 'pointerdrag') traced = true;
+        return right;
+      },
     });
     drawInteraction.on('drawend', (event) => {
-      const geometry = geoJsonFormat.writeGeometryObject(
-        event.feature.getGeometry(),
-        GEOJSON_OPTIONS,
-      );
+      let drawn = event.feature.getGeometry();
+      // A trace samples every pointer move; keep only what shows at this
+      // zoom (vertices ~2 px apart or more), so a traced area stays a
+      // manageable list of corners.
+      if (traced) drawn = simplifyTrace(drawn, map.getView().getResolution() * TRACE_TOLERANCE_PX);
+      const geometry = geoJsonFormat.writeGeometryObject(drawn, GEOJSON_OPTIONS);
       map.removeInteraction(drawInteraction);
       drawInteraction = null;
       sketchSource.clear();

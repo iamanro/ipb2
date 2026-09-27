@@ -116,7 +116,7 @@ function armAreaDraw(key) {
   state.tool = { type: 'draw-area', area: key };
   mapController.startDraw('polygon', { layer: key });
   renderMapHint(
-    `Draw the ${name.toLowerCase()} (${short}): click each corner, double-click the last. Press Escape to cancel.`,
+    `Draw the ${name.toLowerCase()} (${short}): click each corner and double-click the last, or hold the right mouse button and trace it. Press Escape to cancel.`,
   );
 }
 

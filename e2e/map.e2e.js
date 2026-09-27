@@ -161,3 +161,30 @@ test('a point added by clicking the map keeps its name and multi-line note', asy
   await page.locator('.custom-layer-name', { hasText: 'Contacts' }).click();
   await expect(page.locator('.custom-point')).toContainText('Contact A');
 });
+
+test('holding the right button while drawing traces an area, simplified, with no context menu', async ({
+  page,
+  request,
+}) => {
+  const study = await openStudy(page, request);
+  await page.locator('.area-tool').first().getByRole('button', { name: 'Draw' }).click();
+  const box = await page.locator('.ol-viewport').boundingBox();
+  const cx = box.x + box.width * 0.45;
+  const cy = box.y + box.height * 0.5;
+  await page.mouse.move(cx + 150, cy);
+  await page.mouse.down({ button: 'right' });
+  for (let i = 1; i <= 400; i += 1) {
+    const angle = (i / 400) * 2 * Math.PI;
+    await page.mouse.move(cx + 150 * Math.cos(angle), cy + 100 * Math.sin(angle));
+  }
+  await page.mouse.up({ button: 'right' });
+  await expect(page.locator('.context-menu')).toHaveCount(0);
+  await expect
+    .poll(async () => (await (await request.get(`/api/ipb/studies/${study.id}`)).json()).study.ao)
+    .not.toBeNull();
+  const { study: saved } = await (await request.get(`/api/ipb/studies/${study.id}`)).json();
+  const corners = saved.ao.coordinates[0].length - 1;
+  // Every pointer move is sampled; only the corners that show at 2 px are kept.
+  expect(corners).toBeGreaterThanOrEqual(8);
+  expect(corners).toBeLessThan(80);
+});

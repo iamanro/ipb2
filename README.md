@@ -625,7 +625,8 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      (favourable/marginal/unfavourable per system and forecast block, against
      editable thresholds), the study's **classification marking** (printed top
      and bottom of every page), GeoJSON/KML import and export. Each area is
-     drawn on the map (click the corners, double-click the last), typed or
+     drawn on the map (click the corners, double-click the last; or hold
+     the right mouse button and trace it), typed or
      pasted with **Enter coordinates…** (one corner per line in MGRS, UTM,
      DMS or decimal degrees, latitude first), reshaped by dragging corners
      (**Reshape**, or right-click its outline), or cleared. The worksheet
@@ -634,6 +635,12 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      Saving the editor's text unchanged keeps every corner exactly where it
      was, whatever notation it is shown in. The study's bounds (map zoom,
      terrain analyses, `build_satellite.mjs --study`) cover both areas.
+   - **Tracing**: whenever a line or area is being drawn (AO/AOI, OAKOC
+     and COA features, NAIs/TAIs, tactical graphics), holding the right mouse
+     button traces it freehand; releasing finishes it, simplified to the
+     corners that show at the current zoom (Douglas–Peucker, 2 px). Clicks
+     and a trace mix: click a few corners, then trace the rest. The context
+     menu stays closed while drawing.
    - _Step 2_: OAKOC analyses (MCOO, viewshed, key terrain, avenues) and the
      **civil considerations** matrix (ASCOPE × PMESII-PT).
    - _Step 3_: threats with APP-6 symbols (the symbol picker, or **Import from

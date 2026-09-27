@@ -2536,8 +2536,10 @@ function armFeatureDraw(layer, kind) {
   const coaId = layer === 'coa' ? state.selectedCoaId : undefined;
   state.tool = { type: 'draw-feature', layer, kind, coaId };
   mapController.startDraw(kind, { layer });
+  const trace =
+    kind === 'point' ? '' : ' Click each point, or hold the right mouse button and trace.';
   renderMapHint(
-    `Draw a ${KIND_LABELS[kind].toLowerCase()} ${FEATURE_LAYERS[layer].label.toLowerCase()}. Press Escape to cancel.`,
+    `Draw a ${KIND_LABELS[kind].toLowerCase()} ${FEATURE_LAYERS[layer].label.toLowerCase()}.${trace} Press Escape to cancel.`,
   );
 }
 

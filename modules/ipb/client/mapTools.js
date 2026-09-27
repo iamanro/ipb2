@@ -412,7 +412,7 @@ export function initMapToolbar({
         createElement(
           'p',
           'tool-hint',
-          `Draw the ${TACTICAL_GRAPHICS[activeTool.graphic].geometry === 'polygon' ? 'area' : 'line'} on the map. Escape cancels.`,
+          `Draw the ${TACTICAL_GRAPHICS[activeTool.graphic].geometry === 'polygon' ? 'area' : 'line'} on the map: click each point, or hold the right mouse button and trace. Escape cancels.`,
         ),
       );
     } else {
