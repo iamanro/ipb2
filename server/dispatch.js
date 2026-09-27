@@ -41,7 +41,8 @@
  * (for an activity row) and must not open one of its own.
  *
  * Handler context: { item, part, params, query, body, owner, access,
- * actorName, request, response }. A handler returns the JSON body, or sends
+ * actorName, request, response }. `access` carries `white`, `cell`, `see`,
+ * `canEdit` and `visible`. A handler returns the JSON body, or sends
  * the response itself and returns undefined.
  *
  * A module that changes things on its own (the scenario clock firing
@@ -208,6 +209,7 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
   function accessFor(entry, actor) {
     return {
       white: isWhite(actor),
+      cell: actor?.cell ?? null,
       /** A row of any item or part kind the requester can see, or 404. */
       see(kind, id) {
         const part = entry.parts[kind];

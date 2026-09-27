@@ -99,6 +99,12 @@ const PMESII_VALUES = [
   'physical-environment',
   'time',
 ];
+const CELLS = ['white', 'blue', 'red'];
+const CELL_STUDY_NAMES = {
+  white: 'White Cell IPB',
+  blue: 'Blue Cell IPB',
+  red: 'Red Cell IPB',
+};
 
 const MAX_BULK_FEATURES = 2000;
 const MAX_RANGE_RING_RADII = 8;
@@ -264,9 +270,11 @@ let database;
 
 export function openStore(file) {
   database = openState(file, MIGRATIONS);
+  ensureCellStudies();
   return {
     database: () => database,
     listStudies,
+    readCellStudy,
     createStudy,
     readStudy,
     updateStudy,
@@ -671,6 +679,57 @@ function mutate(studyId, action, target, work, finalize) {
 
 // -- studies ------------------------------------------------------------------
 
+function requireCell(cell) {
+  if (!CELLS.includes(cell)) throw new HttpError(400, `Unknown cell: ${cell}`);
+  return cell;
+}
+
+function insertCellStudy(cell) {
+  const timestamp = new Date().toISOString();
+  const info = database
+    .prepare(
+      `INSERT INTO studies
+         (name, bounds, aoi, notes, revision, created_at, updated_at, owner_cell, releasable_to,
+          cell_study_cell)
+       VALUES (?, NULL, NULL, '{}', 1, ?, ?, ?, '[]', ?)`,
+    )
+    .run(CELL_STUDY_NAMES[cell], timestamp, timestamp, cell, cell);
+  const id = info.lastInsertRowid;
+  database
+    .prepare('INSERT INTO activity (study_id, at, action, target, detail) VALUES (?, ?, ?, ?, ?)')
+    .run(id, timestamp, 'create', `study:${id}`, JSON.stringify({ automatic: true, cell }));
+  return id;
+}
+
+function ensureCellStudyInside(cell) {
+  requireCell(cell);
+  const current = database.prepare('SELECT * FROM studies WHERE cell_study_cell = ?').get(cell);
+  if (current?.owner_cell === cell) return current.id;
+  if (current) {
+    database.prepare('UPDATE studies SET cell_study_cell = NULL WHERE id = ?').run(current.id);
+  }
+
+  const candidate = database
+    .prepare(
+      `SELECT id FROM studies
+       WHERE owner_cell = ? AND cell_study_cell IS NULL
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1`,
+    )
+    .get(cell);
+  if (candidate) {
+    database.prepare('UPDATE studies SET cell_study_cell = ? WHERE id = ?').run(cell, candidate.id);
+    return candidate.id;
+  }
+  return insertCellStudy(cell);
+}
+
+function ensureCellStudies() {
+  transact(database, () => {
+    for (const cell of CELLS) ensureCellStudyInside(cell);
+  });
+}
+
 /** A raw studies row, decoded — the study half of `readStudy`'s aggregate,
  * and the shape `routes.js` hands the dispatcher as `items.study.shape` for
  * its generated release/reassign responses. */
@@ -689,6 +748,7 @@ export function shapeStudy(row) {
     weather_thresholds: row.weather_thresholds ? JSON.parse(row.weather_thresholds) : null,
     owner_cell: row.owner_cell,
     releasable_to: JSON.parse(row.releasable_to),
+    cell_study_cell: row.cell_study_cell ?? null,
     revision: row.revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -699,21 +759,31 @@ function readStudyRow(id) {
   return shapeStudy(getStudyRow(id));
 }
 
+function readCellStudy(cell) {
+  const id = transact(database, () => ensureCellStudyInside(cell));
+  return readStudy(id);
+}
+
 /** `access` is the dispatcher's per-request capability; direct callers (tests)
  * that don't care about visibility get the "see everything" default — this
  * is a data default, not a policy one: it composes no cell/role decision. */
-function listStudies(access = { visible: () => ({ sql: '1=1', params: [] }) }) {
+function listStudies(
+  access = { white: true, cell: 'white', visible: () => ({ sql: '1=1', params: [] }) },
+) {
   const { sql, params } = access.visible('study', { alias: 's' });
+  const ordinaryCellOnly = access.white === false;
+  const cellStudySql = ordinaryCellOnly ? ' AND s.cell_study_cell = ?' : '';
   const rows = database
     .prepare(
       `SELECT s.id, s.name, s.bounds, s.updated_at, s.owner_cell, s.releasable_to,
+              s.cell_study_cell,
               (SELECT count(*) FROM features WHERE study_id = s.id) AS feature_count,
               (SELECT count(*) FROM coas WHERE study_id = s.id) AS coa_count
        FROM studies AS s
-       WHERE ${sql}
+       WHERE ${sql}${cellStudySql}
        ORDER BY s.updated_at DESC, s.id DESC`,
     )
-    .all(...params);
+    .all(...params, ...(ordinaryCellOnly ? [access.cell] : []));
   return {
     items: rows.map((row) => ({
       id: row.id,
@@ -722,6 +792,7 @@ function listStudies(access = { visible: () => ({ sql: '1=1', params: [] }) }) {
       updated_at: row.updated_at,
       owner_cell: row.owner_cell,
       releasable_to: JSON.parse(row.releasable_to),
+      cell_study_cell: row.cell_study_cell ?? null,
       feature_count: row.feature_count,
       coa_count: row.coa_count,
     })),
@@ -868,13 +939,15 @@ function updateStudy(id, patch) {
 }
 
 function deleteStudy(id) {
+  let deleted;
   return mutate(
     id,
     'delete',
     `study:${id}`,
     () => {
-      getStudyRow(id);
+      deleted = getStudyRow(id);
       database.prepare('DELETE FROM studies WHERE id = ?').run(id);
+      if (deleted.cell_study_cell) ensureCellStudyInside(deleted.cell_study_cell);
     },
     () => ({ deleted: true }),
   );
@@ -887,8 +960,13 @@ function deleteStudy(id) {
  * object the dispatcher shapes into its response — and appends one activity
  * row, the same bookkeeping every other mutation gets via `mutate()`.
  */
-function recordOwnershipChange({ action, after }) {
+function recordOwnershipChange({ action, before, after }) {
   const timestamp = new Date().toISOString();
+  if (action === 'reassign' && before.cell_study_cell) {
+    database.prepare('UPDATE studies SET cell_study_cell = NULL WHERE id = ?').run(after.id);
+    after.cell_study_cell = null;
+    ensureCellStudyInside(before.cell_study_cell);
+  }
   database
     .prepare('UPDATE studies SET revision = revision + 1, updated_at = ? WHERE id = ?')
     .run(timestamp, after.id);

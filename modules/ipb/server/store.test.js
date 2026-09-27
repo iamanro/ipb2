@@ -162,7 +162,42 @@ describe('openStore: studies', () => {
   test('lists newest-updated first, even when two studies share a millisecond', () => {
     const first = store.createStudy({ name: 'A' });
     const second = store.createStudy({ name: 'B' });
-    expect(store.listStudies().items.map((row) => row.id)).toEqual([second.id, first.id]);
+    expect(
+      store
+        .listStudies()
+        .items.map((row) => row.id)
+        .slice(0, 2),
+    ).toEqual([second.id, first.id]);
+  });
+
+  test('opens with one automatic study per exercise cell', () => {
+    const studies = store.listStudies().items.filter((study) => study.cell_study_cell);
+    expect(studies.map((study) => study.cell_study_cell).sort()).toEqual(['blue', 'red', 'white']);
+    for (const cell of ['white', 'blue', 'red']) {
+      const current = store.readCellStudy(cell);
+      expect(current.study).toMatchObject({ owner_cell: cell, cell_study_cell: cell });
+    }
+  });
+
+  test('deleting or reassigning an automatic study preserves the invariant without deleting legacy rows', () => {
+    const blue = store.readCellStudy('blue').study;
+    store.deleteStudy(blue.id);
+    const replacement = store.readCellStudy('blue').study;
+    expect(replacement.id).not.toBe(blue.id);
+    expect(replacement).toMatchObject({ owner_cell: 'blue', cell_study_cell: 'blue' });
+
+    const red = store.readCellStudy('red').study;
+    store.database().prepare('UPDATE studies SET owner_cell = ? WHERE id = ?').run('blue', red.id);
+    store.recordOwnershipChange({
+      action: 'reassign',
+      before: { ...red },
+      after: { ...red, owner_cell: 'blue', releasable_to: '[]' },
+    });
+    const oldRed = store.readStudy(red.id).study;
+    const newRed = store.readCellStudy('red').study;
+    expect(oldRed).toMatchObject({ owner_cell: 'blue', cell_study_cell: null });
+    expect(newRed.id).not.toBe(red.id);
+    expect(newRed).toMatchObject({ owner_cell: 'red', cell_study_cell: 'red' });
   });
 
   test('patching bumps revision and updated_at without disturbing unset fields', () => {
@@ -1077,11 +1112,12 @@ describe('openStore: listStudies uses the access capability', () => {
   /** Asserts the store calls `access.visible('study', { alias: 's' })` (the
    * exact contract `server/dispatch.js` relies on) and threads its SQL
    * fragment into the query untouched. */
-  function access(sql, params = []) {
+  function access(sql, params = [], options = { white: true, cell: 'white' }) {
     return {
-      visible: (kind, options) => {
+      ...options,
+      visible: (kind, visibleOptions) => {
         expect(kind).toBe('study');
-        expect(options).toEqual({ alias: 's' });
+        expect(visibleOptions).toEqual({ alias: 's' });
         return { sql, params };
       },
     };
@@ -1093,13 +1129,16 @@ describe('openStore: listStudies uses the access capability', () => {
     store.createStudy({ name: 'White A' }, { owner_cell: 'white', releasable_to: [] });
 
     expect(
-      store.listStudies(access('s.owner_cell = ?', ['blue'])).items.map((s) => s.name),
-    ).toEqual(['Blue A']);
-    expect(store.listStudies(access('1=1')).items.map((s) => s.name)).toEqual([
-      'White A',
-      'Red A',
-      'Blue A',
-    ]);
+      store
+        .listStudies(access('s.owner_cell = ?', ['blue'], { white: false, cell: 'blue' }))
+        .items.map((s) => s.name),
+    ).toEqual(['Blue Cell IPB']);
+    expect(
+      store
+        .listStudies(access('1=1'))
+        .items.map((s) => s.name)
+        .filter((name) => ['White A', 'Red A', 'Blue A'].includes(name)),
+    ).toEqual(['White A', 'Red A', 'Blue A']);
 
     store.updateStudy(redStudy.id, { name: 'Red A (renamed)' });
     expect(store.listStudies(access('1=1')).items.map((s) => s.name)).toContain('Red A (renamed)');

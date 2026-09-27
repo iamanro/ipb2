@@ -148,9 +148,10 @@ describe('exercise lifecycle (C6)', () => {
     expect(found).toBeTruthy();
     expect(found.name).toBe('Exercise Bold Falcon');
 
-    // Archiving is non-destructive: the live data is still there.
+    // Archiving is non-destructive: the live data is still there, including
+    // the three automatic per-cell IPB studies plus the seeded extra study.
     const counts = await countRows(server.origin);
-    expect(counts).toEqual({ studies: 1, orbats: 1, requirements: 1 });
+    expect(counts).toEqual({ studies: 4, orbats: 1, requirements: 1 });
   });
 
   test('reset requires the typed confirmation to match the current exercise name', async () => {
@@ -193,9 +194,10 @@ describe('exercise lifecycle (C6)', () => {
     // Memberships are cleared.
     expect(authStore.listMembers().every((m) => !m.cell)).toBe(true);
 
-    // The stores reopen empty and keep working (GET succeeds, count is zero).
+    // The stores reopen with fresh automatic IPB studies and no exercise-owned
+    // collection/ORBAT data.
     const counts = await countRows(server.origin);
-    expect(counts).toEqual({ studies: 0, orbats: 0, requirements: 0 });
+    expect(counts).toEqual({ studies: 3, orbats: 0, requirements: 0 });
 
     // ...and still accept new writes after reopening.
     const created = await postJson(server.origin, '/api/orbat/orbats', {
@@ -222,14 +224,15 @@ describe('exercise lifecycle (C6)', () => {
     authStore.removeUser('willBeRemoved');
     await postJson(server.origin, '/api/ipb/studies', { name: 'Should disappear on restore' });
     const beforeRestoreCounts = await countRows(server.origin);
-    expect(beforeRestoreCounts.studies).toBe(2);
+    expect(beforeRestoreCounts.studies).toBe(5);
 
     const restored = await lifecycle.restore({ archive: archived.id });
     expect(restored.name).toBe('Exercise Before Restore Test');
 
-    // The data from the archived point in time is back.
+    // The data from the archived point in time is back: three automatic IPB
+    // studies plus the seeded extra study.
     const counts = await countRows(server.origin);
-    expect(counts).toEqual({ studies: 1, orbats: 1, requirements: 1 });
+    expect(counts).toEqual({ studies: 4, orbats: 1, requirements: 1 });
 
     // The still-existing user's membership is restored...
     const members = Object.fromEntries(authStore.listMembers().map((m) => [m.name, m]));

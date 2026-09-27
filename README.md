@@ -306,9 +306,10 @@ The map carries only two controls of its own:
   name), the sheet buttons, zoom, and **ⓘ** for attribution and the elevation
   dataset.
 
-The masthead holds the open study (click it, or press `/`, to switch or create
-one) and the active scenario. In worksheet lists, click an item's name to go
-to it; its other actions (rename, move, delete…) are in its **⋯** menu.
+The masthead holds the open study (click it, or press `/`, to switch; ordinary
+cell members open their cell's exercise study automatically) and the active
+scenario. In worksheet lists, click an item's name to go to it; its other
+actions (rename, move, delete…) are in its **⋯** menu.
 
 Other keys, when not typing in a field: `1`–`4` switch steps, Escape cancels
 the active map tool and closes an open menu.
@@ -619,10 +620,16 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
    including located SALUTE/SPOTREP reports, each with a **Release to** cell
    list (defaulting to Blue) that becomes the fired item's release list —
    see "Located injects" below.
-2. **IPB** (analyst), normally one study per cell for the exercise:
-   - IPB reopens the study and step each user last had open (remembered per
-     browser and account); when a cell can see only one study it opens that
-     one, and otherwise the study menu opens to pick one.
+2. **IPB** (analyst): each exercise has exactly one automatic IPB study for
+   White, Blue and Red. New and reset exercises create the three studies on
+   first use; restored or older exercises safely gain any missing cell study
+   without deleting existing study rows.
+   - Ordinary Blue/Red members open their own cell's automatic study with no
+     create-or-pick step (`GET /api/ipb/studies/current`). White/admins also
+     start in their cell study, or reopen their remembered study and step;
+     their masthead picker retains all visible cell and preserved extra
+     studies. The current-study API also accepts `?cell=white|blue|red` for
+     White/admins. Visible released studies remain accessible by direct link.
    - **The guide**: the tools panel walks the four steps as numbered tasks
      (1.1 Area of operations … 4.6 Hand over to collection,
      `modules/ipb/client/guideTasks.js`). One task is open at a time with a
@@ -634,18 +641,22 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      study (`checked`) so the whole cell sees it. Each step tab shows its
      progress (e.g. 2/4). Jump to coordinate, GeoJSON/KML import and export,
      and custom layers sit under **More tools**.
-   - Every study belongs to a cell (White/Blue/Red): it defaults to the
-     creator's own cell (White may pick any cell when creating one), is
-     visible only to that cell, White/admins, and any cell it's been
-     **released** to, and everything under it (features, threats, COAs,
-     events, phases, decision points, civil considerations, analyses,
-     layers, points) inherits that visibility — a study you can't see 404s
-     on every route, including its exports and bulk import, so its id never
-     leaks. The worksheet header shows the owner badge and a **Release…**
-     control (White, or an analyst-or-above member of the owning cell);
-     White additionally gets a **Reassign** owner select. The printed
-     classification banner names the owning cell next to the marking (e.g.
-     "UNCLASSIFIED // EXERCISE — BLUE").
+   - Every study belongs to a cell (White/Blue/Red) and is visible only to
+     that cell, White/admins, and any cell it's been **released** to. The
+     automatic cell studies are the only studies listed for ordinary
+     non-White members; `POST /api/ipb/studies` and `DELETE /api/ipb/studies/:id`
+     are White-only so cells do not accidentally create or remove extra IPB
+     studies. If an older database has multiple studies for a cell, the newest
+     one becomes that cell's automatic study and the rest are preserved for
+     White/admins to review or migrate manually. Everything under a study
+     (features, threats, COAs, events, phases, decision points, civil
+     considerations, analyses, layers, points) inherits that visibility — a
+     study you can't see 404s on every route, including its exports and bulk
+     import, so its id never leaks. The worksheet header shows the owner badge
+     and a **Release…** control (White, or an analyst-or-above member of the
+     owning cell); White additionally gets a **Reassign** owner select. The
+     printed classification banner names the owning cell next to the marking
+     (e.g. "UNCLASSIFIED // EXERCISE — BLUE").
    - _Step 1_: the **area of operations (AO)** and **area of interest
      (AOI)**, light data, forecast and the **weather effects matrix**
      (favourable/marginal/unfavourable per system and forecast block, against
@@ -690,7 +701,15 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      preview, and its COA — **Change symbol…**, **Move** and **Delete**. The
      Map menu's **Unit symbols** sets their size (small/medium/large),
      remembered like the basemap.
-3. **Requirements** (analyst): Exercise → Requirements → Import from IPB turns
+3. **Exercise guide**: the sidebar opens with a role-specific numbered task list
+   (exercise control, analyst, collection manager or observer). One explanation
+   is open at a time; select a task to open its workspace, or use **Next**.
+   Progress reflects the data visible to the member and refreshes after saved
+   changes and live updates. Collection gaps remain open for conflicts or SIRs
+   not covered before their LTIOV. White/admins can choose another task list;
+   **All sections** retains direct access to every workspace. The guide does
+   not grant permissions or certify the analytical quality of completed work.
+   **Requirements** (analyst): Exercise → Requirements → Import from IPB turns
    the event matrix into PIRs, SIRs and indicators, with each SIR tied to its
    NAI/TAI geometry.
 4. **Collection** (collection-manager): collectors and taskings against
@@ -1070,8 +1089,9 @@ run against a live server), and the archives list with a **Restore** per
 row. **Reset** opens a typed-confirmation dialog — type the exercise's
 _current_ name — and then: archives the current exercise automatically,
 empties the ipb/exercise/orbat databases (closes each module's store,
-deletes its file, which reopens empty on the next request), clears every
-membership, and renames/restarts the exercise. **Restore** archives the
+deletes its file; IPB recreates White/Blue/Red automatic studies on the next
+request), clears every membership, and renames/restarts the exercise.
+**Restore** archives the
 current exercise first, then swaps an earlier archive's files back in and
 reapplies its membership roster, skipping any member whose account no
 longer exists. While either runs, every other `/api/*` request gets 503

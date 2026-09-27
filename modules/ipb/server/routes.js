@@ -113,7 +113,20 @@ export default {
       path: 'studies',
       verb: 'create',
       item: 'study',
-      handler: ({ body, owner }) => getStore().createStudy(body, owner),
+      handler: ({ body, owner, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may create extra studies.');
+        return getStore().createStudy(body, owner);
+      },
+    },
+    {
+      method: 'GET',
+      path: 'studies/current',
+      verb: 'list',
+      handler: ({ query, access }) => {
+        const cell = access.white ? (query.get('cell') ?? 'white') : access.cell;
+        if (!cell) throw new HttpError(403, 'You are not assigned to a cell.');
+        return getStore().readCellStudy(cell);
+      },
     },
     {
       method: 'GET',
@@ -134,7 +147,10 @@ export default {
       path: 'studies/:item',
       verb: 'change',
       item: 'study',
-      handler: ({ item }) => getStore().deleteStudy(item.id),
+      handler: ({ item, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may delete studies.');
+        return getStore().deleteStudy(item.id);
+      },
     },
     {
       method: 'GET',

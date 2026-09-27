@@ -123,10 +123,14 @@
         border-color var(--d-fast) var(--ease-out);
     }
 
-    .study-toggle:hover,
+    .study-toggle:hover:not(:disabled),
     .study-toggle[aria-expanded='true'] {
       border-color: var(--line-dark);
       background: var(--surface-hover);
+    }
+
+    .study-toggle:disabled {
+      cursor: default;
     }
 
     .study-toggle .eyebrow {

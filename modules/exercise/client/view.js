@@ -23,6 +23,15 @@ import {
   createReportsController,
   formatReportLocationMgrs,
 } from './reportForm.js';
+import { renderExerciseGuide } from './guide.js';
+import {
+  GUIDE_LISTS,
+  defaultList,
+  extraLoads,
+  firstOpenTask,
+  listTasks,
+  taskStatuses,
+} from './guideTasks.js';
 import { createSituationController } from './situation.js';
 import './styles.css';
 import template from './view.html?raw';
@@ -113,6 +122,7 @@ function createState() {
     scenarioEvents: [],
     activity: [],
     importSummary: null,
+    guide: { list: 'analyst', open: null, progress: null, refresh: null },
     unsubscribeTick: null,
     // The game-master's audit view (Activity tab, LAN/auth mode only) — loaded lazily,
     // separate from `activity` (the exercise module's own per-object log).
@@ -138,6 +148,7 @@ function createState() {
 function queryElements(root) {
   return {
     tabNav: root.querySelector('#tab-nav'),
+    guide: root.querySelector('#exercise-guide'),
     panel: root.querySelector('#panel'),
   };
 }
@@ -174,6 +185,7 @@ async function requestJson(path, { method = 'GET', body, signal = state.session.
     if (response.status === 401) handleUnauthorized();
     throw new Error(payload.error || `Request failed: ${response.status}`);
   }
+  if (method !== 'GET' && !signal.aborted) state.guide.refresh?.();
   return payload;
 }
 
@@ -297,6 +309,126 @@ function renderTabNav() {
   });
 }
 
+// --- The guide (sidebar) ----------------------------------------------------------
+
+const GUIDE_LIST_KEY = 'exercise.guideList';
+
+/** The member's own list; White, admins and the local operator may look at the others. */
+function guideLists() {
+  const user =
+    sessionMode() === 'on' ? currentUser() : { cell: 'white', role: 'game-master', admin: true };
+  const own = defaultList({
+    cell: user?.cell ?? null,
+    role: user?.role ?? null,
+    admin: Boolean(user?.admin),
+  });
+  const lists = isWhite() ? Object.keys(GUIDE_LISTS) : [own];
+  let chosen = own;
+  try {
+    const saved = window.localStorage.getItem(GUIDE_LIST_KEY);
+    if (saved && lists.includes(saved)) chosen = saved;
+  } catch {
+    // Storage blocked: the member's own list.
+  }
+  return { lists, chosen };
+}
+
+/**
+ * What the guide's tasks read: the view's own lists, plus the few (tracks,
+ * INTSUMs, collectors…) only some lists need, fetched here and refreshed on
+ * every exercise change.
+ */
+async function loadGuideProgress() {
+  const owner = state;
+  const list = owner.guide.list;
+  const needs = extraLoads(list);
+  const fetchOr = (need, path, fallback, pick = (value) => value) =>
+    needs.has(need) ? requestJson(path).then(pick) : Promise.resolve(fallback);
+  const [tracks, intsums, collectors, taskings, conflicts, activeScenario] = await Promise.all([
+    fetchOr('tracks', `${API}/tracks`, []),
+    fetchOr('intsums', `${API}/intsums`, []),
+    fetchOr('collectors', `${API}/collectors`, []),
+    fetchOr('taskings', `${API}/taskings`, []),
+    fetchOr('conflicts', `${API}/collection/conflicts`, []),
+    fetchOr('activeScenario', `${API}/scenario/active`, null, (value) => value.scenario),
+  ]);
+  if (owner.session.signal.aborted || owner !== state || list !== owner.guide.list) return;
+  state.guide.progress = {
+    requirements: state.requirements,
+    reports: state.reports,
+    rfis: state.rfis,
+    scenarioEvents: state.scenarioEvents,
+    clock: state.clock,
+    tracks,
+    intsums,
+    collectors,
+    taskings,
+    conflicts,
+    activeScenario,
+  };
+}
+
+function renderGuide() {
+  const { progress, list } = state.guide;
+  const statuses = progress ? taskStatuses(list, progress) : null;
+  if (state.guide.open === null && statuses) {
+    state.guide.open =
+      listTasks(list).find((task) => task.tab === state.tab)?.id ?? firstOpenTask(list, statuses);
+  }
+  const focused = elements.guide.contains(document.activeElement);
+  const focusedTask = document.activeElement?.closest('[data-task]')?.dataset.task;
+  const focusedList = document.activeElement?.classList.contains('guide-list-select');
+  const { lists } = guideLists();
+  elements.guide.replaceChildren(
+    renderExerciseGuide({
+      listId: list,
+      lists,
+      progress,
+      openTaskId: state.guide.open,
+      onOpen: (taskId) => {
+        state.guide.open = taskId;
+        const task = listTasks(list).find((entry) => entry.id === taskId);
+        if (task.tab !== state.tab) switchTab(task.tab);
+        else renderGuide();
+      },
+      onList: (listId) => {
+        state.guide.list = listId;
+        state.guide.open = null;
+        state.guide.progress = null;
+        try {
+          window.localStorage.setItem(GUIDE_LIST_KEY, listId);
+        } catch {
+          // Storage blocked: the choice lasts this visit.
+        }
+        renderGuide();
+        refreshGuide();
+      },
+    }),
+  );
+  if (focused) {
+    const selector = focusedList
+      ? '.guide-list-select'
+      : `[data-task="${state.guide.open ?? focusedTask}"] .guide-task-head`;
+    elements.guide.querySelector(selector)?.focus({ preventScroll: true });
+  }
+}
+
+/** Reloads what the guide reads and redraws it; a failure only leaves the ticks stale. */
+async function refreshGuide() {
+  const owner = state;
+  try {
+    await loadGuideProgress();
+    if (!owner.session.signal.aborted && owner === state) renderGuide();
+  } catch (error) {
+    if (error.name !== 'AbortError' && owner === state && !owner.session.signal.aborted) {
+      showError(
+        elements.guide,
+        `Task progress unavailable: ${error.message}. Use All sections below.`,
+      );
+    }
+  }
+}
+
 /** Tabs whose panel is owned by a `{ enter(container), leave() }` controller
  * (collection.js, products.js) instead of the plain renderers map below —
  * same "lives across renders, torn down on leaving the tab" shape as the
@@ -318,6 +450,7 @@ function switchTab(tab) {
   state.tab = tab;
   writeLocation();
   renderTabNav();
+  renderGuide();
   renderPanel();
 }
 
@@ -2456,17 +2589,28 @@ export function mount({ root, status }) {
   elements.tabNav.addEventListener('click', (event) => {
     const button = event.target.closest('.tab-button');
     if (!button) return;
+    state.guide.open =
+      listTasks(state.guide.list).find((task) => task.tab === button.dataset.tab)?.id ?? null;
     switchTab(button.dataset.tab);
   });
   document.addEventListener('keydown', onGeoKeydown);
 
   readLocation();
   renderTabNav();
+  const { chosen } = guideLists();
+  state.guide.list = chosen;
+  renderGuide();
 
   loadAll()
     .then(() => {
       renderPanel();
       updateMastheadStatus();
+      refreshGuide().then(() => {
+        if (!session.signal.aborted && !new URLSearchParams(window.location.search).has('tab')) {
+          const task = listTasks(state.guide.list).find((entry) => entry.id === state.guide.open);
+          if (task && task.tab !== state.tab) switchTab(task.tab);
+        }
+      });
     })
     .catch((error) => {
       if (error.name === 'AbortError') return;
@@ -2490,7 +2634,24 @@ export function mount({ root, status }) {
     },
   );
 
+  let guideTimer = null;
+  const scheduleGuideRefresh = () => {
+    window.clearTimeout(guideTimer);
+    guideTimer = window.setTimeout(async () => {
+      try {
+        await loadAll();
+        await refreshGuide();
+      } catch (error) {
+        if (error.name !== 'AbortError') console.warn('[exercise] guide refresh:', error.message);
+      }
+    }, 800);
+  };
+  const unsubscribeGuide = subscribe((event) => event.module === 'exercise', scheduleGuideRefresh);
+  state.guide.refresh = scheduleGuideRefresh;
+
   return () => {
+    window.clearTimeout(guideTimer);
+    unsubscribeGuide();
     state.unsubscribeTick();
     document.removeEventListener('keydown', onGeoKeydown);
     destroyGeoMap();

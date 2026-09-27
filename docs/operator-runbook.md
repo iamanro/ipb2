@@ -90,6 +90,27 @@ This writes `IPB_BACKUP_DIR/<time>/` (all databases, consistent even while peopl
 
 **Copy `IPB_BACKUP_DIR` off the server** (NAS, USB disk). A backup kept only on the same disk does not survive a disk failure.
 
+### Reboots
+
+Both containers start by themselves after a reboot. If `IPB_HTTPS_PORT` names a LAN address (e.g. `10.0.0.147:443`, because something else holds `127.0.0.1:443`), Docker can start Caddy a moment before the network has that address: Caddy then runs but nothing reaches it, and `docker compose ps` shows no ports for it. `deploy/caddy-ports.sh` recreates Caddy in that case and does nothing otherwise. Run it from a timer, as a user in the `docker` group (user timers need `loginctl enable-linger <user>` to run without a login):
+
+```ini
+# ~/.config/systemd/user/ipb-caddy-ports.service
+[Service]
+Type=oneshot
+ExecStart=/srv/ipb/deploy/caddy-ports.sh
+
+# ~/.config/systemd/user/ipb-caddy-ports.timer
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
+```
+
+`systemctl --user daemon-reload && systemctl --user enable --now ipb-caddy-ports.timer`.
+
 ## 6. Restore
 
 ```bash

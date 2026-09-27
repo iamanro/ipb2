@@ -16,6 +16,7 @@ import { afterAll, beforeAll, expect, test } from 'vitest';
 import { createDispatcher } from '../../../server/dispatch.js';
 import { sweepRoutes } from '../../../server/routeSweep.js';
 
+const WHITE = { name: 'white-gm', admin: false, cell: 'white', role: 'game-master' };
 const RED = { name: 'red-analyst', admin: false, cell: 'red', role: 'analyst' };
 const BLUE = { name: 'blue-analyst', admin: false, cell: 'blue', role: 'analyst' };
 
@@ -52,7 +53,10 @@ const POLYGON = {
 
 /** A Red study with one row of every study part kind, optionally released. */
 async function studyWithEveryPart(releasableTo = []) {
-  const study = await call(RED, 'POST', 'studies', { name: `Red study ${Math.random()}` });
+  const study = await call(WHITE, 'POST', 'studies', {
+    name: `Red study ${Math.random()}`,
+    owner_cell: 'red',
+  });
   if (releasableTo.length) {
     await call(RED, 'POST', `studies/${study.id}/release`, { cells: releasableTo });
   }
@@ -122,4 +126,23 @@ test('every route naming a study holds the line for a Blue analyst', async () =>
     fixtures: { study: { hidden, released } },
   });
   expect(failures).toEqual([]);
+});
+
+test('ordinary members open and list only their automatic cell study', async () => {
+  await call(WHITE, 'POST', 'studies', { name: 'Blue preserved extra', owner_cell: 'blue' });
+
+  const current = await call(BLUE, 'GET', 'studies/current');
+  expect(current.study).toMatchObject({ owner_cell: 'blue', cell_study_cell: 'blue' });
+
+  const list = await call(BLUE, 'GET', 'studies');
+  expect(list.items).toHaveLength(1);
+  expect(list.items[0]).toMatchObject({ id: current.study.id, cell_study_cell: 'blue' });
+  await expect(call(BLUE, 'POST', 'studies', { name: 'extra' })).rejects.toMatchObject({
+    status: 403,
+  });
+});
+
+test('White opens the White automatic study by default', async () => {
+  const white = await call(WHITE, 'GET', 'studies/current');
+  expect(white.study).toMatchObject({ owner_cell: 'white', cell_study_cell: 'white' });
 });

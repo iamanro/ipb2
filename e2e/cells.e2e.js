@@ -77,6 +77,52 @@ test('a report stays in its cell until released, a release is read-only, and rea
   const white = await memberPage(browser, 'white-gm');
   const red = await memberPage(browser, 'red-analyst');
 
+  await test.step('IPB opens the Blue cell study automatically, while White can switch studies', async () => {
+    const blueStudies = (await (await blue.context().request.get('/api/ipb/studies')).json()).items;
+    expect(blueStudies).toHaveLength(1);
+    expect(blueStudies[0].owner_cell).toBe('blue');
+
+    await blue.goto('/ipb/');
+    await expect(blue.locator('#worksheet-study-name')).toHaveText(blueStudies[0].name);
+    await expect(blue.locator('#study-toggle')).toBeDisabled();
+    await expect(blue.locator('#study-menu')).toBeHidden();
+    await expect(blue.locator('#create-study')).toBeHidden();
+    await expect(blue.locator('#map-empty-create')).toBeHidden();
+    await blue.keyboard.press('/');
+    await expect(blue.locator('#study-menu')).toBeHidden();
+
+    const whiteStudies = (await (await white.context().request.get('/api/ipb/studies')).json())
+      .items;
+    const blueStudy = whiteStudies.find((study) => study.owner_cell === 'blue');
+    expect(blueStudy).toBeTruthy();
+    await white.goto('/ipb/');
+    const whiteStudy = whiteStudies.find((study) => study.cell_study_cell === 'white');
+    await expect(white.locator('#worksheet-study-name')).toHaveText(whiteStudy.name);
+    await expect(white.locator('#study-toggle')).toBeEnabled();
+    await white.locator('#study-toggle').click();
+    await expect(white.locator('#create-study')).toBeVisible();
+    await white
+      .locator('.study-row', { hasText: blueStudy.name })
+      .getByRole('button', { name: blueStudy.name })
+      .click();
+    await expect(white.locator('#worksheet-study-name')).toHaveText(blueStudy.name);
+
+    const legacy = await postOk(white.context().request, '/api/ipb/studies', {
+      name: 'White legacy IPB e2e',
+      owner_cell: 'white',
+    });
+    await white.goto(`/ipb/?study=${legacy.id}&step=3`);
+    await expect(white.locator('#worksheet-study-name')).toHaveText(legacy.name);
+    await white.getByRole('link', { name: 'Exercise' }).click();
+    await expect(white).toHaveURL(/\/exercise\//);
+    await white.getByRole('link', { name: 'IPB' }).click();
+    await expect(white.locator('#worksheet-study-name')).toHaveText(legacy.name);
+    await expect(white).toHaveURL(new RegExp(`study=${legacy.id}&step=3`));
+
+    await openReports(blue);
+    await openReports(white);
+  });
+
   const report = await postOk(blueContext.request, '/api/exercise/reports', {
     text: 'Two BMPs moving north at the bridge',
     reliability: 'B',

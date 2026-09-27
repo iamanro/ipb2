@@ -286,4 +286,14 @@ export const MIGRATIONS = [
   // The IPB guide's tasks the study's cell marked done by hand (a JSON array
   // of task ids); tasks with data behind them tick themselves off instead.
   `ALTER TABLE studies ADD COLUMN checked TEXT NOT NULL DEFAULT '[]';`,
+  // The current exercise's automatic per-cell IPB studies. NULL means a
+  // preserved/ad-hoc study that White can still open; non-NULL marks the one
+  // ordinary members of that cell open by default. The partial unique index
+  // enforces at most one automatic study per cell while legacy extras remain.
+  `
+  ALTER TABLE studies ADD COLUMN cell_study_cell TEXT
+    CHECK (cell_study_cell IN ('white', 'blue', 'red'));
+  CREATE UNIQUE INDEX studies_cell_study_cell ON studies(cell_study_cell)
+    WHERE cell_study_cell IS NOT NULL;
+  `,
 ];

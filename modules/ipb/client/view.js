@@ -367,6 +367,7 @@ function createState() {
     studies: [],
     studyQuery: '',
     studyId: null,
+    studyFromUrl: false,
     study: null,
     step: 1,
     tool: null,
@@ -507,6 +508,22 @@ function createElement(tag, className, text) {
  * study's cell). Mirrors `server/policy.js`'s `canEdit`. */
 function canEditStudy() {
   return !state.study || canEditClient(state.study.study);
+}
+
+function canSwitchStudies() {
+  return isWhite();
+}
+
+function configureStudyAccess() {
+  const canSwitch = canSwitchStudies();
+  elements.studyToggle.disabled = !canSwitch;
+  elements.studyToggle.setAttribute('aria-haspopup', canSwitch ? 'true' : 'false');
+  elements.studyToggle.title = canSwitch
+    ? 'Switch study (/)'
+    : 'Your cell study opens automatically';
+  elements.createStudy.hidden = !canSwitch || !can('analyst');
+  elements.mapEmptyCreate.hidden = !canSwitch || !can('analyst');
+  if (!canSwitch) closeStudyMenu();
 }
 
 /** The hide/disable/readOnly behaviour `editable()` applies to a control it
@@ -813,6 +830,7 @@ function loadLastStudy() {
 }
 
 function saveLastStudy() {
+  if (!canSwitchStudies()) return;
   try {
     const saved = JSON.parse(window.localStorage.getItem(LAST_STUDY_KEY) ?? 'null') ?? {};
     saved[lastStudyOwner()] = state.studyId ? { study: state.studyId, step: state.step } : null;
@@ -822,10 +840,11 @@ function saveLastStudy() {
   }
 }
 
-/** The URL's study and step; with no study in it, the one last open. */
+/** The URL's study and step; with no study in it, switch-capable users reopen their last study. */
 function readLocation() {
   const params = new URLSearchParams(window.location.search);
-  const last = params.has('study') ? null : loadLastStudy();
+  state.studyFromUrl = params.has('study');
+  const last = canSwitchStudies() && !state.studyFromUrl ? loadLastStudy() : null;
   state.studyId = params.get('study') || last?.study || null;
   const step = Number.parseInt(params.get('step') ?? last?.step, 10);
   state.step = [1, 2, 3, 4].includes(step) ? step : 1;
@@ -876,6 +895,7 @@ function buildMastheadStatus(status) {
 // --- Study management ------------------------------------------------------
 
 function toggleStudyMenu(force) {
+  if (!canSwitchStudies()) return;
   const next = force ?? elements.studyMenu.hidden;
   if (next) closeAllPopovers();
   elements.studyMenu.hidden = !next;
@@ -887,7 +907,8 @@ function toggleStudyMenu(force) {
 }
 
 function closeStudyMenu() {
-  toggleStudyMenu(false);
+  elements.studyMenu.hidden = true;
+  elements.studyToggle.setAttribute('aria-expanded', 'false');
 }
 
 function renderStudyRow(study) {
@@ -927,7 +948,11 @@ function renderStudyList() {
       createElement(
         'p',
         'menu-empty',
-        state.studies.length ? 'No studies match.' : 'No studies yet. Create one below.',
+        state.studies.length
+          ? 'No studies match.'
+          : canSwitchStudies()
+            ? 'No studies yet. Create one below.'
+            : 'Your cell study is opened automatically.',
       ),
     );
   }
@@ -940,31 +965,22 @@ async function loadStudies() {
 }
 
 async function createStudy() {
-  if (!can('analyst')) return;
-  let name;
-  let ownerCell;
-  if (isWhite()) {
-    const values = await askFields('Create study', [
-      { id: 'name', label: 'Name' },
-      {
-        id: 'owner_cell',
-        label: 'Owner',
-        value: currentUser()?.cell ?? 'white',
-        options: ['white', 'blue', 'red'].map((cell) => ({ value: cell, label: cellLabel(cell) })),
-      },
-    ]);
-    if (!values?.name) return;
-    name = values.name;
-    ownerCell = values.owner_cell;
-  } else {
-    name = await askText('Name for the new study', '', 'Create');
-    if (!name) return;
-  }
+  if (!can('analyst') || !canSwitchStudies()) return;
+  const values = await askFields('Create study', [
+    { id: 'name', label: 'Name' },
+    {
+      id: 'owner_cell',
+      label: 'Owner',
+      value: currentUser()?.cell ?? 'white',
+      options: ['white', 'blue', 'red'].map((cell) => ({ value: cell, label: cellLabel(cell) })),
+    },
+  ]);
+  if (!values?.name) return;
   clearError(elements.studyMenu);
   try {
     const study = await requestJson(`${API}/studies`, {
       method: 'POST',
-      body: ownerCell ? { name, owner_cell: ownerCell } : { name },
+      body: { name: values.name, owner_cell: values.owner_cell },
     });
     state.studies.push(study);
     state.studyQuery = '';
@@ -1020,12 +1036,11 @@ async function deleteStudy(study) {
   }
 }
 
-async function selectStudy(id, { preserveFeature = false } = {}) {
-  if (String(state.studyId) === String(id) && state.study) return;
+function beginStudyLoad(id, { preserveFeature = false } = {}) {
   state.studyRequest?.abort();
   const controller = new AbortController();
   state.studyRequest = controller;
-  state.studyId = String(id);
+  state.studyId = id === null ? null : String(id);
   state.study = null;
   if (!preserveFeature) state.selectedFeatureId = null;
   state.selectedCoaId = null;
@@ -1042,18 +1057,44 @@ async function selectStudy(id, { preserveFeature = false } = {}) {
   state.orbatUnits = new Map();
   state.guide.open = {};
   renderEmptyState();
+  return controller;
+}
+
+function finishStudyLoad(payload, controller) {
+  if (controller.signal.aborted) return false;
+  state.studyId = String(payload.study.id);
+  state.study = payload;
+  renderStudyLoaded();
+  writeLocation();
+  refreshOrbatLinks().catch(() => {});
+  return true;
+}
+
+async function selectStudy(id, { preserveFeature = false, showErrors = true } = {}) {
+  if (String(state.studyId) === String(id) && state.study) return true;
+  const controller = beginStudyLoad(id, { preserveFeature });
   try {
     const payload = await requestJson(`${API}/studies/${id}`, {
       signal: AbortSignal.any([controller.signal, state.session.signal]),
     });
-    if (controller.signal.aborted) return;
-    state.study = payload;
-    renderStudyLoaded();
-    writeLocation();
-    refreshOrbatLinks().catch(() => {});
+    return finishStudyLoad(payload, controller);
   } catch (error) {
-    if (error.name === 'AbortError') return;
-    showError(elements.toolPanel, error.message);
+    if (error.name === 'AbortError') return false;
+    if (showErrors) showError(elements.toolPanel, error.message);
+    return false;
+  }
+}
+
+async function selectCurrentCellStudy({ preserveFeature = false } = {}) {
+  const controller = beginStudyLoad(null, { preserveFeature });
+  try {
+    const payload = await requestJson(`${API}/studies/current`, {
+      signal: AbortSignal.any([controller.signal, state.session.signal]),
+    });
+    return finishStudyLoad(payload, controller);
+  } catch (error) {
+    if (error.name !== 'AbortError') showError(elements.toolPanel, error.message);
+    return false;
   }
 }
 
@@ -1122,12 +1163,29 @@ function renderEmptyState() {
   elements.mapEmpty.hidden = false;
   elements.studyName.textContent = 'No study selected';
   elements.worksheetStudyName.textContent = 'No study open';
+  const emptyTitle = elements.mapEmpty.querySelector('h2');
+  const emptyCopy = elements.mapEmpty.querySelector('p:nth-of-type(2)');
+  if (emptyTitle)
+    emptyTitle.textContent = canSwitchStudies()
+      ? 'Create or select a study'
+      : 'Opening your cell study';
+  if (emptyCopy) {
+    emptyCopy.textContent = canSwitchStudies()
+      ? 'The map and worksheet activate once a study is open.'
+      : 'The map and worksheet activate automatically for your cell’s study.';
+  }
   renderStudyReleaseControl();
   updateStepNavAvailability();
   renderToolPanel();
   [1, 2, 3, 4].forEach((step) => {
     elements[`worksheet${step}`].replaceChildren(
-      createElement('p', 'panel-note', 'Select or create a study to see this step.'),
+      createElement(
+        'p',
+        'panel-note',
+        canSwitchStudies()
+          ? 'Select or create a study to see this step.'
+          : 'Your cell study is opening automatically.',
+      ),
     );
   });
   renderCustomLayers();
@@ -5463,12 +5521,14 @@ function renderToolPanel() {
       createElement(
         'p',
         'panel-note',
-        state.studies.length
-          ? 'Open your cell’s study from the Study menu at the top, or create one.'
-          : 'Create your cell’s study for this exercise. The panel then takes you through the four IPB steps, one task at a time.',
+        canSwitchStudies()
+          ? state.studies.length
+            ? 'Open a study from the Study menu at the top, or create one.'
+            : 'Create a study for this exercise. The panel then takes you through the four IPB steps, one task at a time.'
+          : 'Your cell study opens automatically for this exercise. The panel then takes you through the four IPB steps, one task at a time.',
       ),
     );
-    if (can('analyst')) {
+    if (can('analyst') && canSwitchStudies()) {
       const create = createElement('button', 'primary-button', '+ Create study');
       create.type = 'button';
       create.addEventListener('click', createStudy);
@@ -6087,6 +6147,7 @@ export function mount({ root, status }) {
   // Static markup (not re-rendered per role): gated once, here.
   editable(elements.createStudy);
   editable(elements.mapEmptyCreate);
+  configureStudyAccess();
   const { session } = state;
 
   buildMastheadStatus(status);
@@ -6265,14 +6326,21 @@ export function mount({ root, status }) {
     }),
     loadScenario(),
   ])
-    .then(() => {
-      if (
-        initialStudyId &&
-        state.studies.some((study) => String(study.id) === String(initialStudyId))
-      ) {
-        return selectStudy(initialStudyId, { preserveFeature: true });
+    .then(async () => {
+      if (initialStudyId && (state.studyFromUrl || canSwitchStudies())) {
+        const opened = await selectStudy(initialStudyId, {
+          preserveFeature: true,
+          showErrors: canSwitchStudies(),
+        });
+        if (opened) return true;
       }
-      // The only study this cell can see: open it rather than ask.
+      // Everyone starts in their cell workspace; White can switch afterward.
+      if (!initialStudyId) return selectCurrentCellStudy();
+      if (!canSwitchStudies()) {
+        if (state.studyFromUrl) state.selectedFeatureId = null;
+        return selectCurrentCellStudy();
+      }
+      // The only study this switch-capable user can see: open it rather than ask.
       if (state.studies.length === 1) return selectStudy(state.studies[0].id);
       if (state.studyId) {
         // Remembered or linked, but gone or not visible to this cell.
