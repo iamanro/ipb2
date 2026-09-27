@@ -235,3 +235,24 @@ test('the guide opens the first task, ticks it from the data and moves on with N
     )
     .toEqual(['weather']);
 });
+
+test('the forecast request to Open-Meteo carries no custom header (it would fail CORS)', async ({
+  page,
+  request,
+}) => {
+  const forecastHeaders = [];
+  // Open-Meteo allows only standard headers; a custom one makes the real
+  // browser drop the request after its preflight ("Unavailable").
+  await page.route('https://api.open-meteo.com/**', async (route) => {
+    forecastHeaders.push(route.request().headers());
+    await route.fulfill({
+      headers: { 'access-control-allow-origin': '*' },
+      json: { latitude: 49.7, longitude: 17.5, current: { time: 0 }, hourly: { time: [0] } },
+    });
+  });
+  await openStudy(page, request);
+  await page.locator('.weather-forecast').getByRole('button', { name: 'Get weather' }).click();
+  await expect.poll(() => forecastHeaders.length).toBeGreaterThan(0);
+  expect(forecastHeaders[0]).not.toHaveProperty('x-client-id');
+  await expect(page.locator('.weather-forecast')).not.toContainText('Unavailable');
+});

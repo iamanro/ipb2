@@ -684,9 +684,15 @@ function askConfirm(message, accept = 'Delete') {
   return openDialog({ message, accept, withInput: false, destructive: true });
 }
 
-/** Every request dies with its mount, so a stale view never touches a newer one. */
+/**
+ * Every request dies with its mount, so a stale view never touches a newer one.
+ * `X-Client-Id` (live-update echo suppression) goes to this server only: on
+ * a cross-origin request (Open-Meteo, RainViewer) a custom header forces a
+ * CORS preflight those services refuse, and the browser drops the request.
+ */
 async function requestJson(path, { method = 'GET', body, signal = state.session.signal } = {}) {
-  const options = { method, signal, headers: { 'X-Client-Id': clientId } };
+  const sameOrigin = new URL(path, window.location.href).origin === window.location.origin;
+  const options = { method, signal, headers: sameOrigin ? { 'X-Client-Id': clientId } : {} };
   if (body !== undefined) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(body);
