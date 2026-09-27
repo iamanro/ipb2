@@ -54,6 +54,83 @@ describe('openStore: studies', () => {
     expect(store.readStudy(id).study.weather_point).toBeNull();
   });
 
+  test('AO and AOI are separate polygons, each saved, cleared with null, and validated', () => {
+    const { id } = store.createStudy({ name: 'Areas' });
+    expect(store.readStudy(id).study).toMatchObject({ ao: null, aoi: null });
+    const ao = {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [17.4, 49.6],
+          [17.6, 49.6],
+          [17.6, 49.8],
+          [17.4, 49.6],
+        ],
+      ],
+    };
+    const aoi = {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [17.2, 49.5],
+          [17.8, 49.5],
+          [17.8, 49.9],
+          [17.2, 49.9],
+          [17.2, 49.5],
+        ],
+      ],
+    };
+    store.updateStudy(id, { ao: { ...ao, bbox: [0, 0, 1, 1] }, aoi });
+    expect(store.readStudy(id).study).toMatchObject({ ao, aoi });
+    store.updateStudy(id, { ao: null });
+    expect(store.readStudy(id).study).toMatchObject({ ao: null, aoi });
+
+    const ring = ao.coordinates[0];
+    for (const bad of [
+      POINT,
+      { type: 'Polygon', coordinates: [] },
+      { type: 'Polygon', coordinates: [ring.slice(0, 3)] },
+      { type: 'Polygon', coordinates: [[...ring.slice(0, 3), [17.41, 49.6]]] },
+      {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [17.4, 49.6],
+            [17.4, 49.6],
+            [17.6, 49.6],
+            [17.4, 49.6],
+          ],
+        ],
+      },
+      {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [17.4, 95],
+            [17.6, 49.6],
+            [17.6, 49.8],
+            [17.4, 95],
+          ],
+        ],
+      },
+      {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [17.4, '49'],
+            [17.6, 49.6],
+            [17.6, 49.8],
+            [17.4, '49'],
+          ],
+        ],
+      },
+    ]) {
+      expectStatus(() => store.updateStudy(id, { ao: bad }), 400);
+      expectStatus(() => store.updateStudy(id, { aoi: bad }), 400);
+    }
+    expect(store.readStudy(id).study).toMatchObject({ ao: null, aoi });
+  });
+
   test('rejects a blank or missing name', () => {
     expectStatus(() => store.createStudy({ name: '' }), 400);
     expectStatus(() => store.createStudy({}), 400);

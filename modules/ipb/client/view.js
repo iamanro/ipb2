@@ -48,6 +48,15 @@ import {
 } from './exchange.js';
 import { initMapToolbar, renderGraphicsAndRingsList } from './mapTools.js';
 import {
+  areaFeatures,
+  areaMenuItems,
+  handleAreaDrawn,
+  handleAreaReshaped,
+  isAreaId,
+  renderAreaTools,
+  renderAreaWorksheet,
+} from './areas.js';
+import {
   filterByCoa,
   handleSitempClick,
   initSitemp,
@@ -377,6 +386,8 @@ function createState() {
     showAllCoas: false,
     /** SITEMP placement: new units go on every COA instead of the selected one. */
     unitsOnEveryCoa: false,
+    /** AO/AOI corner editor: the notation corners are shown in ('mgrs' | 'dd'). */
+    areaFormat: 'mgrs',
     /** SITEMP placement: the affiliation a custom symbol's picker opens on. */
     customAffiliation: 'hostile',
     /** ORBAT id -> its units (null when this user can't load it), for units
@@ -1235,16 +1246,7 @@ function visibleFeatures() {
   if (!state.study) return [];
   const study = state.study.study;
   const features = [];
-  if (study.aoi) {
-    features.push({
-      id: 'aoi',
-      layer: 'aoi',
-      kind: 'polygon',
-      label: 'AOI',
-      geometry: study.aoi,
-      properties: {},
-    });
-  }
+  features.push(...areaFeatures(study));
   const byLayer = (layer) => state.study.features.filter((feature) => feature.layer === layer);
   OAKOC_LAYERS.forEach((layer) => features.push(...byLayer(layer)));
   // Tactical graphics and range rings (mapTools.js) show on every step,
@@ -1335,7 +1337,9 @@ function reRenderContainingWorksheet(layer) {
 function cancelActiveTool() {
   mapToolsController?.cancelActiveTool();
   if (!state.tool) return;
-  if (state.tool.type === 'draw-feature') mapController.cancelDraw();
+  if (state.tool.type === 'draw-feature' || state.tool.type === 'draw-area') {
+    mapController.cancelDraw();
+  }
   if (state.tool.type === 'modify-feature' || state.tool.type === 'point-move') {
     mapController.stopModify();
   }
@@ -2306,9 +2310,11 @@ function onMapContextMenu({ lon, lat, featureId, clientX, clientY }) {
   const point = findPoint(featureId);
   const items = point
     ? buildPointContextMenu(point)
-    : featureId !== null
-      ? buildFeatureContextMenu(featureId, lon, lat)
-      : buildMapContextMenu(lon, lat);
+    : isAreaId(featureId)
+      ? filterMenuForRole(areaMenuItems(featureId))
+      : featureId !== null
+        ? buildFeatureContextMenu(featureId, lon, lat)
+        : buildMapContextMenu(lon, lat);
   openContextMenu(clientX, clientY, items);
 }
 
@@ -2382,26 +2388,6 @@ function onMapClick({ lon, lat }) {
   if (tool.type === 'avenue-pick') handleAvenuePick(lon, lat);
 }
 
-async function handleAoiDrawn(geometry) {
-  if (!(can('analyst') && canEditStudy())) return;
-  state.tool = null;
-  renderMapHint('');
-  const bounds = geometryBounds(geometry);
-  try {
-    const updated = await requestJson(`${API}/studies/${state.studyId}`, {
-      method: 'PATCH',
-      body: { aoi: geometry, bounds },
-    });
-    state.study.study = { ...state.study.study, ...updated, aoi: geometry, bounds };
-    syncMapFeatures();
-    renderStep1Worksheet();
-    if (state.step === 2) renderToolPanel();
-    mapController.fitExtent(bounds);
-  } catch (error) {
-    showError(elements.worksheet1, error.message);
-  }
-}
-
 async function handleFeatureDrawn(tool, kind, geometry) {
   if (!(can('analyst') && canEditStudy())) return;
   state.tool = null;
@@ -2444,11 +2430,8 @@ function onMapDraw({ kind, geometry }) {
     mapController.cancelDraw();
     return;
   }
+  if (handleAreaDrawn(tool, geometry)) return;
   if (tool.type !== 'draw-feature') return;
-  if (tool.layer === 'aoi') {
-    handleAoiDrawn(geometry);
-    return;
-  }
   handleFeatureDrawn(tool, kind, geometry);
 }
 
@@ -2477,10 +2460,7 @@ function onMapFeatureChange({ id, geometry }) {
     updatePoint(point, { lon, lat });
     return;
   }
-  if (id === 'aoi') {
-    handleAoiDrawn(geometry);
-    return;
-  }
+  if (handleAreaReshaped(id, geometry)) return;
   handleFeatureModified(id, geometry);
 }
 
@@ -2578,20 +2558,7 @@ function renderDrawButtons(layer) {
 function renderStep1Tools() {
   const container = createElement('div', 'tool-section');
 
-  const aoiGroup = createElement('div', 'field-group');
-  aoiGroup.append(createElement('h3', null, 'Area of interest'));
-  const drawButton = editable(createElement('button', 'primary-button', 'Draw AOI'));
-  drawButton.type = 'button';
-  drawButton.addEventListener('click', () => {
-    state.tool = { type: 'draw-feature', layer: 'aoi', kind: 'polygon' };
-    mapController.startDraw('polygon', { layer: 'aoi' });
-    renderMapHint('Draw the area of interest polygon. Press Escape to cancel.');
-  });
-  aoiGroup.append(
-    drawButton,
-    createElement('p', 'tool-hint', 'Redrawing replaces the current AOI.'),
-  );
-  container.append(aoiGroup);
+  container.append(renderAreaTools());
   if (state.study) container.append(renderWeatherPointGroup());
 
   const jumpGroup = createElement('div', 'field-group');
@@ -2667,21 +2634,7 @@ function renderStep1Worksheet() {
     }),
   );
 
-  const facts = createElement('dl', 'fact-list');
-  const bounds = study.bounds;
-  facts.append(
-    createElement('dt', null, 'AOI envelope'),
-    createElement(
-      'dd',
-      null,
-      bounds
-        ? `${formatMgrs(bounds[0], bounds[1])} → ${formatMgrs(bounds[2], bounds[3])}`
-        : 'Not drawn yet',
-    ),
-    createElement('dt', null, 'AOI area'),
-    createElement('dd', null, study.aoi ? formatArea(polygonAreaSquareKm(study.aoi)) : '—'),
-  );
-  container.append(facts);
+  container.append(renderAreaWorksheet());
   container.append(renderLightData(study));
   container.append(renderForecast(study));
 
@@ -2860,11 +2813,12 @@ function renderLightData(study) {
   return block;
 }
 
-/** The AOI centre, or the map centre until an AOI is drawn. */
+/** The AOI centre, else the AO centre, or the map centre until either is set. */
 function aoiLocation(study) {
-  if (study.aoi) {
-    const [lon, lat] = aoiCentre(study.aoi);
-    return { lon, lat, source: 'aoi' };
+  for (const source of ['aoi', 'ao']) {
+    if (!study[source]) continue;
+    const [lon, lat] = aoiCentre(study[source]);
+    return { lon, lat, source };
   }
   const [lon, lat] = mapController.getCenter();
   return { lon, lat, source: 'map' };
@@ -2879,7 +2833,8 @@ function weatherPoint(study) {
 const LOCATION_SOURCES = {
   set: 'Weather point',
   aoi: 'AOI centre',
-  map: 'Map centre (draw an AOI or set a weather point to fix it)',
+  ao: 'AO centre',
+  map: 'Map centre (set an AOI or a weather point to fix it)',
 };
 
 /** "AOI centre 33UXR80270827". */
@@ -2928,7 +2883,7 @@ function renderWeatherPointGroup() {
       'tool-hint',
       study.weather_point
         ? `Set to ${formatMgrs(point.lon, point.lat, 4)}.`
-        : `Automatic: ${point.source === 'aoi' ? 'the AOI centre' : 'the map centre until an AOI is drawn'}, ${formatMgrs(point.lon, point.lat, 4)}. Set a point for a specific place, e.g. a ridge, a valley or a landing zone.`,
+        : `Automatic: ${point.source === 'map' ? 'the map centre until an AOI is set' : `the ${point.source.toUpperCase()} centre`}, ${formatMgrs(point.lon, point.lat, 4)}. Set a point for a specific place, e.g. a ridge, a valley or a landing zone.`,
     ),
   );
   const row = createElement('div', 'inline-form');
@@ -6067,6 +6022,9 @@ export {
   renderStep3Worksheet,
   renderStep4Worksheet,
   renderToolPanel,
+  renderStep1Worksheet,
+  polygonAreaSquareKm,
+  jumpToCoordinate,
   renderMapHint,
   cancelActiveTool,
   showToast,

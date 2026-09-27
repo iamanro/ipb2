@@ -281,4 +281,6 @@ export const MIGRATIONS = [
     CHECK (owner_cell IN ('white', 'blue', 'red'));
   ALTER TABLE studies ADD COLUMN releasable_to TEXT NOT NULL DEFAULT '[]';
   `,
+  // The area of operations, beside the area of interest: a GeoJSON Polygon, or NULL.
+  `ALTER TABLE studies ADD COLUMN ao TEXT;`,
 ];

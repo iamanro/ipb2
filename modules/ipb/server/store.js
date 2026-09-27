@@ -22,6 +22,7 @@ import {
   withAffiliation,
 } from '../../../src/symbols/sidc.js';
 import { unitPropertiesProblem } from '../../../src/symbols/unitProperties.js';
+import { areaPolygonProblem } from '../../../src/areaPolygon.js';
 import { HttpError } from '../../../server/http.js';
 import { openState, transact } from '../../../server/state.js';
 import { sanitizeFilename, toGeoJson, toKml } from './export.js';
@@ -51,6 +52,7 @@ const NOTE_STEPS = ['step1', 'step2', 'step3', 'step4'];
 const STUDY_PATCH_FIELDS = [
   'name',
   'bounds',
+  'ao',
   'aoi',
   'notes',
   'weather_point',
@@ -658,6 +660,7 @@ export function shapeStudy(row) {
     id: row.id,
     name: row.name,
     bounds: row.bounds ? JSON.parse(row.bounds) : null,
+    ao: row.ao ? JSON.parse(row.ao) : null,
     aoi: row.aoi ? JSON.parse(row.aoi) : null,
     notes: JSON.parse(row.notes),
     weather_point: row.weather_point ? JSON.parse(row.weather_point) : null,
@@ -758,11 +761,10 @@ function validateStudyPatch(patch) {
       fields.name = value;
     } else if (key === 'bounds') {
       fields.bounds = validateBounds(value);
-    } else if (key === 'aoi') {
-      if (value !== null && !isGeometry(value)) {
-        throw new HttpError(400, 'aoi must be a GeoJSON geometry with type and coordinates.');
-      }
-      fields.aoi = value;
+    } else if (key === 'ao' || key === 'aoi') {
+      const problem = value === null ? null : areaPolygonProblem(value);
+      if (problem) throw new HttpError(400, `${key} ${problem}.`);
+      fields[key] = value === null ? null : { type: 'Polygon', coordinates: value.coordinates };
     } else if (key === 'notes') {
       fields.notes = validateNotes(value);
     } else if (key === 'weather_point') {
@@ -796,9 +798,10 @@ function applyStudyPatch(id, fields) {
     assignments.push('bounds = ?');
     params.push(fields.bounds ? JSON.stringify(fields.bounds) : null);
   }
-  if ('aoi' in fields) {
-    assignments.push('aoi = ?');
-    params.push(fields.aoi ? JSON.stringify(fields.aoi) : null);
+  for (const key of ['ao', 'aoi']) {
+    if (!(key in fields)) continue;
+    assignments.push(`${key} = ?`);
+    params.push(fields[key] ? JSON.stringify(fields[key]) : null);
   }
   if ('notes' in fields) {
     assignments.push('notes = ?');

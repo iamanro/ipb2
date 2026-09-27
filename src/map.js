@@ -411,6 +411,8 @@ const CONTOUR_STYLE = { dark: contourStyles('dark'), light: contourStyles('light
 // -- Feature overlay style --------------------------------------------------
 
 const LAYER_STYLE = {
+  // Area of operations: solid and heavier; the area of interest around it dashed.
+  ao: { color: '#ff7a3d', dash: null, width: 3, fillAlpha: 0 },
   aoi: { color: '#f2c94c', dash: [10, 6], width: 2, fillAlpha: 0 },
   mcoo: { color: '#8d6e63', dash: null, width: 1.5, fillAlpha: 0.18 },
   'key-terrain': { color: '#6d9c50', dash: null, width: 2.5, fillAlpha: 0.22 },
@@ -1241,6 +1243,8 @@ export function createMap(options) {
   let selectedId = null;
   let drawInteraction = null;
   let modifyInteraction = null;
+  /** The feature id `modifyInteraction` reshapes, so setFeatures can re-arm it. */
+  let modifyId = null;
   /** setSituation's `onSelect`, or null while the overlay is off. */
   let situationOnSelect = null;
 
@@ -1558,6 +1562,9 @@ export function createMap(options) {
       return feature;
     });
     featureSource.addFeatures(olFeatures);
+    // A feature being reshaped was just replaced by its fresh copy: keep
+    // reshaping that one, not the removed feature the interaction still holds.
+    if (modifyInteraction && modifyId !== null) startModify(modifyId);
   }
 
   function selectFeature(id) {
@@ -1726,6 +1733,7 @@ export function createMap(options) {
     if (!modifyInteraction) return;
     map.removeInteraction(modifyInteraction);
     modifyInteraction = null;
+    modifyId = null;
   }
 
   function startModify(id) {
@@ -1735,6 +1743,7 @@ export function createMap(options) {
     if (!feature) return;
     const modifySource = new VectorSource({ features: [feature] });
     modifyInteraction = new Modify({ source: modifySource });
+    modifyId = id;
     modifyInteraction.on('modifyend', () => {
       const geometry = geoJsonFormat.writeGeometryObject(feature.getGeometry(), GEOJSON_OPTIONS);
       if (onFeatureChange) onFeatureChange({ id, geometry });

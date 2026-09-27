@@ -1,0 +1,92 @@
+/* AO/AOI (areas.js): tools rows, the corner table and the corner editor.
+ * Same tokens as styles.css; only classes that file doesn't define. */
+@layer components {
+  [data-module='ipb'] {
+    .area-tool {
+      display: grid;
+      gap: 6px;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .area-tool-title {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 6px;
+      margin: 0;
+      font: var(--t-md) / 1.3 var(--body);
+    }
+
+    .area-tool-summary {
+      margin-left: auto;
+      color: var(--muted);
+      font: var(--t-sm) / 1.3 var(--data);
+    }
+
+    .area-sheet {
+      display: grid;
+      gap: 12px;
+    }
+
+    .area-sheet-area h4 {
+      margin: 0 0 6px;
+    }
+
+    .area-corners-details summary {
+      color: var(--muted);
+      font: 600 var(--t-sm) / 1.6 var(--data);
+      cursor: pointer;
+    }
+
+    .area-corners {
+      margin: 6px 0;
+    }
+
+    /* Four narrow columns fit the worksheet sheet: no data-table minimum. */
+    .data-table.area-corners {
+      min-width: 0;
+    }
+
+    .data-table.area-corners :is(th, td) {
+      padding: 5px 4px;
+    }
+
+    .area-corners .area-coordinate {
+      font: var(--t-sm) / 1.3 var(--data);
+      white-space: nowrap;
+    }
+
+    .area-corners .text-button {
+      min-height: 0;
+      padding: 0 4px;
+    }
+
+    .area-editor {
+      width: min(560px, 94vw);
+      max-width: none;
+    }
+
+    .area-editor-text {
+      min-height: 200px;
+      font: var(--t-md) / 1.5 var(--data);
+      white-space: pre;
+    }
+
+    .area-editor-status {
+      margin: 0;
+      color: var(--muted);
+      font: var(--t-sm) / 1.4 var(--data);
+    }
+
+    .area-editor-status.inline-error {
+      color: var(--danger);
+    }
+
+    @media print {
+      .area-corners-details .draw-buttons {
+        display: none;
+      }
+    }
+  }
+}

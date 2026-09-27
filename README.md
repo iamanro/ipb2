@@ -484,6 +484,11 @@ track or report takes priority over the map's normal feature click.
 
 Beyond the terrain/threat basics, a study also holds:
 
+- **`ao`** and **`aoi`**: the area of operations and area of interest, each a
+  GeoJSON `Polygon` (WGS84, closed rings, at least 3 different corners, at
+  most 5,000) or `null`, set by `PATCH studies/:id` and checked against
+  `src/areaPolygon.js`. The weather point and light data default to the AOI
+  centre, else the AO centre.
 - **Units, tactical graphics and range rings** as `features` (`layer` `unit` /
   `graphic` / `range-ring`): a unit is a `symbol`-kind point with a
   `properties.sidc`; a graphic is a line or polygon with a
@@ -615,10 +620,20 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      White additionally gets a **Reassign** owner select. The printed
      classification banner names the owning cell next to the marking (e.g.
      "UNCLASSIFIED // EXERCISE — BLUE").
-   - _Step 1_: AOI, light data, forecast and the **weather effects matrix**
+   - _Step 1_: the **area of operations (AO)** and **area of interest
+     (AOI)**, light data, forecast and the **weather effects matrix**
      (favourable/marginal/unfavourable per system and forecast block, against
      editable thresholds), the study's **classification marking** (printed top
-     and bottom of every page), GeoJSON/KML import and export.
+     and bottom of every page), GeoJSON/KML import and export. Each area is
+     drawn on the map (click the corners, double-click the last), typed or
+     pasted with **Enter coordinates…** (one corner per line in MGRS, UTM,
+     DMS or decimal degrees, latitude first), reshaped by dragging corners
+     (**Reshape**, or right-click its outline), or cleared. The worksheet
+     lists every corner in MGRS and decimal degrees (6 places), with **Copy
+     as MGRS / Decimal degrees**; a corner's number centres the map on it.
+     Saving the editor's text unchanged keeps every corner exactly where it
+     was, whatever notation it is shown in. The study's bounds (map zoom,
+     terrain analyses, `build_satellite.mjs --study`) cover both areas.
    - _Step 2_: OAKOC analyses (MCOO, viewshed, key terrain, avenues) and the
      **civil considerations** matrix (ASCOPE × PMESII-PT).
    - _Step 3_: threats with APP-6 symbols (the symbol picker, or **Import from
