@@ -204,7 +204,7 @@ async function commitHHour(study, text) {
 }
 
 export function renderHHourField(study, { canEdit }) {
-  const group = createElement('div', 'field-group');
+  const group = createElement('div', 'field-group h-hour-field');
   group.append(createElement('h3', null, 'H-hour'));
   const row = createElement('div', 'inline-form');
   const input = document.createElement('input');
@@ -380,7 +380,7 @@ function renderPhaseRow(phase, index, total, canEdit) {
 }
 
 export function renderPhasesSection(canEdit) {
-  const section = createElement('section', 'worksheet-block');
+  const section = createElement('section', 'worksheet-block phases-block');
   const heading = createElement('div', 'custom-layers-header');
   heading.append(createElement('h4', null, 'Phases'));
   if (canEdit) {
@@ -620,7 +620,7 @@ function renderDecisionPointCard(dp, index, total, canEdit) {
 }
 
 export function renderDecisionPointsSection(canEdit) {
-  const section = createElement('section', 'worksheet-block');
+  const section = createElement('section', 'worksheet-block decision-points-block');
   const heading = createElement('div', 'custom-layers-header');
   heading.append(createElement('h4', null, 'Decision points'));
   if (canEdit) {

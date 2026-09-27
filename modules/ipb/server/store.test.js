@@ -131,6 +131,23 @@ describe('openStore: studies', () => {
     expect(store.readStudy(id).study).toMatchObject({ ao: null, aoi });
   });
 
+  test("the guide's hand-checked tasks are saved deduplicated, and must be short slugs", () => {
+    const { id } = store.createStudy({ name: 'Guide' });
+    expect(store.readStudy(id).study.checked).toEqual([]);
+    store.updateStudy(id, { checked: ['weather', 'marking', 'weather'] });
+    expect(store.readStudy(id).study.checked).toEqual(['marking', 'weather']);
+    for (const bad of [
+      'weather',
+      [1],
+      ['Has Space'],
+      ['x'.repeat(41)],
+      Array.from({ length: 61 }, (_, i) => `t${i}`),
+    ]) {
+      expectStatus(() => store.updateStudy(id, { checked: bad }), 400);
+    }
+    expect(store.readStudy(id).study.checked).toEqual(['marking', 'weather']);
+  });
+
   test('rejects a blank or missing name', () => {
     expectStatus(() => store.createStudy({ name: '' }), 400);
     expectStatus(() => store.createStudy({}), 400);

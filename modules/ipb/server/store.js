@@ -59,6 +59,7 @@ const STUDY_PATCH_FIELDS = [
   'h_hour',
   'classification',
   'weather_thresholds',
+  'checked',
 ];
 /** A study create body may carry the ownership fields `server/dispatch.js`
  * itself reads (`owner_cell`, `releasable_to`) — resolved into `owner`
@@ -311,6 +312,24 @@ function validateBounds(value) {
     throw new HttpError(400, 'bounds must satisfy west < east and south < north.');
   }
   return value;
+}
+
+const MAX_CHECKED_TASKS = 60;
+const TASK_ID = /^[a-z0-9-]{1,40}$/;
+
+/** The guide's hand-checked task ids: distinct short slugs, sorted. */
+function validateChecked(value) {
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_CHECKED_TASKS ||
+    !value.every((id) => typeof id === 'string' && TASK_ID.test(id))
+  ) {
+    throw new HttpError(
+      400,
+      `checked must be an array of at most ${MAX_CHECKED_TASKS} task ids (a-z, 0-9, -).`,
+    );
+  }
+  return [...new Set(value)].sort();
 }
 
 /** `{ lon, lat }` in range, or null for "derive from the AOI". */
@@ -661,6 +680,7 @@ export function shapeStudy(row) {
     name: row.name,
     bounds: row.bounds ? JSON.parse(row.bounds) : null,
     ao: row.ao ? JSON.parse(row.ao) : null,
+    checked: JSON.parse(row.checked ?? '[]'),
     aoi: row.aoi ? JSON.parse(row.aoi) : null,
     notes: JSON.parse(row.notes),
     weather_point: row.weather_point ? JSON.parse(row.weather_point) : null,
@@ -777,6 +797,8 @@ function validateStudyPatch(patch) {
     } else if (key === 'classification') {
       if (typeof value !== 'string') throw new HttpError(400, 'classification must be a string.');
       fields.classification = value;
+    } else if (key === 'checked') {
+      fields.checked = validateChecked(value);
     } else if (key === 'weather_thresholds') {
       if (value !== null && (typeof value !== 'object' || Array.isArray(value))) {
         throw new HttpError(400, 'weather_thresholds must be a JSON object, or null.');
@@ -818,6 +840,10 @@ function applyStudyPatch(id, fields) {
   if ('classification' in fields) {
     assignments.push('classification = ?');
     params.push(fields.classification);
+  }
+  if ('checked' in fields) {
+    assignments.push('checked = ?');
+    params.push(JSON.stringify(fields.checked));
   }
   if ('weather_thresholds' in fields) {
     assignments.push('weather_thresholds = ?');

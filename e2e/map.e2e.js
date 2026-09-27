@@ -139,6 +139,8 @@ test('a point added by clicking the map keeps its name and multi-line note', asy
     await request.post(`/api/ipb/studies/${study.id}/layers`, { data: { name: 'Contacts' } })
   ).json();
   await page.reload();
+  // Custom layers live under the guide's "More tools".
+  await page.getByText('More tools').click();
   await page.locator('.custom-layer-name', { hasText: 'Contacts' }).click();
   await page.getByRole('button', { name: 'Add on map' }).click();
   const box = await page.locator('.ol-viewport').boundingBox();
@@ -158,6 +160,7 @@ test('a point added by clicking the map keeps its name and multi-line note', asy
     .poll(async () => (await (await request.get(`/api/ipb/studies/${study.id}`)).json()).points)
     .toMatchObject([{ layer_id: layer.id, name: 'Contact A', note: 'Two BMPs\nmoving north' }]);
   await page.reload();
+  await page.getByText('More tools').click();
   await page.locator('.custom-layer-name', { hasText: 'Contacts' }).click();
   await expect(page.locator('.custom-point')).toContainText('Contact A');
 });
@@ -200,4 +203,35 @@ test('coming back to IPB from another module reopens the study and step', async 
   await page.getByRole('link', { name: 'IPB' }).click();
   await expectStudyOpen(page, study);
   await expect(page).toHaveURL(new RegExp(`study=${study.id}&step=3`));
+});
+
+test('the guide opens the first task, ticks it from the data and moves on with Next', async ({
+  page,
+  request,
+}) => {
+  const study = await openStudy(page, request);
+  const task = (id) => page.locator(`.guide-task[data-task="${id}"]`);
+  await expect(task('ao').locator('.guide-task-head')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.step-tab[data-step="1"] .step-progress')).toHaveText('0/4');
+
+  await task('ao').getByRole('button', { name: 'Enter coordinates…' }).click();
+  await page.locator('.area-editor-text').fill('49.65, 17.40\n49.65, 17.55\n49.75, 17.55');
+  await page.locator('.area-editor .dialog-accept').click();
+  await expect(task('ao')).toHaveAttribute('data-status', 'done');
+  await expect(page.locator('.step-tab[data-step="1"] .step-progress')).toHaveText('1/4');
+
+  await task('ao')
+    .getByRole('button', { name: /Next: 1\.2 Area of interest/ })
+    .click();
+  await expect(task('aoi').locator('.guide-task-head')).toHaveAttribute('aria-expanded', 'true');
+
+  // A review task is ticked by hand, shared through the study.
+  await task('weather').locator('.guide-task-head').click();
+  await task('weather').getByRole('button', { name: 'Mark done / skip' }).click();
+  await expect(task('weather')).toHaveAttribute('data-status', 'checked');
+  await expect
+    .poll(
+      async () => (await (await request.get(`/api/ipb/studies/${study.id}`)).json()).study.checked,
+    )
+    .toEqual(['weather']);
 });

@@ -283,4 +283,7 @@ export const MIGRATIONS = [
   `,
   // The area of operations, beside the area of interest: a GeoJSON Polygon, or NULL.
   `ALTER TABLE studies ADD COLUMN ao TEXT;`,
+  // The IPB guide's tasks the study's cell marked done by hand (a JSON array
+  // of task ids); tasks with data behind them tick themselves off instead.
+  `ALTER TABLE studies ADD COLUMN checked TEXT NOT NULL DEFAULT '[]';`,
 ];

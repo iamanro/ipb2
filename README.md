@@ -611,6 +611,17 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
    - IPB reopens the study and step each user last had open (remembered per
      browser and account); when a cell can see only one study it opens that
      one, and otherwise the study menu opens to pick one.
+   - **The guide**: the tools panel walks the four steps as numbered tasks
+     (1.1 Area of operations … 4.6 Hand over to collection,
+     `modules/ipb/client/guideTasks.js`). One task is open at a time with a
+     one-line "what and why", only its own controls, links that scroll the
+     worksheet to what it fills in, and **Next**. A task ticks itself off
+     when its data exists (e.g. an AO is set, the MCOO has run, both COA
+     kinds exist); review tasks (light and weather, hand-over) and anything
+     that does not apply are ticked with **Mark done / skip**, stored on the
+     study (`checked`) so the whole cell sees it. Each step tab shows its
+     progress (e.g. 2/4). Jump to coordinate, GeoJSON/KML import and export,
+     and custom layers sit under **More tools**.
    - Every study belongs to a cell (White/Blue/Red): it defaults to the
      creator's own cell (White may pick any cell when creating one), is
      visible only to that cell, White/admins, and any cell it's been

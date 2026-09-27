@@ -281,55 +281,47 @@ export async function editAreaCoordinates(key) {
 
 // -- tools panel -----------------------------------------------------------------
 
-/** Step 1 tools: per area, draw / enter coordinates / reshape / clear. */
-export function renderAreaTools() {
-  const group = createElement('div', 'field-group');
-  group.append(createElement('h3', null, 'Areas'));
-  const study = state.study?.study;
-  for (const { key, short, name } of STUDY_AREAS) {
-    const geometry = study?.[key];
-    const row = createElement('div', 'area-tool');
-    const title = createElement('p', 'area-tool-title');
-    title.append(createElement('strong', null, short), ` ${name}`);
-    const summary = createElement(
-      'span',
+/** The guide's AO or AOI task: its size, and draw / enter coordinates / reshape / clear. */
+export function renderAreaTool(key) {
+  const geometry = state.study?.study?.[key];
+  const row = createElement('div', 'area-tool');
+  row.append(
+    createElement(
+      'p',
       'area-tool-summary',
       geometry
         ? `${areaCorners(geometry).length} corners · ${formatArea(polygonAreaSquareKm(geometry))}`
-        : 'Not set',
-    );
-    title.append(summary);
-    const buttons = createElement('div', 'draw-buttons');
-    const draw = editable(createElement('button', 'chip-button', geometry ? 'Redraw' : 'Draw'));
-    draw.type = 'button';
-    draw.addEventListener('click', () => armAreaDraw(key));
-    const coordinates = editable(
-      createElement('button', 'chip-button', geometry ? 'Coordinates…' : 'Enter coordinates…'),
-    );
-    coordinates.type = 'button';
-    coordinates.addEventListener('click', () => editAreaCoordinates(key));
-    buttons.append(draw, coordinates);
-    if (geometry) {
-      const reshape = editable(createElement('button', 'chip-button', 'Reshape'));
-      reshape.type = 'button';
-      reshape.title = 'Drag its corners on the map; drag the middle of a side to add a corner';
-      reshape.addEventListener('click', () => armAreaReshape(key));
-      const clear = editable(createElement('button', 'chip-button', 'Clear'));
-      clear.type = 'button';
-      clear.addEventListener('click', () => clearArea(key));
-      buttons.append(reshape, clear);
-    }
-    row.append(title, buttons);
-    group.append(row);
-  }
-  group.append(
-    createElement(
-      'p',
-      'tool-hint',
-      'The AO is where the unit operates; the AOI around it, where the threat and terrain can affect it. Terrain analyses and the map cover both.',
+        : 'Not set yet.',
     ),
   );
-  return group;
+  const buttons = createElement('div', 'draw-buttons');
+  const draw = editable(
+    createElement(
+      'button',
+      geometry ? 'chip-button' : 'primary-button',
+      geometry ? 'Redraw' : 'Draw on map',
+    ),
+  );
+  draw.type = 'button';
+  draw.addEventListener('click', () => armAreaDraw(key));
+  const coordinates = editable(
+    createElement('button', 'chip-button', geometry ? 'Coordinates…' : 'Enter coordinates…'),
+  );
+  coordinates.type = 'button';
+  coordinates.addEventListener('click', () => editAreaCoordinates(key));
+  buttons.append(draw, coordinates);
+  if (geometry) {
+    const reshape = editable(createElement('button', 'chip-button', 'Reshape'));
+    reshape.type = 'button';
+    reshape.title = 'Drag its corners on the map; drag the middle of a side to add a corner';
+    reshape.addEventListener('click', () => armAreaReshape(key));
+    const clear = editable(createElement('button', 'chip-button', 'Clear'));
+    clear.type = 'button';
+    clear.addEventListener('click', () => clearArea(key));
+    buttons.append(reshape, clear);
+  }
+  row.append(buttons);
+  return row;
 }
 
 // -- worksheet -------------------------------------------------------------------
