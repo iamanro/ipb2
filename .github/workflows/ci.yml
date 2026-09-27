@@ -52,16 +52,31 @@ jobs:
           retention-days: 7
 
   docker:
-    name: Docker image builds
+    name: Docker image builds and starts
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
-      # Build only; nothing is pushed or deployed.
+      # Build and load locally; nothing is pushed or deployed.
       - uses: docker/build-push-action@v7
         with:
           context: .
           push: false
+          load: true
+          tags: ipb:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The runtime image copies only the src/ files the server imports
+      # (Dockerfile); a new one missing there fails here, not on the server.
+      - name: Server starts in the image
+        run: |
+          docker run -d --name ipb-ci -e IPB_ADMIN_PASSWORD=ci-bootstrap-password ipb:ci
+          for attempt in $(seq 1 30); do
+            if docker exec ipb-ci node -e "fetch('http://127.0.0.1:8000/api/auth/me').then((r) => process.exit(r.status < 500 ? 0 : 1), () => process.exit(1))"; then
+              echo "server up"; exit 0
+            fi
+            sleep 1
+          done
+          docker logs ipb-ci
+          exit 1

@@ -39,8 +39,8 @@ COPY modules/exercise/server ./modules/exercise/server
 COPY modules/ipb/server ./modules/ipb/server
 COPY modules/orbat/server ./modules/orbat/server
 COPY modules/terrain/server ./modules/terrain/server
-COPY src/dtg.js src/geo.js ./src/
-COPY src/symbols/sidc.js src/symbols/symbology.js ./src/symbols/
+COPY src/dtg.js src/geo.js src/areaPolygon.js ./src/
+COPY src/symbols/sidc.js src/symbols/symbology.js src/symbols/unitProperties.js ./src/symbols/
 
 RUN mkdir -p /data /state && chown -R node:node /app /data /state
 USER node
