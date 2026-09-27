@@ -21,6 +21,7 @@ import {
   parseSidc,
   withAffiliation,
 } from '../../../src/symbols/sidc.js';
+import { unitPropertiesProblem } from '../../../src/symbols/unitProperties.js';
 import { HttpError } from '../../../server/http.js';
 import { openState, transact } from '../../../server/state.js';
 import { sanitizeFilename, toGeoJson, toKml } from './export.js';
@@ -560,6 +561,8 @@ function validateFeatureSemantics(studyId, effective) {
     // every reader — the map, exports, other clients — sees one dense
     // 20-digit form regardless of how it was typed.
     props.sidc = canonicalSidc;
+    const problem = unitPropertiesProblem(props);
+    if (problem) throw new HttpError(400, problem);
   } else if (layer === 'graphic') {
     if (kind !== 'graphic') {
       throw new HttpError(400, 'A graphic feature must have kind "graphic".');

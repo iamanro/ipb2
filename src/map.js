@@ -39,6 +39,7 @@ import { TACTICAL_GRAPHICS, graphicColor, graphicLabel, rangeRingGeometry } from
 import { createMeasureController } from './measure.js';
 import { withStatus } from './symbols/sidc.js';
 import { createSymbol } from './symbols/symbol.js';
+import { unitSymbolOptions } from './symbols/unitProperties.js';
 
 const MAP_PROJECTION = 'EPSG:3857';
 /** Amplifier text on map symbols; the symbols' light outline carries it on dark imagery. */
@@ -498,6 +499,9 @@ function buildArrowStyle(geometry, color) {
   });
 }
 
+/** Map symbol sizes (milsymbol `size`, the frame's height in px), chosen per map. */
+export const SYMBOL_SIZES = { small: 20, medium: 28, large: 40 };
+
 /**
  * A cached milsymbol icon, keyed by every option that changes its pixels (a
  * shared cache keyed on sidc alone would leak one feature's designation,
@@ -505,33 +509,43 @@ function buildArrowStyle(geometry, color) {
  * planned/anticipated dashed frame is a field of the SIDC itself
  * (`src/symbols/sidc.js`'s `withStatus`), not a milsymbol render option —
  * milsymbol derives the frame purely from the code it is given.
+ * `amplifiers` are milsymbol text/graphic amplifier options.
  */
-function milSymbolIcon(iconCache, { sidc, size = 28, designation, dtg, opacity = 1 }) {
-  const key = `${sidc}|${size}|${designation || ''}|${dtg || ''}|${opacity}`;
-  let icon = iconCache.get(key);
+function milSymbolIcon(symbols, { sidc, amplifiers = {}, opacity = 1 }) {
+  const { cache, size } = symbols;
+  const key = `${sidc}|${size}|${opacity}|${JSON.stringify(amplifiers)}`;
+  let icon = cache.get(key);
   if (!icon) {
     // Same APP-6 drawing as ORBAT and the picker; a canvas can't resolve the
     // shared default `currentColor`, so the amplifier text gets real ink.
-    const canvas = createSymbol(sidc, {
-      size,
-      uniqueDesignation: designation,
-      dtg,
-      infoColor: MAP_SYMBOL_INK,
-    }).asCanvas();
-    icon = new IconStyle({ img: canvas, imgSize: [canvas.width, canvas.height], opacity });
-    iconCache.set(key, icon);
+    const symbol = createSymbol(sidc, { ...amplifiers, size, infoColor: MAP_SYMBOL_INK });
+    const canvas = symbol.asCanvas();
+    // The symbol's own insertion point, not the canvas centre: amplifier
+    // text, an HQ staff or a direction arrow make the canvas lopsided.
+    const anchor = symbol.getAnchor();
+    icon = new IconStyle({
+      img: canvas,
+      imgSize: [canvas.width, canvas.height],
+      anchor: [anchor.x, anchor.y],
+      anchorXUnits: 'pixels',
+      anchorYUnits: 'pixels',
+      opacity,
+    });
+    cache.set(key, icon);
   }
   return icon;
 }
 
-/** A `symbol`-kind feature: the SIDC icon, plus optional `designation`/`dtg` milsymbol modifiers. */
-function buildSymbolStyle(properties, label, iconCache) {
-  const icon = milSymbolIcon(iconCache, {
+/** A `symbol`-kind feature: the SIDC icon with its amplifiers
+ * (`src/symbols/unitProperties.js`). The feature's label is drawn only when
+ * no unique designation (T) already names it beside the frame. */
+function buildSymbolStyle(properties, label, symbols) {
+  const icon = milSymbolIcon(symbols, {
     sidc: properties.sidc,
-    designation: properties.designation,
-    dtg: properties.dtg,
+    amplifiers: unitSymbolOptions(properties),
   });
-  return new Style({ image: icon, text: label ? buildLabelText(label, 'Point') : undefined });
+  const text = label && !properties.designation ? buildLabelText(label, 'Point') : undefined;
+  return new Style({ image: icon, text });
 }
 
 function buildSelectionHalo(geometry) {
@@ -591,7 +605,7 @@ function buildRangeRingStyle(feature, properties, darkBase) {
   return styles;
 }
 
-function buildFeatureStyle(feature, iconCache, darkBase) {
+function buildFeatureStyle(feature, symbols, darkBase) {
   const layerName = feature.get('layer');
   const kind = feature.get('kind');
   const properties = feature.get('properties') || {};
@@ -609,7 +623,7 @@ function buildFeatureStyle(feature, iconCache, darkBase) {
   if (kind === 'range-ring') return buildRangeRingStyle(feature, properties, darkBase);
 
   if (properties.sidc) {
-    return [buildSymbolStyle(properties, label, iconCache)];
+    return [buildSymbolStyle(properties, label, symbols)];
   }
 
   const config = layerConfig(layerName);
@@ -667,7 +681,6 @@ function buildFeatureStyle(feature, iconCache, darkBase) {
 
 // -- Situation overlay style (setSituation: Exercise's current tracks/reports) --
 
-const TRACK_ICON_SIZE = 30;
 /** `destroyed`/`lost` tracks fade instead of disappearing — still on the map, marked as no longer live. */
 const TRACK_FADED_OPACITY = 0.4;
 const SITUATION_LABEL_FONT = '700 11px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif';
@@ -676,15 +689,16 @@ const REPORT_LABEL_MAX_RESOLUTION = 38.22;
 const REPORT_INK = '#e6c229';
 
 /** A track's icon: designation + DTG via milsymbol modifiers, `suspected` dashed (planned), `destroyed`/`lost` faded. */
-function situationTrackStyle(feature, iconCache) {
+function situationTrackStyle(feature, symbols) {
   const track = feature.get('track');
   const opacity = track.status === 'destroyed' || track.status === 'lost' ? TRACK_FADED_OPACITY : 1;
   const sidc = track.status === 'suspected' ? withStatus(track.sidc, 'planned') : track.sidc;
-  const icon = milSymbolIcon(iconCache, {
+  const icon = milSymbolIcon(symbols, {
     sidc,
-    size: TRACK_ICON_SIZE,
-    designation: track.designation,
-    dtg: track.observed_at ? formatDtg(new Date(track.observed_at).getTime()) : undefined,
+    amplifiers: unitSymbolOptions({
+      designation: track.designation,
+      dtg: track.observed_at ? formatDtg(new Date(track.observed_at).getTime()) : undefined,
+    }),
     opacity,
   });
   return new Style({ image: icon });
@@ -1219,7 +1233,8 @@ export function createMap(options) {
   } = options;
 
   const geoJsonFormat = new GeoJSON();
-  const iconCache = new Map();
+  // Icons drawn at the map's current symbol size; setSymbolSize redraws.
+  const symbols = { cache: new Map(), size: SYMBOL_SIZES.medium };
   const gridLayers = new Map();
   const listenerKeys = [];
   const domCleanups = [];
@@ -1287,7 +1302,7 @@ export function createMap(options) {
       if (geometry && selectedId !== null && feature.getId() === selectedId) {
         styles.push(buildSelectionHalo(geometry));
       }
-      styles.push(...buildFeatureStyle(feature, iconCache, darkBase));
+      styles.push(...buildFeatureStyle(feature, symbols, darkBase));
       return styles;
     },
   });
@@ -1301,7 +1316,7 @@ export function createMap(options) {
     style: (feature, resolution) => {
       switch (feature.get('situationKind')) {
         case 'track':
-          return situationTrackStyle(feature, iconCache);
+          return situationTrackStyle(feature, symbols);
         case 'track-history':
           return SITUATION_HISTORY_STYLE;
         case 'track-history-dot':
@@ -2254,6 +2269,31 @@ export function createMap(options) {
     }),
   );
 
+  /** Redraws every unit and track symbol at `size` px (see SYMBOL_SIZES). */
+  function setSymbolSize(size) {
+    if (!Number.isFinite(size) || size === symbols.size) return;
+    symbols.size = size;
+    symbols.cache.clear();
+    featureLayer.changed();
+    situationLayer.changed();
+  }
+
+  /** `[lon, lat]` under a viewport point (e.g. where something was dropped), or null outside the map. */
+  function lonLatAtClient(clientX, clientY) {
+    const rect = map.getViewport().getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+    const coordinate = map.getCoordinateFromPixel([x, y]);
+    return coordinate ? toLonLat(coordinate, MAP_PROJECTION) : null;
+  }
+
+  /** `[lon, lat]` that lies `dx`, `dy` screen px from `lonLat` at the current view. */
+  function offsetLonLat(lonLat, dx, dy) {
+    const pixel = map.getPixelFromCoordinate(fromLonLat(lonLat, MAP_PROJECTION));
+    return toLonLat(map.getCoordinateFromPixel([pixel[0] + dx, pixel[1] + dy]), MAP_PROJECTION);
+  }
+
   function setMgrsGrid(visible) {
     mgrsLayer.setVisible(visible);
     if (visible) renderMgrsGrid();
@@ -2271,7 +2311,7 @@ export function createMap(options) {
     domCleanups.length = 0;
     gridLayers.forEach((entry) => entry.layer.setSource(null));
     gridLayers.clear();
-    iconCache.clear();
+    symbols.cache.clear();
     featureSource.clear();
     situationSource.clear();
     sketchSource.clear();
@@ -2302,6 +2342,9 @@ export function createMap(options) {
     setOverlays,
     setWeather,
     setMgrsGrid,
+    setSymbolSize,
+    lonLatAtClient,
+    offsetLonLat,
     setScenario,
     setSituation,
     setRegions,

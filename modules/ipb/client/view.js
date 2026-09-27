@@ -6,7 +6,12 @@ import { lightData } from '../../../src/astro.js';
 import { formatDtg } from '../../../src/dtg.js';
 import { formatArea, formatMetres, formatMgrs, parseCoordinate } from '../../../src/geo.js';
 import { clientId, subscribe } from '../../../src/live.js';
-import { buildScenarioNameIndex, createMap, matchScenarioPlace } from '../../../src/map.js';
+import {
+  SYMBOL_SIZES,
+  buildScenarioNameIndex,
+  createMap,
+  matchScenarioPlace,
+} from '../../../src/map.js';
 import { canEditClient, renderCellBadge, renderReleaseControl } from '../../../src/release.js';
 import {
   can,
@@ -42,7 +47,15 @@ import {
   renderExchangeTools,
 } from './exchange.js';
 import { initMapToolbar, renderGraphicsAndRingsList } from './mapTools.js';
-import { handleUnitPlaced, renderSitempTools, renderSitempWorksheet } from './sitemp.js';
+import {
+  filterByCoa,
+  handleSitempClick,
+  initSitemp,
+  refreshOrbatLinks,
+  renderSitempTools,
+  renderSitempWorksheet,
+  unitMenuItems,
+} from './sitemp.js';
 import { destroySituation, renderSituationOverlayRow, setSituationEnabled } from './situation.js';
 import {
   destroyTimeline,
@@ -276,6 +289,7 @@ function loadMapView() {
       ...Object.fromEntries(WEATHER_OVERLAYS.map((overlay) => [overlay.id, false])),
     },
     grid: true,
+    symbolSize: 'medium',
   };
   try {
     const saved = JSON.parse(window.localStorage.getItem(MAP_VIEW_KEY) ?? 'null');
@@ -284,6 +298,7 @@ function loadMapView() {
       if (typeof saved?.overlays?.[id] === 'boolean') view.overlays[id] = saved.overlays[id];
     }
     if (typeof saved?.grid === 'boolean') view.grid = saved.grid;
+    if (Object.hasOwn(SYMBOL_SIZES, saved?.symbolSize ?? '')) view.symbolSize = saved.symbolSize;
   } catch {
     // Unreadable or blocked storage: fall back to the defaults above.
   }
@@ -294,7 +309,12 @@ function saveMapView() {
   try {
     window.localStorage.setItem(
       MAP_VIEW_KEY,
-      JSON.stringify({ basemap: state.basemap, overlays: state.overlays, grid: state.grid }),
+      JSON.stringify({
+        basemap: state.basemap,
+        overlays: state.overlays,
+        grid: state.grid,
+        symbolSize: state.symbolSize,
+      }),
     );
   } catch {
     // Storage full or blocked: the choice just won't survive a reload.
@@ -355,6 +375,13 @@ function createState() {
     /** SITEMP (step 4): show every COA's units/graphics instead of only the
      * selected one's — a plain toggle, not persisted (like selectedCoaId). */
     showAllCoas: false,
+    /** SITEMP placement: new units go on every COA instead of the selected one. */
+    unitsOnEveryCoa: false,
+    /** SITEMP placement: the affiliation a custom symbol's picker opens on. */
+    customAffiliation: 'hostile',
+    /** ORBAT id -> its units (null when this user can't load it), for units
+     * placed from an ORBAT; filled by sitemp.js's refreshOrbatLinks. */
+    orbatUnits: new Map(),
     /** The custom layer expanded in the panel (its points listed, add form shown). */
     activeLayerId: null,
     terrainMeta: null,
@@ -419,6 +446,7 @@ function queryElements(root) {
     pointerMgrs: pick('#pointer-mgrs'),
     pointerElevation: pick('#pointer-elevation'),
     gridToggle: pick('#grid-toggle'),
+    symbolSizeSwitch: pick('#symbol-size-switch'),
     mapMenuToggle: pick('#map-menu-toggle'),
     mapMenuLabel: pick('#map-menu-label'),
     mapPopover: pick('#map-popover'),
@@ -954,6 +982,7 @@ async function selectStudy(id, { preserveFeature = false } = {}) {
   state.avenues.routes = null;
   state.mobility.grid = null;
   state.tool = null;
+  state.orbatUnits = new Map();
   renderEmptyState();
   try {
     const payload = await requestJson(`${API}/studies/${id}`, {
@@ -963,6 +992,7 @@ async function selectStudy(id, { preserveFeature = false } = {}) {
     state.study = payload;
     renderStudyLoaded();
     writeLocation();
+    refreshOrbatLinks().catch(() => {});
   } catch (error) {
     if (error.name === 'AbortError') return;
     showError(elements.toolPanel, error.message);
@@ -1066,6 +1096,7 @@ async function refetchOpenStudy() {
     });
     state.study = payload;
     renderStudyLoaded();
+    await refreshOrbatLinks();
   } catch (error) {
     if (error.name !== 'AbortError') showError(elements.toolPanel, error.message);
   }
@@ -1225,13 +1256,8 @@ function visibleFeatures() {
     // NAI and TAI stay visible: the event template ties them to the COAs.
     features.push(...byLayer('nai'), ...byLayer('tai'));
     // A COA's own sketches and placed units (SITEMP) show only for the
-    // selected COA, unless "show all COAs" is on.
-    const coaFiltered = (list) =>
-      state.selectedCoaId && !state.showAllCoas
-        ? list.filter(
-            (feature) => String(feature.properties?.coa_id) === String(state.selectedCoaId),
-          )
-        : list;
+    // selected COA, unless "show all COAs" is on; those with no COA show on every COA.
+    const coaFiltered = (list) => filterByCoa(list, state.selectedCoaId, state.showAllCoas);
     features.push(...coaFiltered(byLayer('coa')), ...coaFiltered(byLayer('unit')));
   }
   const marker = (id, label, { lon, lat }, layer = 'note', properties = {}) => ({
@@ -2252,6 +2278,17 @@ function buildFeatureContextMenu(featureId, lon, lat) {
     feature.kind === 'point' || feature.kind === 'symbol'
       ? feature.geometry.coordinates
       : [lon, lat];
+  if (feature.layer === 'unit') {
+    return filterMenuForRole([
+      ...unitMenuItems(feature),
+      { label: 'Zoom to', action: () => mapController.fitFeature(feature.id), mutating: false },
+      {
+        label: 'Copy coordinates',
+        action: () => copyCoordinates(pointLon, pointLat),
+        mutating: false,
+      },
+    ]);
+  }
   return filterMenuForRole([
     { label: 'Zoom to', action: () => mapController.fitFeature(feature.id), mutating: false },
     { label: 'Rename', action: () => renameFeature(feature) },
@@ -2322,6 +2359,7 @@ function onMapClick({ lon, lat }) {
     if (state.step === 2) showElevationReadout(lon, lat);
     return;
   }
+  if (handleSitempClick(lon, lat)) return;
   if (tool.type === 'los-pick') {
     handleLosPick(lon, lat);
     return;
@@ -2404,10 +2442,6 @@ function onMapDraw({ kind, geometry }) {
   if (!(can('analyst') && canEditStudy())) {
     state.tool = null;
     mapController.cancelDraw();
-    return;
-  }
-  if (tool.type === 'place-unit') {
-    handleUnitPlaced(tool, geometry);
     return;
   }
   if (tool.type !== 'draw-feature') return;
@@ -5842,6 +5876,14 @@ export function mount({ root, status }) {
   });
   mapController.setMgrsGrid(state.grid);
   elements.gridToggle.setAttribute('aria-pressed', String(state.grid));
+  mapController.setSymbolSize(SYMBOL_SIZES[state.symbolSize]);
+  elements.symbolSizeSwitch.querySelector(`input[value="${state.symbolSize}"]`).checked = true;
+  elements.symbolSizeSwitch.addEventListener('change', (event) => {
+    state.symbolSize = event.target.value;
+    mapController.setSymbolSize(SYMBOL_SIZES[state.symbolSize]);
+    saveMapView();
+  });
+  const teardownSitemp = initSitemp(elements.mapTarget);
   // OL's own Zoom/Attribution controls stay put and are only proxy-clicked
   // (above); its bare ScaleLine control has no fixed home of its own, so it
   // moves into the status bar and is restyled there (styles.css).
@@ -5983,6 +6025,7 @@ export function mount({ root, status }) {
     destroyTimeline();
     destroySituation();
     unsubscribeLive();
+    teardownSitemp();
     session.abort();
     mapToolsController?.destroy();
     mapToolsController = null;
@@ -6024,6 +6067,9 @@ export {
   renderStep3Worksheet,
   renderStep4Worksheet,
   renderToolPanel,
+  renderMapHint,
+  cancelActiveTool,
+  showToast,
   deleteFeature,
   armFeatureModify,
   renderOverlayList,

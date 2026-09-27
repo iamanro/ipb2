@@ -451,6 +451,64 @@ describe('openStore: feature layers (unit, graphic, range-ring)', () => {
     );
   });
 
+  test('a unit keeps its amplifiers and ORBAT link, and rejects out-of-range ones', () => {
+    const properties = {
+      sidc: SIDC,
+      designation: '1-4',
+      higher_formation: '3',
+      reinforced: '(+)',
+      additional: 'BMP-2',
+      staff_comments: 'RESERVE',
+      dtg: '261430ZSEP26',
+      direction: 359,
+      orbat_id: 2,
+      orbat_unit_id: 17,
+      orbat_affiliation: 'hostile',
+    };
+    const unit = store.createChild('features', studyId, {
+      layer: 'unit',
+      kind: 'symbol',
+      geometry: POINT,
+      properties,
+    });
+    expect(unit.properties).toEqual(properties);
+    expect(
+      store.createChild('features', studyId, {
+        layer: 'unit',
+        kind: 'symbol',
+        geometry: POINT,
+        properties: { sidc: SIDC, direction: 0, designation: null },
+      }).properties,
+    ).toMatchObject({ direction: 0 });
+
+    for (const bad of [
+      { direction: 360 },
+      { direction: -1 },
+      { direction: 12.5 },
+      { direction: '90' },
+      { reinforced: '+' },
+      { designation: 'x'.repeat(41) },
+      { additional: 42 },
+      { orbat_unit_id: '17' },
+      { orbat_affiliation: 'red' },
+    ]) {
+      expectStatus(
+        () =>
+          store.createChild('features', studyId, {
+            layer: 'unit',
+            kind: 'symbol',
+            geometry: POINT,
+            properties: { sidc: SIDC, ...bad },
+          }),
+        400,
+      );
+      expectStatus(
+        () => store.updateChild('features', unit.id, { properties: { sidc: SIDC, ...bad } }),
+        400,
+      );
+    }
+  });
+
   test("a unit feature's sidc is canonicalized: spaces/dashes stripped to the dense 20-digit form", () => {
     const grouped = '3003 1000-0012 1100 0000';
     const created = store.createChild('features', studyId, {

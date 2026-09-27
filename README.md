@@ -489,7 +489,16 @@ Beyond the terrain/threat basics, a study also holds:
   `properties.sidc`; a graphic is a line or polygon with a
   `properties.graphic` key (`TACTICAL_GRAPHICS`) matching its geometry; a
   range ring is a point with `properties.radii` (metres, ascending, 1–8, each
-  ≤ 100 km). Any feature's `properties.coa_id` ties it to a COA.
+  ≤ 100 km). Any feature's `properties.coa_id` ties it to a COA; a SITEMP
+  unit or sketch with no `coa_id` shows on every COA.
+- A unit's `properties` may also hold its APP-6 **amplifiers** — `designation`
+  (T), `higher_formation` (M), `reinforced` (F: `(+)`, `(-)`, `(±)`),
+  `additional` (H), `staff_comments` (G), `dtg` (W) and `direction` (Q, whole
+  degrees 0–359, drawn as a direction-of-movement arrow) — and, when placed
+  from an ORBAT, `orbat_id`, `orbat_unit_id` and `orbat_affiliation`
+  (`orbat` or a forced `hostile`/`friendly`/`neutral`/`unknown`). The server
+  checks them against one table, `src/symbols/unitProperties.js`, which the
+  map and the unit dialog also draw from.
 - **Threats** carry a `sidc` (defaulted from the echelon), a loose
   `orbat_unit_id`, and an `hpt` flag.
 - **Studies** carry an `h_hour`, a `classification` marking (default
@@ -618,7 +627,21 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
    - _Step 4_: COAs with their **SITEMP** (unit symbols and tactical graphics
      per COA), **H-hour** and phases, **decision points**, the event template
      and matrix with times as DTG or H±offset, and a **timeline** showing the
-     scenario "now".
+     scenario "now". Placing units: click a threat in the tools panel, then
+     the map — placement stays armed, one unit per click, until Escape or
+     **Done** — or drag the threat onto the map. **Custom symbol…** places any
+     affiliation (friend, neutral, unknown as well as hostile), e.g. own
+     positions. **Place on** chooses the selected COA or **every COA**.
+     **Place ORBAT…** takes an ORBAT's units (shown as in the ORBAT or with a
+     forced affiliation) and places them one click each (**Skip** any), or
+     **lays out the rest** below one click, HQs above their subordinates.
+     Units placed from an ORBAT are copies linked to it: when the ORBAT unit
+     changes, the worksheet marks them and **Update from ORBAT** applies its
+     symbol and amplifiers (positions stay). Right-click a unit (or its row
+     menu) for **Edit unit…** — symbol, amplifiers T/M/F/H/G/W/Q with a live
+     preview, and its COA — **Change symbol…**, **Move** and **Delete**. The
+     Map menu's **Unit symbols** sets their size (small/medium/large),
+     remembered like the basemap.
 3. **Requirements** (analyst): Exercise → Requirements → Import from IPB turns
    the event matrix into PIRs, SIRs and indicators, with each SIR tied to its
    NAI/TAI geometry.

@@ -82,7 +82,7 @@ export function renderThreatSymbolCell(
 }
 
 /** `{ id, orbatId, parentId, position, sidc, name, designation }` -> a display line. */
-function unitDisplayName(unit) {
+export function unitDisplayName(unit) {
   return unit.designation ? `${unit.name} — ${unit.designation}` : unit.name;
 }
 
@@ -97,7 +97,22 @@ function childrenByParent(units) {
   return map;
 }
 
-function buildUnitTree(container, units, checked, onToggle) {
+/** `units` in tree order (each parent before its subordinates, siblings in ORBAT order). */
+export function unitsInTreeOrder(units) {
+  const byParent = childrenByParent(units);
+  const ordered = [];
+  const walk = (parentKey) => {
+    for (const unit of byParent.get(parentKey) ?? []) {
+      ordered.push(unit);
+      walk(unit.id);
+    }
+  };
+  walk(null);
+  return ordered;
+}
+
+/** A checkbox tree of ORBAT `units`; `checked` is the Set of ticked ids, `onToggle(id, on)` reports changes. */
+export function buildUnitTree(container, units, checked, onToggle) {
   const byParent = childrenByParent(units);
   const walk = (parentKey, depth) => {
     for (const unit of byParent.get(parentKey) ?? []) {
