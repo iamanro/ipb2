@@ -1,4 +1,12 @@
-# IPB + intelligence staff: plan for items 1–7
+# IPB + intelligence staff: historical implementation plan
+
+> Historical design record, not the current backlog or an authoritative API contract.
+> The implementation has since added exercise membership, cells, item-scoped access,
+> and exercise lifecycle management. Old wave status, test counts and access contracts
+> below describe that implementation period, not the current release.
+> See [Current backlog and acceptance evidence](current-backlog.md), the
+> [README](../README.md), and the [operator runbook](operator-runbook.md) for current work
+> and operating instructions.
 
 Goal: the app can run an exercise intelligence cell end to end. That means the terrain and threat IPB, a current enemy situation on the map, geolocated reporting, a collection plan, time-phased event templates, doctrinal graphics, measurement, products, and several logged-in users with roles.
 

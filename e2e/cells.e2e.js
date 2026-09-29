@@ -235,3 +235,108 @@ test('a report stays in its cell until released, a release is read-only, and rea
 
   await admin.dispose();
 });
+
+test('a stale report draft survives live updates and requires explicit reapply or reload', async ({
+  browser,
+  playwright,
+}) => {
+  const admin = await playwright.request.newContext({ baseURL: AUTH_BASE_URL });
+  // The earlier lifecycle scenario changes the bootstrap password; this test
+  // must also run alone against a freshly bootstrapped server.
+  const login = await admin.post('/api/auth/login', {
+    data: { name: 'admin', password: CHOSEN_PASSWORD },
+  });
+  if (login.status() === 401) await signIn(admin, 'admin', AUTH_ADMIN_PASSWORD);
+  else expect(login.ok()).toBe(true);
+  for (const [name, cell] of [
+    ['edit-blue', 'blue'],
+    ['edit-white', 'white'],
+  ]) {
+    await postOk(admin, '/api/auth/users', { name, password: TEMPORARY_PASSWORD });
+    await postOk(admin, `/api/auth/members/${name}`, { cell, role: 'analyst' }, 'put');
+  }
+  const blue = await memberPage(browser, 'edit-blue');
+  const white = await memberPage(browser, 'edit-white');
+  const original = await postOk(blue.context().request, '/api/exercise/reports', {
+    text: 'Initial bridge observation',
+    author: 'Original author',
+    occurred_at: '2026-09-28T10:00:00.000Z',
+    lon: 17.52,
+    lat: 49.66,
+    reliability: 'B',
+    credibility: 2,
+  });
+  await blue.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(blue.getByLabel('Narrative', { exact: true })).toHaveValue(original.text);
+  await blue.getByLabel('Narrative', { exact: true }).fill('Blue unsaved assessment');
+  await blue.getByLabel('Author', { exact: true }).fill('Blue author');
+  await blue.getByLabel('Occurred (DTG or ISO)', { exact: true }).fill('281005ZSEP26');
+
+  const liveReload = blue.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/exercise/reports') && response.request().method() === 'GET',
+  );
+  const first = await postOk(
+    white.context().request,
+    `/api/exercise/reports/${original.id}`,
+    {
+      revision: original.revision,
+      text: 'White saved assessment',
+    },
+    'patch',
+  );
+  await liveReload;
+  await expect(blue.getByLabel('Narrative', { exact: true })).toHaveValue(
+    'Blue unsaved assessment',
+  );
+  await blue.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(
+    blue.getByRole('button', { name: 'Reapply draft to latest', exact: true }),
+  ).toBeVisible();
+  await expect(blue.getByLabel('Narrative', { exact: true })).toHaveValue(
+    'Blue unsaved assessment',
+  );
+  expect(
+    await (await white.context().request.get(`/api/exercise/reports/${original.id}`)).json(),
+  ).toMatchObject({ text: first.text, revision: first.revision });
+
+  await blue.getByRole('button', { name: 'Reapply draft to latest', exact: true }).click();
+  await expect(
+    blue.getByRole('button', { name: 'Reapply draft to latest', exact: true }),
+  ).toHaveCount(0);
+  expect(
+    await (await white.context().request.get(`/api/exercise/reports/${original.id}`)).json(),
+  ).toMatchObject({ text: first.text, revision: first.revision });
+  await blue.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(blue.getByRole('button', { name: 'Cancel edit', exact: true })).toHaveCount(0);
+  const saved = await (
+    await white.context().request.get(`/api/exercise/reports/${original.id}`)
+  ).json();
+  expect(saved).toMatchObject({
+    text: 'Blue unsaved assessment',
+    author: 'Blue author',
+    occurred_at: '2026-09-28T10:05:00.000Z',
+    lon: original.lon,
+    lat: original.lat,
+  });
+
+  await blue.getByRole('button', { name: 'Edit', exact: true }).click();
+  await blue.getByLabel('Narrative', { exact: true }).fill('Discard only on explicit reload');
+  await postOk(
+    white.context().request,
+    `/api/exercise/reports/${original.id}`,
+    {
+      revision: saved.revision,
+      text: 'Latest reviewed observation',
+    },
+    'patch',
+  );
+  await blue.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await blue.getByRole('button', { name: 'Reload latest', exact: true }).click();
+  await expect(blue.getByLabel('Narrative', { exact: true })).toHaveValue(
+    'Latest reviewed observation',
+  );
+  await blue.context().close();
+  await white.context().close();
+  await admin.dispose();
+});

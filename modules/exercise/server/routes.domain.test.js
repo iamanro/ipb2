@@ -58,25 +58,33 @@ afterEach(() => {
 describe('evidence links are parts of the requirement they support', () => {
   test('citing a released report succeeds; citing a hidden one 404s', async () => {
     const pir = await call(BLUE, 'POST', 'requirements', { kind: 'PIR', text: 'Blue PIR' });
-    const sir = await call(BLUE, 'POST', `requirements/${pir.id}/sirs`, { text: 'SIR A' });
+    const sir = await call(BLUE, 'POST', `requirements/${pir.id}/sirs`, {
+      text: 'SIR A',
+      revision: pir.revision,
+    });
 
     const releasedReport = await call(RED, 'POST', 'reports', {
       text: 'released report',
       reliability: 'A',
       credibility: 1,
     });
-    await call(RED, 'POST', `reports/${releasedReport.id}/release`, { cells: ['blue'] });
+    await call(RED, 'POST', `reports/${releasedReport.id}/release`, {
+      cells: ['blue'],
+      revision: releasedReport.revision,
+    });
     const hiddenReport = await call(RED, 'POST', 'reports', {
       text: 'hidden report',
       reliability: 'A',
       credibility: 1,
     });
 
+    const currentPir = await call(BLUE, 'GET', `requirements/${pir.id}`);
     const link = await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
       report_id: releasedReport.id,
       target_kind: 'sir',
       target_id: sir.id,
       relation: 'confirms',
+      revision: currentPir.revision,
     });
     expect(link).toMatchObject({
       requirement_id: pir.id,
@@ -84,12 +92,14 @@ describe('evidence links are parts of the requirement they support', () => {
       withdrawn: false,
     });
 
+    const afterLink = await call(BLUE, 'GET', `requirements/${pir.id}`);
     await expect(
       call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
         report_id: hiddenReport.id,
         target_kind: 'sir',
         target_id: sir.id,
         relation: 'confirms',
+        revision: afterLink.revision,
       }),
     ).rejects.toMatchObject({ status: 404 });
   });
@@ -110,27 +120,73 @@ describe('evidence links are parts of the requirement they support', () => {
   });
 });
 
+describe('optimistic report concurrency', () => {
+  test('same report read twice: first save wins, stale and missing revisions are rejected', async () => {
+    const report = await call(BLUE, 'POST', 'reports', {
+      text: 'first',
+      reliability: 'A',
+      credibility: 1,
+      occurred_at: '2026-09-28T10:00:00.000Z',
+      author: 'Blue 1',
+    });
+    const a = await call(BLUE, 'GET', `reports/${report.id}`);
+    const b = await call(BLUE, 'GET', `reports/${report.id}`);
+
+    const saved = await call(BLUE, 'PATCH', `reports/${report.id}`, {
+      revision: a.revision,
+      text: 'A edit',
+      occurred_at: '2026-09-28T10:05:00.000Z',
+      author: 'Blue 2',
+    });
+    expect(saved).toMatchObject({
+      text: 'A edit',
+      occurred_at: '2026-09-28T10:05:00.000Z',
+      author: 'Blue 2',
+    });
+
+    await expect(
+      call(BLUE, 'PATCH', `reports/${report.id}`, { revision: b.revision, text: 'B stale' }),
+    ).rejects.toMatchObject({ status: 409, code: 'stale_revision' });
+    await expect(
+      call(BLUE, 'PATCH', `reports/${report.id}`, { text: 'missing' }),
+    ).rejects.toMatchObject({
+      status: 400,
+    });
+    await expect(
+      call(BLUE, 'DELETE', `reports/${report.id}`, { revision: b.revision }),
+    ).rejects.toMatchObject({
+      status: 409,
+    });
+    expect((await call(BLUE, 'GET', `reports/${report.id}`)).text).toBe('A edit');
+  });
+});
+
 describe('withdrawn reports never count toward fulfillment', () => {
   test('deleting the cited report leaves the link, shows withdrawn, and drops fulfillment', async () => {
     const pir = await call(BLUE, 'POST', 'requirements', { kind: 'PIR', text: 'x' });
-    const sir = await call(BLUE, 'POST', `requirements/${pir.id}/sirs`, { text: 'SIR A' });
+    const sir = await call(BLUE, 'POST', `requirements/${pir.id}/sirs`, {
+      text: 'SIR A',
+      revision: pir.revision,
+    });
     const report = await call(BLUE, 'POST', 'reports', {
       text: 'evidence',
       reliability: 'A',
       credibility: 1,
     });
+    const currentPir = await call(BLUE, 'GET', `requirements/${pir.id}`);
     await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
       report_id: report.id,
       target_kind: 'sir',
       target_id: sir.id,
       relation: 'confirms',
+      revision: currentPir.revision,
     });
 
     const before = await call(BLUE, 'GET', `requirements/${pir.id}`);
     expect(before.fulfillment).toMatchObject({ covered: 1, total: 1, state: 'fulfilled' });
     expect(before.sirs[0].links[0]).toMatchObject({ withdrawn: false });
 
-    await call(BLUE, 'DELETE', `reports/${report.id}`);
+    await call(BLUE, 'DELETE', `reports/${report.id}`, { revision: report.revision });
 
     const after = await call(BLUE, 'GET', `requirements/${pir.id}`);
     expect(after.sirs[0].links[0]).toMatchObject({ withdrawn: true, report: null });
@@ -145,18 +201,27 @@ describe('fulfillment is per viewer', () => {
       text: 'x',
       owner_cell: 'blue',
     });
-    await call(WHITE, 'POST', `requirements/${pir.id}/release`, { cells: ['red'] });
-    const sir = await call(WHITE, 'POST', `requirements/${pir.id}/sirs`, { text: 'SIR A' });
+    await call(WHITE, 'POST', `requirements/${pir.id}/release`, {
+      cells: ['red'],
+      revision: pir.revision,
+    });
+    const releasedPir = await call(WHITE, 'GET', `requirements/${pir.id}`);
+    const sir = await call(WHITE, 'POST', `requirements/${pir.id}/sirs`, {
+      text: 'SIR A',
+      revision: releasedPir.revision,
+    });
     const report = await call(BLUE, 'POST', 'reports', {
       text: 'blue-only evidence',
       reliability: 'A',
       credibility: 1,
     });
+    const currentPir = await call(BLUE, 'GET', `requirements/${pir.id}`);
     await call(BLUE, 'POST', `requirements/${pir.id}/evidence`, {
       report_id: report.id,
       target_kind: 'sir',
       target_id: sir.id,
       relation: 'confirms',
+      revision: currentPir.revision,
     });
 
     const blueView = await call(BLUE, 'GET', `requirements/${pir.id}`);

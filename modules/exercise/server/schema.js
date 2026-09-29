@@ -459,4 +459,11 @@ export const MIGRATIONS = [
   ALTER TABLE scenario_events ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'scheduled' CHECK (delivery_mode IN ('draft', 'scheduled'));
   CREATE INDEX scenario_events_situation ON scenario_events(situation_id);
   `,
+  // Optimistic concurrency for analyst-edited aggregates. One integer per
+  // parent item keeps stale-save checks boring: every protected write must
+  // present the revision it read, and any successful write bumps it.
+  `
+  ALTER TABLE requirements ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE reports ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+  `,
 ];

@@ -112,6 +112,16 @@ function integerId(text, label) {
   return Number(text);
 }
 
+function requireRevision(label, item, body) {
+  if (!Number.isInteger(body?.revision)) throw new HttpError(400, `${label} revision is required.`);
+  if (body.revision !== item.revision) {
+    throw new HttpError(409, `${label} ${item.id} changed; reload latest before saving.`, {
+      code: 'stale_revision',
+      current_revision: item.revision,
+    });
+  }
+}
+
 /** Reads a JSON body, or null when there is none (a bodiless POST/DELETE). */
 async function readBody(request, limit) {
   if (!request) return null;
@@ -257,17 +267,22 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
     if (route.verb === 'release') {
       if (!canRelease(actor, item))
         throw new HttpError(403, `You may not release this ${spec.label}.`);
+      if (spec.revision) requireRevision(spec.label, item, body);
       releasable = normalizeRelease(body?.cells, ownerCell);
     } else {
       if (!isWhite(actor)) throw new HttpError(403, `Only White may reassign this ${spec.label}.`);
+      if (spec.revision) requireRevision(spec.label, item, body);
       ownerCell = body?.owner_cell;
       if (!CELLS.includes(ownerCell)) throw new HttpError(400, `Unknown cell: ${ownerCell}`);
       releasable = normalizeRelease(liveCellsFor(item).slice(1), ownerCell);
     }
     const database = entry.module.database();
     const after = transact(database, () => {
+      const bumpRevision = spec.revision ? ', revision = revision + 1' : '';
       database
-        .prepare(`UPDATE ${spec.table} SET owner_cell = ?, releasable_to = ? WHERE id = ?`)
+        .prepare(
+          `UPDATE ${spec.table} SET owner_cell = ?, releasable_to = ?${bumpRevision} WHERE id = ?`,
+        )
         .run(ownerCell, JSON.stringify(releasable), item.id);
       const row = fetchRow(entry, spec.table, item.id);
       spec.onOwnership?.({ kind: route.item, action: route.verb, before, after: row, actorName });

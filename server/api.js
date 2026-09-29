@@ -26,6 +26,14 @@ import { roleAtLeast } from './policy.js';
 
 const byId = new Map(modules.map((module) => [module.id, module]));
 
+function errorJson(error) {
+  const body = { error: error.message };
+  for (const key of ['code', 'current_revision']) {
+    if (error[key] !== undefined) body[key] = error[key];
+  }
+  return body;
+}
+
 const SESSION_COOKIE = 'ipb_session';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 /** `off` mode: every request acts as this fixed local operator (C1) — White,
@@ -579,7 +587,7 @@ export function createApiMiddleware(mode) {
         });
       } catch (error) {
         const status = error instanceof HttpError ? error.status : 500;
-        sendJson(response, { error: error.message }, status);
+        sendJson(response, errorJson(error), status);
       }
       return;
     }
@@ -641,7 +649,7 @@ export function createApiMiddleware(mode) {
         return;
       }
       const status = error instanceof HttpError ? error.status : 500;
-      sendJson(response, { error: error.message }, status);
+      sendJson(response, errorJson(error), status);
     }
   }
 

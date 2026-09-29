@@ -291,6 +291,10 @@ export function createReportsController(ctx) {
   let expandedId = null;
   let trackPanelId = null;
   let fieldset = null;
+  let formDraft = null;
+  let editingRevision = null;
+  let skipNextCapture = false;
+  let conflict = null;
   let formMeta = { source: '', author: '', occurred_at: '', reliability: 'F', credibility: 6 };
   let formNote = null;
 
@@ -310,9 +314,17 @@ export function createReportsController(ctx) {
     return data.nais.find((nai) => nai.id === naiId)?.label ?? `NAI #${naiId}`;
   }
 
+  function captureFormDraft() {
+    if (fieldset) formDraft = fieldset.getValue();
+  }
+
   function clearForm({ keepNote = false } = {}) {
     fieldset?.destroy();
     fieldset = null;
+    formDraft = null;
+    editingRevision = null;
+    skipNextCapture = false;
+    conflict = null;
     editingId = null;
     formMeta = { source: '', author: '', occurred_at: '', reliability: 'F', credibility: 6 };
     if (!keepNote) formNote = null;
@@ -320,6 +332,10 @@ export function createReportsController(ctx) {
 
   function startEdit(report) {
     editingId = report.id;
+    editingRevision = report.revision;
+    formDraft = { ...report, fields: { ...report.fields } };
+    skipNextCapture = true;
+    conflict = null;
     formMeta = {
       source: report.source ?? '',
       author: report.author ?? '',
@@ -334,13 +350,23 @@ export function createReportsController(ctx) {
   // -- create/edit form -----------------------------------------------------
 
   function renderForm(container) {
+    if (skipNextCapture) skipNextCapture = false;
+    else captureFormDraft();
     fieldset?.destroy();
     fieldset = null;
     const editingReport =
       editingId != null ? data.reports.find((report) => report.id === editingId) : null;
     const section = el('section', 'field-group');
     section.append(
-      el('h3', null, editingReport ? `Edit report #${editingReport.id}` : 'New report'),
+      el(
+        'h3',
+        null,
+        editingReport
+          ? `Edit report #${editingReport.id}`
+          : editingId != null
+            ? `Report #${editingId} unavailable`
+            : 'New report',
+      ),
     );
     if (!can('analyst') || !hasCell()) {
       section.append(el('p', 'panel-note', 'Analyst role required to add or edit reports.'));
@@ -348,7 +374,48 @@ export function createReportsController(ctx) {
       return;
     }
 
-    fieldset = createReportFieldset({ initial: editingReport, ariaLabel: 'Report location' });
+    if (editingId != null && !editingReport) {
+      fieldset = createReportFieldset({ initial: formDraft, ariaLabel: 'Report location' });
+      fieldset.setDisabled(true);
+      section.append(
+        el(
+          'p',
+          'inline-error',
+          'This report is no longer available to edit. Your draft is kept below; reload if access returns, or cancel edit.',
+        ),
+        fieldset.element,
+      );
+      const unavailableActions = el('div', 'inline-form');
+      const reloadButton = el('button', 'text-button', 'Reload latest');
+      reloadButton.type = 'button';
+      reloadButton.addEventListener('click', async () => {
+        try {
+          await load();
+          const latest = data.reports.find((report) => report.id === editingId);
+          if (latest) startEdit(latest);
+          else render();
+        } catch (error) {
+          formNote = error.message;
+          render();
+        }
+      });
+      const cancelButton = el('button', 'text-button', 'Cancel edit');
+      cancelButton.type = 'button';
+      cancelButton.addEventListener('click', () => {
+        clearForm();
+        render();
+      });
+      unavailableActions.append(reloadButton, cancelButton);
+      section.append(unavailableActions);
+      if (formNote) section.append(el('p', 'panel-note', formNote));
+      container.append(section);
+      return;
+    }
+
+    fieldset = createReportFieldset({
+      initial: formDraft ?? editingReport,
+      ariaLabel: 'Report location',
+    });
     section.append(fieldset.element);
 
     const metaRow = el('div', 'requirement-form');
@@ -357,16 +424,19 @@ export function createReportsController(ctx) {
     sourceInput.placeholder = 'Source (optional)';
     sourceInput.setAttribute('aria-label', 'Source');
     sourceInput.value = formMeta.source;
+    sourceInput.addEventListener('input', () => (formMeta.source = sourceInput.value));
     const authorInput = document.createElement('input');
     authorInput.type = 'text';
     authorInput.placeholder = 'Author (optional)';
     authorInput.setAttribute('aria-label', 'Author');
     authorInput.value = formMeta.author;
+    authorInput.addEventListener('input', () => (formMeta.author = authorInput.value));
     const occurredLabel = el('label', 'field-label-inline', 'Occurred (DTG or ISO)');
     const occurredInput = document.createElement('input');
     occurredInput.type = 'text';
     occurredInput.placeholder = '251430ZSEP26';
     occurredInput.value = formMeta.occurred_at;
+    occurredInput.addEventListener('input', () => (formMeta.occurred_at = occurredInput.value));
     occurredLabel.append(occurredInput);
     const occurredError = el('p', 'field-error', 'Not a recognized DTG or ISO date.');
     occurredError.setAttribute('role', 'alert');
@@ -379,10 +449,17 @@ export function createReportsController(ctx) {
     reliabilitySelect.setAttribute('aria-label', 'Reliability');
     appendReliabilityOptions(reliabilitySelect);
     reliabilitySelect.value = formMeta.reliability;
+    reliabilitySelect.addEventListener(
+      'change',
+      () => (formMeta.reliability = reliabilitySelect.value),
+    );
     const credibilitySelect = document.createElement('select');
     credibilitySelect.setAttribute('aria-label', 'Credibility');
     appendCredibilityOptions(credibilitySelect);
     credibilitySelect.value = String(formMeta.credibility);
+    credibilitySelect.addEventListener('change', () => {
+      formMeta.credibility = Number.parseInt(credibilitySelect.value, 10);
+    });
     metaRow.append(
       sourceInput,
       authorInput,
@@ -420,6 +497,49 @@ export function createReportsController(ctx) {
       actions.append(cancelButton);
     }
     section.append(actions);
+    if (conflict) {
+      const conflictBox = el('div', 'inline-error', conflict.message);
+      const latestButton = el('button', 'text-button', 'Reload latest');
+      latestButton.type = 'button';
+      latestButton.addEventListener('click', async () => {
+        try {
+          await load();
+          const latest = data.reports.find((report) => report.id === editingId);
+          if (latest) startEdit(latest);
+          else {
+            formNote = 'The report is no longer available.';
+            render();
+          }
+        } catch (error) {
+          formNote = error.message;
+          render();
+        }
+      });
+      const reapplyButton = el('button', 'text-button', 'Reapply draft to latest');
+      reapplyButton.type = 'button';
+      reapplyButton.addEventListener('click', async () => {
+        captureFormDraft();
+        try {
+          await load();
+          const latest = data.reports.find((report) => report.id === editingId);
+          if (!latest) {
+            conflict = null;
+            formNote = 'The report is no longer available; draft kept but cannot be reapplied.';
+            render();
+            return;
+          }
+          editingRevision = latest.revision;
+          conflict = null;
+          formNote = 'Draft kept against the latest report. Review it, then save again.';
+          render();
+        } catch (error) {
+          formNote = error.message;
+          render();
+        }
+      });
+      conflictBox.append(latestButton, reapplyButton);
+      section.append(conflictBox);
+    }
     if (formNote) section.append(el('p', 'panel-note', formNote));
     container.append(section);
   }
@@ -441,6 +561,7 @@ export function createReportsController(ctx) {
       occurredAtIso = new Date(ms).toISOString();
     }
     const body = {
+      ...(editingId != null ? { revision: editingRevision } : {}),
       text: values.text,
       report_type: values.report_type,
       fields: values.fields,
@@ -463,6 +584,12 @@ export function createReportsController(ctx) {
       clearForm({ keepNote: true });
       render();
     } catch (error) {
+      if (error.status === 409 && error.code === 'stale_revision') {
+        captureFormDraft();
+        conflict = { message: error.message, currentRevision: error.currentRevision };
+        render();
+        return;
+      }
       showError(container, error.message);
     }
   }
@@ -621,6 +748,7 @@ export function createReportsController(ctx) {
           // (CONTEXT.md), addressed flat under it.
           await requestJson(`${api}/requirements/${link.requirement_id}/evidence/${link.id}`, {
             method: 'DELETE',
+            body: { revision: targetOption.revision },
           });
           await load();
           render();
@@ -672,6 +800,7 @@ export function createReportsController(ctx) {
               target_id: Number.parseInt(id, 10),
               relation: relationSelect.value,
               note: noteInput.value.trim() || null,
+              revision: targetOption.revision,
             },
           });
           await load();
@@ -799,7 +928,10 @@ export function createReportsController(ctx) {
   }
 
   async function releaseReport(report, cells) {
-    await requestJson(`${api}/reports/${report.id}/release`, { method: 'POST', body: { cells } });
+    await requestJson(`${api}/reports/${report.id}/release`, {
+      method: 'POST',
+      body: { cells, revision: report.revision },
+    });
     await load();
     render();
   }
@@ -807,7 +939,7 @@ export function createReportsController(ctx) {
   async function reassignReportOwner(report, ownerCell) {
     await requestJson(`${api}/reports/${report.id}/owner`, {
       method: 'PATCH',
-      body: { owner_cell: ownerCell },
+      body: { owner_cell: ownerCell, revision: report.revision },
     });
     await load();
     render();
@@ -865,7 +997,10 @@ export function createReportsController(ctx) {
   async function deleteReport(report) {
     if (!(await askConfirm('Delete this report and its evidence links?'))) return;
     if (editingId === report.id) clearForm();
-    await requestJson(`${api}/reports/${report.id}`, { method: 'DELETE' });
+    await requestJson(`${api}/reports/${report.id}`, {
+      method: 'DELETE',
+      body: { revision: report.revision },
+    });
     await load();
     render();
   }

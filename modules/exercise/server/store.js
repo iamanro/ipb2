@@ -106,6 +106,7 @@ export function openStore(file, { regionsFile } = {}) {
     createReport,
     updateReport,
     deleteReport,
+    touchRequirementsForReport,
     listTracks,
     createTrack,
     updateTrack,
@@ -366,6 +367,31 @@ function visibleRows(access, kind, table, orderBy) {
   return database.prepare(`SELECT * FROM ${table} WHERE ${sql} ORDER BY ${orderBy}`).all(...params);
 }
 
+function assertRevision(label, item, input) {
+  if (!Number.isInteger(input?.revision))
+    throw new HttpError(400, `${label} revision is required.`);
+  if (input.revision !== item.revision) {
+    throw new HttpError(409, `${label} ${item.id} changed; reload latest before saving.`, {
+      code: 'stale_revision',
+      current_revision: item.revision,
+    });
+  }
+}
+
+function touchRequirementRevision(id) {
+  database
+    .prepare('UPDATE requirements SET revision = revision + 1, updated_at = ? WHERE id = ?')
+    .run(now(), id);
+}
+
+function touchRequirementsForReport(reportId) {
+  const ids = database
+    .prepare('SELECT DISTINCT requirement_id FROM evidence_links WHERE report_id = ?')
+    .all(reportId)
+    .map((row) => row.requirement_id);
+  ids.forEach((id) => touchRequirementRevision(id));
+}
+
 // -- requirements tree ------------------------------------------------------
 
 function shapeIndicator(row) {
@@ -522,6 +548,7 @@ function shapeRequirement(row, { access }) {
     source: row.source,
     owner_cell: row.owner_cell,
     releasable_to: JSON.parse(row.releasable_to),
+    revision: row.revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -568,6 +595,7 @@ function createRequirement(
 }
 
 function updateRequirement(item, patch, access) {
+  assertRevision('Requirement', item, patch);
   const fields = [];
   const params = [];
   if ('text' in patch) {
@@ -589,7 +617,7 @@ function updateRequirement(item, patch, access) {
   }
   return mutate('requirement:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
-      fields.push('updated_at = ?');
+      fields.push('revision = revision + 1', 'updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE requirements SET ${fields.join(', ')} WHERE id = ?`)
@@ -599,18 +627,17 @@ function updateRequirement(item, patch, access) {
   });
 }
 
-function deleteRequirement(item) {
+function deleteRequirement(item, input) {
+  assertRevision('Requirement', item, input);
   return mutate('requirement:delete', String(item.id), cellsOf(item), () => {
     database.prepare('DELETE FROM requirements WHERE id = ?').run(item.id);
     return { deleted: true };
   });
 }
 
-function createSir(
-  item,
-  { text, time_window_start: start, time_window_end: end, nai_id: naiId },
-  access,
-) {
+function createSir(item, input, access) {
+  assertRevision('Requirement', item, input);
+  const { text, time_window_start: start, time_window_end: end, nai_id: naiId } = input;
   const cleanText = requireString(text, 'text');
   const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null, access);
   const timestamp = now();
@@ -633,12 +660,14 @@ function createSir(
           timestamp,
           timestamp,
         );
+      touchRequirementRevision(item.id);
       return shapeSir(fetchRow('sirs', Number(lastInsertRowid)), access);
     },
   );
 }
 
 function updateSir(item, part, patch, access) {
+  assertRevision('Requirement', item, patch);
   const fields = [];
   const params = [];
   if ('text' in patch) {
@@ -662,19 +691,24 @@ function updateSir(item, part, patch, access) {
       fields.push('updated_at = ?');
       params.push(now());
       database.prepare(`UPDATE sirs SET ${fields.join(', ')} WHERE id = ?`).run(...params, part.id);
+      touchRequirementRevision(item.id);
     }
     return shapeSir(fetchRow('sirs', part.id), access);
   });
 }
 
-function deleteSir(item, part) {
+function deleteSir(item, part, input) {
+  assertRevision('Requirement', item, input);
   return mutate('sir:delete', String(part.id), cellsOf(item), () => {
     database.prepare('DELETE FROM sirs WHERE id = ?').run(part.id);
+    touchRequirementRevision(item.id);
     return { deleted: true };
   });
 }
 
-function createIndicator(item, { sir_id: sirId, description }) {
+function createIndicator(item, input) {
+  assertRevision('Requirement', item, input);
+  const { sir_id: sirId, description } = input;
   if (!Number.isInteger(sirId)) throw new HttpError(400, 'sir_id must be an integer.');
   const sir = fetchRow('sirs', sirId);
   if (!sir || sir.requirement_id !== item.id) {
@@ -692,12 +726,14 @@ function createIndicator(item, { sir_id: sirId, description }) {
           'INSERT INTO indicators (sir_id, requirement_id, description, observed, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)',
         )
         .run(sirId, item.id, cleanDescription, timestamp, timestamp);
+      touchRequirementRevision(item.id);
       return shapeIndicator(fetchRow('indicators', Number(lastInsertRowid)));
     },
   );
 }
 
 function updateIndicator(item, part, patch) {
+  assertRevision('Requirement', item, patch);
   const fields = [];
   const params = [];
   if ('description' in patch) {
@@ -715,14 +751,17 @@ function updateIndicator(item, part, patch) {
       database
         .prepare(`UPDATE indicators SET ${fields.join(', ')} WHERE id = ?`)
         .run(...params, part.id);
+      touchRequirementRevision(item.id);
     }
     return shapeIndicator(fetchRow('indicators', part.id));
   });
 }
 
-function deleteIndicator(item, part) {
+function deleteIndicator(item, part, input) {
+  assertRevision('Requirement', item, input);
   return mutate('indicator:delete', String(part.id), cellsOf(item), () => {
     database.prepare('DELETE FROM indicators WHERE id = ?').run(part.id);
+    touchRequirementRevision(item.id);
     return { deleted: true };
   });
 }
@@ -733,11 +772,15 @@ function deleteIndicator(item, part) {
  * itself; `'sir'` needs a `target_id` that is actually one of its SIRs. The
  * cited report is read with `access.see`, exactly the contract's "creating
  * a link changes its target, not the report" rule. */
-function createEvidenceLink(
-  item,
-  { report_id: reportId, target_kind: targetKind, target_id: targetId, relation, note },
-  access,
-) {
+function createEvidenceLink(item, input, access) {
+  assertRevision('Requirement', item, input);
+  const {
+    report_id: reportId,
+    target_kind: targetKind,
+    target_id: targetId,
+    relation,
+    note,
+  } = input;
   requireEnum(targetKind, 'target_kind', TARGET_KINDS);
   let cleanTargetId;
   if (targetKind === 'requirement') {
@@ -769,13 +812,16 @@ function createEvidenceLink(
         optionalString(note, 'note'),
         now(),
       );
+    touchRequirementRevision(item.id);
     return shapeEvidenceLinkWithReport(fetchRow('evidence_links', Number(lastInsertRowid)), access);
   });
 }
 
-function deleteEvidenceLink(item, part) {
+function deleteEvidenceLink(item, part, input) {
+  assertRevision('Requirement', item, input);
   return mutate('evidence:unlink', String(part.id), cellsOf(item), () => {
     database.prepare('DELETE FROM evidence_links WHERE id = ?').run(part.id);
+    touchRequirementRevision(item.id);
     return { deleted: true };
   });
 }
@@ -809,9 +855,10 @@ function upsertBySource(table, source, derived, initial = {}) {
   }
   const changed = Object.keys(derived).filter((name) => row[name] !== derived[name]);
   if (!changed.length) return { id: row.id, outcome: 'unchanged' };
+  const bumpRevision = table === 'requirements' ? ', revision = revision + 1' : '';
   database
     .prepare(
-      `UPDATE ${table} SET ${changed.map((name) => `${name} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
+      `UPDATE ${table} SET ${changed.map((name) => `${name} = ?`).join(', ')}, updated_at = ?${bumpRevision} WHERE id = ?`,
     )
     .run(...changed.map((name) => derived[name]), timestamp, row.id);
   return { id: row.id, outcome: 'updated' };
@@ -878,22 +925,26 @@ function importIpbStudy(owner, input) {
         nai_id: sir.naiSource ? (naiIds.get(sir.naiSource) ?? null) : null,
       });
       sirIds.set(sir.source, id);
+      if (outcome !== 'unchanged')
+        touchRequirementRevision(requirementIds.get(sir.requirementSource));
       tally('sirs', outcome);
     }
     for (const indicator of plan.indicators) {
       const sirId = sirIds.get(indicator.sirSource);
+      const requirementId =
+        database.prepare('SELECT requirement_id FROM sirs WHERE id = ?').get(sirId)
+          ?.requirement_id ?? null;
       const { outcome } = upsertBySource(
         'indicators',
         indicator.source,
         {
           sir_id: sirId,
-          requirement_id:
-            database.prepare('SELECT requirement_id FROM sirs WHERE id = ?').get(sirId)
-              ?.requirement_id ?? null,
+          requirement_id: requirementId,
           description: indicator.description,
         },
         { observed: indicator.observed ? 1 : 0 },
       );
+      if (outcome !== 'unchanged') touchRequirementRevision(requirementId);
       tally('indicators', outcome);
     }
     for (const [table, textColumn, current] of [
@@ -960,6 +1011,7 @@ function shapeReport(row) {
     links,
     owner_cell: row.owner_cell,
     releasable_to: JSON.parse(row.releasable_to),
+    revision: row.revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1070,6 +1122,7 @@ function createReport(owner, input, access) {
 }
 
 function updateReport(item, patch, access) {
+  assertRevision('Report', item, patch);
   const fields = [];
   const params = [];
   if ('text' in patch) {
@@ -1087,6 +1140,14 @@ function updateReport(item, patch, access) {
   if ('source' in patch) {
     fields.push('source = ?');
     params.push(optionalString(patch.source, 'source'));
+  }
+  if ('author' in patch) {
+    fields.push('author = ?');
+    params.push(optionalString(patch.author, 'author'));
+  }
+  if ('occurred_at' in patch) {
+    fields.push('occurred_at = ?');
+    params.push(optionalString(patch.occurred_at, 'occurred_at'));
   }
 
   let reportType = item.report_type;
@@ -1135,11 +1196,12 @@ function updateReport(item, patch, access) {
 
   return mutate('report:update', String(item.id), cellsOf(item), () => {
     if (fields.length) {
-      fields.push('updated_at = ?');
+      fields.push('revision = revision + 1', 'updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE reports SET ${fields.join(', ')} WHERE id = ?`)
         .run(...params, item.id);
+      touchRequirementsForReport(item.id);
     }
     return shapeReport(fetchRow('reports', item.id));
   });
@@ -1149,8 +1211,10 @@ function updateReport(item, patch, access) {
  * cascading FK on `report_id`, docs/adr/0002 + schema.js): they simply
  * point at a `report_id` that no longer resolves, and read back
  * `withdrawn: true` wherever they're shown. */
-function deleteReport(item) {
+function deleteReport(item, input) {
+  assertRevision('Report', item, input);
   return mutate('report:delete', String(item.id), cellsOf(item), () => {
+    touchRequirementsForReport(item.id);
     database.prepare('DELETE FROM reports WHERE id = ?').run(item.id);
     return { deleted: true };
   });
@@ -1328,7 +1392,12 @@ function addTrackPosition(
         .run(validLon, validLat, validObserved, timestamp, item.id);
     }
     if (validReportId !== null) {
-      database.prepare('UPDATE reports SET track_id = ? WHERE id = ?').run(item.id, validReportId);
+      database
+        .prepare(
+          'UPDATE reports SET track_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?',
+        )
+        .run(item.id, timestamp, validReportId);
+      touchRequirementsForReport(validReportId);
     }
     return getTrack(item.id);
   });
@@ -2019,6 +2088,7 @@ function transitionRfi(
           'Auto-linked from RFI answer.',
           now(),
         );
+      touchRequirementRevision(requirementId);
     }
     if (toState === 'answered' && answerReport && answerReport.owner_cell !== item.owner_cell) {
       const released = normalizeRelease(
@@ -2026,8 +2096,11 @@ function transitionRfi(
         answerReport.owner_cell,
       );
       database
-        .prepare('UPDATE reports SET releasable_to = ?, updated_at = ? WHERE id = ?')
+        .prepare(
+          'UPDATE reports SET releasable_to = ?, revision = revision + 1, updated_at = ? WHERE id = ?',
+        )
         .run(JSON.stringify(released), now(), answerReportId);
+      touchRequirementsForReport(answerReportId);
     }
     return shapeRfi(fetchRow('rfis', item.id));
   });

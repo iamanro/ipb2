@@ -254,10 +254,12 @@ describe('release/reassign are generated for every releasable item kind', () => 
     });
     const released = await call(BLUE_ANALYST, 'POST', `requirements/${requirement.id}/release`, {
       cells: ['red'],
+      revision: requirement.revision,
     });
     expect(released.releasable_to).toEqual(['red']);
     const reassigned = await call(GM, 'PATCH', `requirements/${requirement.id}/owner`, {
       owner_cell: 'red',
+      revision: released.revision,
     });
     expect(reassigned).toMatchObject({ owner_cell: 'red', releasable_to: [] });
   });

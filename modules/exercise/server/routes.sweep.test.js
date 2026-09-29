@@ -28,7 +28,10 @@ const call = (actor, method, route, body) =>
 async function seedItem(createRoute, createBody, partMakers = {}) {
   const hiddenItem = await call(RED_CM, 'POST', createRoute, createBody);
   const releasedItem = await call(RED_CM, 'POST', createRoute, createBody);
-  await call(RED_CM, 'POST', `${createRoute}/${releasedItem.id}/release`, { cells: ['blue'] });
+  await call(RED_CM, 'POST', `${createRoute}/${releasedItem.id}/release`, {
+    cells: ['blue'],
+    revision: releasedItem.revision,
+  });
   const parts = { hidden: {}, released: {} };
   for (const [partKind, makePart] of Object.entries(partMakers)) {
     parts.hidden[partKind] = await makePart(hiddenItem.id);
@@ -43,21 +46,29 @@ async function seedItem(createRoute, createBody, partMakers = {}) {
 /** A SIR, an indicator on it, and an evidence link against it — every part
  * kind `requirements/:item/...` declares. */
 async function seedRequirementParts(requirementId) {
-  const sir = await call(RED_CM, 'POST', `requirements/${requirementId}/sirs`, { text: 'sir' });
+  let requirement = await call(RED_CM, 'GET', `requirements/${requirementId}`);
+  const sir = await call(RED_CM, 'POST', `requirements/${requirementId}/sirs`, {
+    text: 'sir',
+    revision: requirement.revision,
+  });
+  requirement = await call(RED_CM, 'GET', `requirements/${requirementId}`);
   const indicator = await call(RED_CM, 'POST', `requirements/${requirementId}/indicators`, {
     sir_id: sir.id,
     description: 'd',
+    revision: requirement.revision,
   });
   const report = await call(RED_CM, 'POST', 'reports', {
     text: 'r',
     reliability: 'A',
     credibility: 1,
   });
+  requirement = await call(RED_CM, 'GET', `requirements/${requirementId}`);
   const evidence = await call(RED_CM, 'POST', `requirements/${requirementId}/evidence`, {
     report_id: report.id,
     target_kind: 'sir',
     target_id: sir.id,
     relation: 'confirms',
+    revision: requirement.revision,
   });
   return { sir: sir.id, indicator: indicator.id, evidence: evidence.id };
 }
@@ -110,6 +121,7 @@ test('every route naming an item holds the line: 404 hidden, 403 released-but-no
   });
   const taskingSir = await call(RED_CM, 'POST', `requirements/${taskingRequirement.id}/sirs`, {
     text: 'sir',
+    revision: taskingRequirement.revision,
   });
   const tasking = await seedItem('taskings', {
     collector_id: taskingCollector.id,

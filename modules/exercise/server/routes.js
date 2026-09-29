@@ -48,8 +48,10 @@ function parseId(text) {
  * mutation, written directly (no `transact` — this already runs inside the
  * dispatcher's own transaction for the release/reassign, per contract). */
 function onOwnership({ kind, action, after }) {
-  ensureStore()
-    .database.prepare(
+  const currentStore = ensureStore();
+  if (kind === 'report') currentStore.touchRequirementsForReport(after.id);
+  currentStore.database
+    .prepare(
       'INSERT INTO activity (at, action, target, detail, owner_cell, releasable_to) VALUES (?, ?, ?, NULL, ?, ?)',
     )
     .run(
@@ -78,6 +80,7 @@ export default {
       path: 'requirements',
       label: 'Requirement',
       shape: (row, { access }) => ensureStore().shapeRequirement(row, { access }),
+      revision: true,
       onOwnership,
     },
     report: {
@@ -85,6 +88,7 @@ export default {
       path: 'reports',
       label: 'Report',
       shape: (row) => ensureStore().shapeReport(row),
+      revision: true,
       onOwnership,
     },
     rfi: {
@@ -183,7 +187,7 @@ export default {
       path: 'requirements/:item',
       verb: 'change',
       item: 'requirement',
-      handler: ({ item }) => ensureStore().deleteRequirement(item),
+      handler: ({ item, body }) => ensureStore().deleteRequirement(item, body),
     },
 
     {
@@ -207,7 +211,7 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'sir',
-      handler: ({ item, part }) => ensureStore().deleteSir(item, part),
+      handler: ({ item, part, body }) => ensureStore().deleteSir(item, part, body),
     },
 
     {
@@ -231,7 +235,7 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'indicator',
-      handler: ({ item, part }) => ensureStore().deleteIndicator(item, part),
+      handler: ({ item, part, body }) => ensureStore().deleteIndicator(item, part, body),
     },
 
     {
@@ -247,7 +251,7 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'evidence',
-      handler: ({ item, part }) => ensureStore().deleteEvidenceLink(item, part),
+      handler: ({ item, part, body }) => ensureStore().deleteEvidenceLink(item, part, body),
     },
 
     {
@@ -298,7 +302,7 @@ export default {
       path: 'reports/:item',
       verb: 'change',
       item: 'report',
-      handler: ({ item }) => ensureStore().deleteReport(item),
+      handler: ({ item, body }) => ensureStore().deleteReport(item, body),
     },
 
     // -- current situation: tracks ----------------------------------------------

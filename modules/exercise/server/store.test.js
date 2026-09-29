@@ -49,6 +49,11 @@ function row(table, id) {
   return store.database.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id);
 }
 
+function revisionBody(table, item, body = {}) {
+  const id = typeof item === 'number' ? item : item.id;
+  return { ...body, revision: row(table, id).revision };
+}
+
 const WHITE_ACCESS = {
   white: true,
   see(kind, id) {
@@ -79,13 +84,16 @@ describe('requirements tree', () => {
     );
     const sir = store.createSir(
       row('requirements', pir.id),
-      { text: 'Are engineers massing forward?' },
+      revisionBody('requirements', pir, { text: 'Are engineers massing forward?' }),
       WHITE_ACCESS,
     );
-    store.createIndicator(row('requirements', pir.id), {
-      sir_id: sir.id,
-      description: 'Bridging equipment observed',
-    });
+    store.createIndicator(
+      row('requirements', pir.id),
+      revisionBody('requirements', pir, {
+        sir_id: sir.id,
+        description: 'Bridging equipment observed',
+      }),
+    );
     const [tree] = store.listRequirements(WHITE_ACCESS);
     expect(tree.sirs).toHaveLength(1);
     expect(tree.sirs[0].indicators).toHaveLength(1);
@@ -94,12 +102,19 @@ describe('requirements tree', () => {
 
   test('deleting a requirement cascades through its SIRs and indicators', () => {
     const pir = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'x' }, WHITE_ACCESS);
-    const sir = store.createSir(row('requirements', pir.id), { text: 'y' }, WHITE_ACCESS);
-    const indicator = store.createIndicator(row('requirements', pir.id), {
-      sir_id: sir.id,
-      description: 'z',
-    });
-    store.deleteRequirement(row('requirements', pir.id));
+    const sir = store.createSir(
+      row('requirements', pir.id),
+      revisionBody('requirements', pir, { text: 'y' }),
+      WHITE_ACCESS,
+    );
+    const indicator = store.createIndicator(
+      row('requirements', pir.id),
+      revisionBody('requirements', pir, {
+        sir_id: sir.id,
+        description: 'z',
+      }),
+    );
+    store.deleteRequirement(row('requirements', pir.id), revisionBody('requirements', pir));
     expect(store.listRequirements(WHITE_ACCESS)).toHaveLength(0);
     expect(row('sirs', sir.id)).toBeUndefined();
     expect(row('indicators', indicator.id)).toBeUndefined();
@@ -117,19 +132,26 @@ describe('requirements tree', () => {
     const other = store.createRequirement(WHITE_OWNER, { kind: 'PIR', text: 'y' }, WHITE_ACCESS);
     const otherSir = store.createSir(
       row('requirements', other.id),
-      { text: 'other sir' },
+      revisionBody('requirements', other, { text: 'other sir' }),
       WHITE_ACCESS,
     );
     expectStatus(
       () =>
-        store.createIndicator(row('requirements', pir.id), {
-          sir_id: otherSir.id,
-          description: 'z',
-        }),
+        store.createIndicator(
+          row('requirements', pir.id),
+          revisionBody('requirements', pir, {
+            sir_id: otherSir.id,
+            description: 'z',
+          }),
+        ),
       400,
     );
     expectStatus(
-      () => store.createIndicator(row('requirements', pir.id), { sir_id: 999, description: 'z' }),
+      () =>
+        store.createIndicator(
+          row('requirements', pir.id),
+          revisionBody('requirements', pir, { sir_id: 999, description: 'z' }),
+        ),
       400,
     );
   });
@@ -142,8 +164,16 @@ describe('fulfillment, computed through real evidence joins', () => {
       { kind: 'PIR', text: 'Will the enemy attack?' },
       WHITE_ACCESS,
     );
-    const sirA = store.createSir(row('requirements', pir.id), { text: 'SIR A' }, WHITE_ACCESS);
-    const sirB = store.createSir(row('requirements', pir.id), { text: 'SIR B' }, WHITE_ACCESS);
+    const sirA = store.createSir(
+      row('requirements', pir.id),
+      revisionBody('requirements', pir, { text: 'SIR A' }),
+      WHITE_ACCESS,
+    );
+    const sirB = store.createSir(
+      row('requirements', pir.id),
+      revisionBody('requirements', pir, { text: 'SIR B' }),
+      WHITE_ACCESS,
+    );
     return { pir, sirA, sirB };
   }
 
@@ -167,7 +197,12 @@ describe('fulfillment, computed through real evidence joins', () => {
     );
     store.createEvidenceLink(
       row('requirements', pir.id),
-      { report_id: report.id, target_kind: 'sir', target_id: sirA.id, relation: 'confirms' },
+      revisionBody('requirements', pir, {
+        report_id: report.id,
+        target_kind: 'sir',
+        target_id: sirA.id,
+        relation: 'confirms',
+      }),
       WHITE_ACCESS,
     );
     const [tree] = store.listRequirements(WHITE_ACCESS);
@@ -187,7 +222,12 @@ describe('fulfillment, computed through real evidence joins', () => {
     );
     store.createEvidenceLink(
       row('requirements', pir.id),
-      { report_id: report.id, target_kind: 'sir', target_id: sirA.id, relation: 'confirms' },
+      revisionBody('requirements', pir, {
+        report_id: report.id,
+        target_kind: 'sir',
+        target_id: sirA.id,
+        relation: 'confirms',
+      }),
       WHITE_ACCESS,
     );
     expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment).toMatchObject({
@@ -206,12 +246,12 @@ describe('fulfillment, computed through real evidence joins', () => {
     );
     store.createEvidenceLink(
       row('requirements', requirementId),
-      {
+      revisionBody('requirements', requirementId, {
         report_id: report.id,
         target_kind: 'requirement',
         target_id: requirementId,
         relation: 'confirms',
-      },
+      }),
       WHITE_ACCESS,
     );
     expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment).toMatchObject({
@@ -231,11 +271,20 @@ describe('fulfillment, computed through real evidence joins', () => {
     );
     const link = store.createEvidenceLink(
       row('requirements', pir.id),
-      { report_id: report.id, target_kind: 'sir', target_id: sirA.id, relation: 'confirms' },
+      revisionBody('requirements', pir, {
+        report_id: report.id,
+        target_kind: 'sir',
+        target_id: sirA.id,
+        relation: 'confirms',
+      }),
       WHITE_ACCESS,
     );
     expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment.covered).toBe(1);
-    store.deleteEvidenceLink(row('requirements', pir.id), row('evidence_links', link.id));
+    store.deleteEvidenceLink(
+      row('requirements', pir.id),
+      row('evidence_links', link.id),
+      revisionBody('requirements', pir),
+    );
     expect(store.listRequirements(WHITE_ACCESS)[0].fulfillment.covered).toBe(0);
   });
 
@@ -250,7 +299,12 @@ describe('fulfillment, computed through real evidence joins', () => {
       () =>
         store.createEvidenceLink(
           row('requirements', pir.id),
-          { report_id: report.id, target_kind: 'sir', target_id: 999, relation: 'confirms' },
+          revisionBody('requirements', pir, {
+            report_id: report.id,
+            target_kind: 'sir',
+            target_id: 999,
+            relation: 'confirms',
+          }),
           WHITE_ACCESS,
         ),
       400,
@@ -690,9 +744,11 @@ describe('IPB event-matrix import', () => {
       .find((r) => r.text.includes('Attack north'));
     const riverSir = attackNorth.sirs.find((s) => s.text.startsWith('NAI River'));
     const bridging = riverSir.indicators.find((i) => i.description.startsWith('Bridging'));
-    store.updateIndicator(row('requirements', attackNorth.id), row('indicators', bridging.id), {
-      observed: true,
-    });
+    store.updateIndicator(
+      row('requirements', attackNorth.id),
+      row('indicators', bridging.id),
+      revisionBody('requirements', attackNorth, { observed: true }),
+    );
     const report = store.createReport(
       WHITE_OWNER,
       { text: 'Bridge layer seen', reliability: 'A', credibility: 1 },
@@ -700,7 +756,12 @@ describe('IPB event-matrix import', () => {
     );
     store.createEvidenceLink(
       row('requirements', attackNorth.id),
-      { report_id: report.id, target_kind: 'sir', target_id: riverSir.id, relation: 'confirms' },
+      revisionBody('requirements', attackNorth, {
+        report_id: report.id,
+        target_kind: 'sir',
+        target_id: riverSir.id,
+        relation: 'confirms',
+      }),
       WHITE_ACCESS,
     );
 
@@ -1094,10 +1155,94 @@ describe('reports: location, type, structured fields, SIDC, auto-NAI', () => {
     expect(report.nai_id).toBeNull();
     const moved = store.updateReport(
       row('reports', report.id),
-      { lon: 17.1, lat: 49.1 },
+      revisionBody('reports', report, { lon: 17.1, lat: 49.1 }),
       WHITE_ACCESS,
     );
     expect(moved.nai_id).toBe(nai.id);
+  });
+
+  test('updating already-editable report metadata persists occurred_at and author', () => {
+    const report = store.createReport(
+      WHITE_OWNER,
+      { text: 'x', reliability: 'A', credibility: 1 },
+      WHITE_ACCESS,
+    );
+    const updated = store.updateReport(
+      row('reports', report.id),
+      revisionBody('reports', report, {
+        occurred_at: '2026-09-28T10:05:00.000Z',
+        author: 'Blue 2',
+      }),
+      WHITE_ACCESS,
+    );
+    expect(updated).toMatchObject({
+      occurred_at: '2026-09-28T10:05:00.000Z',
+      author: 'Blue 2',
+    });
+  });
+
+  test('report updates require the current revision and reject stale saves', () => {
+    const report = store.createReport(
+      WHITE_OWNER,
+      { text: 'first', reliability: 'A', credibility: 1 },
+      WHITE_ACCESS,
+    );
+    expectStatus(
+      () => store.updateReport(row('reports', report.id), { text: 'missing' }, WHITE_ACCESS),
+      400,
+    );
+    store.updateReport(
+      row('reports', report.id),
+      revisionBody('reports', report, { text: 'newer' }),
+      WHITE_ACCESS,
+    );
+    expectStatus(
+      () =>
+        store.updateReport(
+          row('reports', report.id),
+          { revision: report.revision, text: 'stale' },
+          WHITE_ACCESS,
+        ),
+      409,
+    );
+    expect(row('reports', report.id).text).toBe('newer');
+  });
+
+  test('requirement part updates require the current parent revision and reject stale saves', () => {
+    const requirement = store.createRequirement(
+      WHITE_OWNER,
+      { kind: 'PIR', text: 'x' },
+      WHITE_ACCESS,
+    );
+    const sir = store.createSir(
+      row('requirements', requirement.id),
+      revisionBody('requirements', requirement, { text: 'SIR' }),
+      WHITE_ACCESS,
+    );
+    expectStatus(
+      () =>
+        store.createIndicator(row('requirements', requirement.id), {
+          sir_id: sir.id,
+          description: 'missing',
+        }),
+      400,
+    );
+    const staleRevision = row('requirements', requirement.id).revision;
+    store.createIndicator(
+      row('requirements', requirement.id),
+      revisionBody('requirements', requirement, { sir_id: sir.id, description: 'fresh' }),
+    );
+    expectStatus(
+      () =>
+        store.updateSir(
+          row('requirements', requirement.id),
+          row('sirs', sir.id),
+          { revision: staleRevision, text: 'stale' },
+          WHITE_ACCESS,
+        ),
+      409,
+    );
+    expect(row('sirs', sir.id).text).toBe('SIR');
   });
 
   test('track_id must reference an existing track', () => {
@@ -1202,6 +1347,7 @@ describe('tracks: the current situation', () => {
     );
     const updatedReport = store.listReports(WHITE_ACCESS).find((r) => r.id === report.id);
     expect(updatedReport.track_id).toBe(track.id);
+    expect(updatedReport.revision).toBe(report.revision + 1);
   });
 
   test('GET tracks includes full history sorted by time', () => {
@@ -1263,7 +1409,7 @@ describe('collection plan: collectors, taskings, SOR, conflicts', () => {
     );
     const sir = store.createSir(
       row('requirements', requirement.id),
-      { text: 'NAI Alpha: movement' },
+      revisionBody('requirements', requirement, { text: 'NAI Alpha: movement' }),
       WHITE_ACCESS,
     );
     return { requirement, sir };
@@ -1341,7 +1487,10 @@ describe('collection plan: collectors, taskings, SOR, conflicts', () => {
     const nai = store.listNais(WHITE_ACCESS).find((n) => n.label === 'Crossing Site');
     const sir = store.createSir(
       row('requirements', requirement.id),
-      { text: 'Watch the crossing site', nai_id: nai.id },
+      revisionBody('requirements', requirement, {
+        text: 'Watch the crossing site',
+        nai_id: nai.id,
+      }),
       WHITE_ACCESS,
     );
     const collector = store.createCollector(WHITE_OWNER, { name: 'RECCE-2', discipline: 'RECCE' });
@@ -1501,12 +1650,17 @@ describe('products: INTSUM draft and CRUD', () => {
     );
     const sir = store.createSir(
       row('requirements', requirement.id),
-      { text: 'Watch route 1' },
+      revisionBody('requirements', requirement, { text: 'Watch route 1' }),
       WHITE_ACCESS,
     );
     store.createEvidenceLink(
       row('requirements', requirement.id),
-      { report_id: inWindow.id, target_kind: 'sir', target_id: sir.id, relation: 'confirms' },
+      revisionBody('requirements', requirement, {
+        report_id: inWindow.id,
+        target_kind: 'sir',
+        target_id: sir.id,
+        relation: 'confirms',
+      }),
       WHITE_ACCESS,
     );
 

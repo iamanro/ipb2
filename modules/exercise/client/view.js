@@ -113,6 +113,11 @@ function createState() {
     clock: null,
     activity: [],
     importSummary: null,
+    requirementDrafts: {
+      create: { kind: 'PIR', text: '', priority: '0', decision_point: '', ltiov: '' },
+      sirs: {},
+      indicators: {},
+    },
     guide: { list: 'analyst', open: null, progress: null, refresh: null },
     unsubscribeTick: null,
     // The game-master's audit view (Activity tab, LAN/auth mode only) — loaded lazily,
@@ -174,7 +179,11 @@ async function requestJson(path, { method = 'GET', body, signal = state.session.
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401) handleUnauthorized();
-    throw new Error(payload.error || `Request failed: ${response.status}`);
+    const error = new Error(payload.error || `Request failed: ${response.status}`);
+    error.status = response.status;
+    if (payload.code) error.code = payload.code;
+    if (payload.current_revision !== undefined) error.currentRevision = payload.current_revision;
+    throw error;
   }
   if (method !== 'GET' && !signal.aborted) state.guide.refresh?.();
   return payload;
@@ -1473,6 +1482,37 @@ function destroyGeoMap() {
 
 // --- Requirements panel ----------------------------------------------------
 
+function revisionBody(item, extra = {}) {
+  return { ...extra, revision: item.revision };
+}
+
+function renderRequirementConflict(container, error, { reload, reapply }) {
+  showError(container, error.message);
+  const node = container.querySelector(':scope > .inline-error');
+  if (!node || error.status !== 409 || error.code !== 'stale_revision') return;
+  const actions = createElement('div', 'inline-form');
+  const reloadButton = createElement('button', 'text-button', 'Reload latest');
+  reloadButton.type = 'button';
+  reloadButton.addEventListener('click', async () => {
+    try {
+      await reload();
+    } catch (reloadError) {
+      showError(container, reloadError.message);
+    }
+  });
+  const reapplyButton = createElement('button', 'text-button', 'Reapply draft to latest');
+  reapplyButton.type = 'button';
+  reapplyButton.addEventListener('click', async () => {
+    try {
+      await reapply();
+    } catch (reapplyError) {
+      showError(container, reapplyError.message);
+    }
+  });
+  actions.append(reloadButton, reapplyButton);
+  node.append(actions);
+}
+
 function fulfillmentBar(fulfillment) {
   const wrap = createElement('div', `fulfillment-bar state-${fulfillment.state}`);
   const fill = createElement('div', 'fulfillment-fill');
@@ -1486,54 +1526,125 @@ function fulfillmentBar(fulfillment) {
   return wrap;
 }
 
-async function addSir(requirementId, text, container) {
+async function addSir(requirement, text, container) {
   if (!text.trim()) return;
   try {
-    await requestJson(`${API}/requirements/${requirementId}/sirs`, {
+    await requestJson(`${API}/requirements/${requirement.id}/sirs`, {
       method: 'POST',
-      body: { text: text.trim() },
+      body: revisionBody(requirement, { text: text.trim() }),
+    });
+    delete state.requirementDrafts.sirs[requirement.id];
+    await loadAll();
+    renderPanel();
+  } catch (error) {
+    renderRequirementConflict(container, error, {
+      reload: async () => {
+        await loadAll();
+        renderPanel();
+      },
+      reapply: async () => {
+        await loadAll();
+        const latest = state.requirements.find((entry) => entry.id === requirement.id);
+        if (!latest) throw new Error('Requirement is no longer available; draft kept.');
+        renderPanel();
+      },
+    });
+  }
+}
+
+async function deleteSir(requirement, sir, container) {
+  if (!(await askConfirm('Delete this SIR and its indicators?'))) return;
+  try {
+    await requestJson(`${API}/requirements/${requirement.id}/sirs/${sir.id}`, {
+      method: 'DELETE',
+      body: revisionBody(requirement),
     });
     await loadAll();
     renderPanel();
   } catch (error) {
-    showError(container, error.message);
+    renderRequirementConflict(container, error, {
+      reload: async () => {
+        await loadAll();
+        renderPanel();
+      },
+      reapply: async () => {
+        await loadAll();
+        renderPanel();
+      },
+    });
   }
 }
 
-async function deleteSir(requirementId, id) {
-  if (!(await askConfirm('Delete this SIR and its indicators?'))) return;
-  await requestJson(`${API}/requirements/${requirementId}/sirs/${id}`, { method: 'DELETE' });
-  await loadAll();
-  renderPanel();
-}
-
-async function addIndicator(requirementId, sirId, description, container) {
+async function addIndicator(requirement, sir, description, container) {
   if (!description.trim()) return;
   try {
-    await requestJson(`${API}/requirements/${requirementId}/indicators`, {
+    await requestJson(`${API}/requirements/${requirement.id}/indicators`, {
       method: 'POST',
-      body: { sir_id: sirId, description: description.trim() },
+      body: revisionBody(requirement, { sir_id: sir.id, description: description.trim() }),
+    });
+    delete state.requirementDrafts.indicators[sir.id];
+    await loadAll();
+    renderPanel();
+  } catch (error) {
+    renderRequirementConflict(container, error, {
+      reload: async () => {
+        await loadAll();
+        renderPanel();
+      },
+      reapply: async () => {
+        await loadAll();
+        const latest = state.requirements.find((entry) => entry.id === requirement.id);
+        const latestSir = latest?.sirs.find((entry) => entry.id === sir.id);
+        if (!latest || !latestSir)
+          throw new Error('Requirement or SIR is no longer available; draft kept.');
+        renderPanel();
+      },
+    });
+  }
+}
+
+async function toggleIndicator(requirement, indicator, container) {
+  try {
+    await requestJson(`${API}/requirements/${requirement.id}/indicators/${indicator.id}`, {
+      method: 'PATCH',
+      body: revisionBody(requirement, { observed: !indicator.observed }),
     });
     await loadAll();
     renderPanel();
   } catch (error) {
-    showError(container, error.message);
+    renderRequirementConflict(container, error, {
+      reload: async () => {
+        await loadAll();
+        renderPanel();
+      },
+      reapply: async () => {
+        await loadAll();
+        renderPanel();
+      },
+    });
   }
 }
 
-async function toggleIndicator(requirementId, indicator) {
-  await requestJson(`${API}/requirements/${requirementId}/indicators/${indicator.id}`, {
-    method: 'PATCH',
-    body: { observed: !indicator.observed },
-  });
-  await loadAll();
-  renderPanel();
-}
-
-async function deleteIndicator(requirementId, id) {
-  await requestJson(`${API}/requirements/${requirementId}/indicators/${id}`, { method: 'DELETE' });
-  await loadAll();
-  renderPanel();
+async function deleteIndicator(requirement, indicator, container) {
+  try {
+    await requestJson(`${API}/requirements/${requirement.id}/indicators/${indicator.id}`, {
+      method: 'DELETE',
+      body: revisionBody(requirement),
+    });
+    await loadAll();
+    renderPanel();
+  } catch (error) {
+    renderRequirementConflict(container, error, {
+      reload: async () => {
+        await loadAll();
+        renderPanel();
+      },
+      reapply: async () => {
+        await loadAll();
+        renderPanel();
+      },
+    });
+  }
 }
 
 /** A relation badge plus the cited report (or "Report withdrawn" once the
@@ -1565,11 +1676,25 @@ function renderEvidenceLinks(container, requirement, links) {
       remove.title = 'Remove evidence link';
       remove.setAttribute('aria-label', 'Remove evidence link');
       remove.addEventListener('click', async () => {
-        await requestJson(`${API}/requirements/${link.requirement_id}/evidence/${link.id}`, {
-          method: 'DELETE',
-        });
-        await loadAll();
-        renderPanel();
+        try {
+          await requestJson(`${API}/requirements/${link.requirement_id}/evidence/${link.id}`, {
+            method: 'DELETE',
+            body: revisionBody(requirement),
+          });
+          await loadAll();
+          renderPanel();
+        } catch (error) {
+          renderRequirementConflict(item, error, {
+            reload: async () => {
+              await loadAll();
+              renderPanel();
+            },
+            reapply: async () => {
+              await loadAll();
+              renderPanel();
+            },
+          });
+        }
       });
       item.append(remove);
     }
@@ -1589,7 +1714,7 @@ function renderSirRow(sir, requirement) {
   if (editable) {
     const deleteButton = createElement('button', 'icon-button danger', 'Delete');
     deleteButton.type = 'button';
-    deleteButton.addEventListener('click', () => deleteSir(requirement.id, sir.id));
+    deleteButton.addEventListener('click', () => deleteSir(requirement, sir, row));
     header.append(deleteButton);
   }
   row.append(header, fulfillmentBar(sir.fulfillment));
@@ -1601,7 +1726,7 @@ function renderSirRow(sir, requirement) {
     checkbox.type = 'checkbox';
     checkbox.checked = indicator.observed;
     checkbox.disabled = !editable;
-    checkbox.addEventListener('change', () => toggleIndicator(requirement.id, indicator));
+    checkbox.addEventListener('change', () => toggleIndicator(requirement, indicator, item));
     const label = createElement('span', null, indicator.description);
     item.append(checkbox, label);
     if (editable) {
@@ -1609,7 +1734,7 @@ function renderSirRow(sir, requirement) {
       remove.type = 'button';
       remove.title = 'Delete indicator';
       remove.setAttribute('aria-label', `Delete indicator ${indicator.description}`);
-      remove.addEventListener('click', () => deleteIndicator(requirement.id, indicator.id));
+      remove.addEventListener('click', () => deleteIndicator(requirement, indicator, item));
       item.append(remove);
     }
     indicatorList.append(item);
@@ -1622,12 +1747,14 @@ function renderSirRow(sir, requirement) {
     const indicatorInput = document.createElement('input');
     indicatorInput.type = 'text';
     indicatorInput.placeholder = 'Observable indicator…';
+    indicatorInput.value = state.requirementDrafts.indicators[sir.id] ?? '';
+    indicatorInput.addEventListener('input', () => {
+      state.requirementDrafts.indicators[sir.id] = indicatorInput.value;
+    });
     const indicatorAdd = createElement('button', 'chip-button', 'Add indicator');
     indicatorAdd.type = 'button';
     indicatorAdd.addEventListener('click', () => {
-      const value = indicatorInput.value;
-      indicatorInput.value = '';
-      addIndicator(requirement.id, sir.id, value, row);
+      addIndicator(requirement, sir, indicatorInput.value, row);
     });
     indicatorForm.append(indicatorInput, indicatorAdd);
     row.append(indicatorForm);
@@ -1636,11 +1763,27 @@ function renderSirRow(sir, requirement) {
   return row;
 }
 
-async function deleteRequirement(id) {
+async function deleteRequirement(requirement, container) {
   if (!(await askConfirm('Delete this requirement, its SIRs, and indicators?'))) return;
-  await requestJson(`${API}/requirements/${id}`, { method: 'DELETE' });
-  await loadAll();
-  renderPanel();
+  try {
+    await requestJson(`${API}/requirements/${requirement.id}`, {
+      method: 'DELETE',
+      body: revisionBody(requirement),
+    });
+    await loadAll();
+    renderPanel();
+  } catch (error) {
+    renderRequirementConflict(container, error, {
+      reload: async () => {
+        await loadAll();
+        renderPanel();
+      },
+      reapply: async () => {
+        await loadAll();
+        renderPanel();
+      },
+    });
+  }
 }
 
 function renderRequirementCard(requirement) {
@@ -1660,18 +1803,18 @@ function renderRequirementCard(requirement) {
   if (can('analyst') && canEditClient(requirement)) {
     const deleteButton = createElement('button', 'icon-button danger', 'Delete');
     deleteButton.type = 'button';
-    deleteButton.addEventListener('click', () => deleteRequirement(requirement.id));
+    deleteButton.addEventListener('click', () => deleteRequirement(requirement, card));
     header.append(deleteButton);
   }
   card.append(header);
   card.append(
     renderReleaseControl({
       item: requirement,
-      onRelease: (cells) => releaseRequirement(requirement.id, cells),
+      onRelease: (cells) => releaseRequirement(requirement, cells),
     }),
   );
   appendOwnerReassign(card, requirement.owner_cell, (cell) =>
-    reassignRequirementOwner(requirement.id, cell),
+    reassignRequirementOwner(requirement, cell),
   );
   card.append(createElement('h3', null, requirement.text));
   const meta = createElement('p', 'panel-note');
@@ -1689,12 +1832,14 @@ function renderRequirementCard(requirement) {
     const sirInput = document.createElement('input');
     sirInput.type = 'text';
     sirInput.placeholder = 'What, where, when to observe…';
+    sirInput.value = state.requirementDrafts.sirs[requirement.id] ?? '';
+    sirInput.addEventListener('input', () => {
+      state.requirementDrafts.sirs[requirement.id] = sirInput.value;
+    });
     const sirAdd = createElement('button', 'chip-button', 'Add SIR');
     sirAdd.type = 'button';
     sirAdd.addEventListener('click', () => {
-      const value = sirInput.value;
-      sirInput.value = '';
-      addSir(requirement.id, value, card);
+      addSir(requirement, sirInput.value, card);
     });
     sirForm.append(sirInput, sirAdd);
     card.append(sirForm);
@@ -1703,17 +1848,20 @@ function renderRequirementCard(requirement) {
   return card;
 }
 
-async function reassignRequirementOwner(id, ownerCell) {
-  await requestJson(`${API}/requirements/${id}/owner`, {
+async function reassignRequirementOwner(requirement, ownerCell) {
+  await requestJson(`${API}/requirements/${requirement.id}/owner`, {
     method: 'PATCH',
-    body: { owner_cell: ownerCell },
+    body: revisionBody(requirement, { owner_cell: ownerCell }),
   });
   await loadAll();
   renderPanel();
 }
 
-async function releaseRequirement(id, cells) {
-  await requestJson(`${API}/requirements/${id}/release`, { method: 'POST', body: { cells } });
+async function releaseRequirement(requirement, cells) {
+  await requestJson(`${API}/requirements/${requirement.id}/release`, {
+    method: 'POST',
+    body: revisionBody(requirement, { cells }),
+  });
   await loadAll();
   renderPanel();
 }
@@ -1736,6 +1884,13 @@ async function createRequirement(form, container) {
         ltiov,
       },
     });
+    state.requirementDrafts.create = {
+      kind: 'PIR',
+      text: '',
+      priority: '0',
+      decision_point: '',
+      ltiov: '',
+    };
     await loadAll();
     renderPanel();
   } catch (error) {
@@ -1865,6 +2020,7 @@ function renderRequirementsPanel() {
     const formSection = createElement('section', 'field-group');
     formSection.append(createElement('h3', null, 'New requirement'));
     const form = createElement('div', 'requirement-form');
+    const draft = state.requirementDrafts.create;
     const kindSelect = document.createElement('select');
     kindSelect.name = 'kind';
     [
@@ -1876,20 +2032,33 @@ function renderRequirementsPanel() {
       option.textContent = label;
       kindSelect.append(option);
     });
+    kindSelect.value = draft.kind;
+    kindSelect.addEventListener('change', () => (draft.kind = kindSelect.value));
     const textInput = document.createElement('input');
     textInput.type = 'text';
     textInput.name = 'text';
     textInput.placeholder = 'Will the enemy attack before D+2?';
+    textInput.value = draft.text;
+    textInput.addEventListener('input', () => (draft.text = textInput.value));
     const priorityInput = document.createElement('input');
     priorityInput.type = 'number';
     priorityInput.name = 'priority';
     priorityInput.placeholder = 'Priority';
-    priorityInput.value = '0';
+    priorityInput.value = draft.priority;
+    priorityInput.addEventListener('input', () => (draft.priority = priorityInput.value));
     const decisionInput = document.createElement('input');
     decisionInput.type = 'text';
     decisionInput.name = 'decision_point';
     decisionInput.placeholder = 'Decision point (optional)';
-    const ltiovInput = createDtgInput({ name: 'ltiov', label: 'LTIOV', reference: scenarioNow });
+    decisionInput.value = draft.decision_point;
+    decisionInput.addEventListener('input', () => (draft.decision_point = decisionInput.value));
+    const ltiovInput = createDtgInput({
+      name: 'ltiov',
+      label: 'LTIOV',
+      value: draft.ltiov,
+      reference: scenarioNow,
+    });
+    ltiovInput.addEventListener('input', () => (draft.ltiov = ltiovInput.value));
     const addButton = createElement('button', 'primary-button', 'Add requirement');
     addButton.type = 'button';
     addButton.addEventListener('click', () => createRequirement(form, formSection));
@@ -1925,6 +2094,7 @@ function evidenceTargets() {
       // requirement's, for reportForm.js's canEditClient gating (linking
       // evidence changes the target, not the report).
       owner_cell: requirement.owner_cell,
+      revision: requirement.revision,
     });
     requirement.sirs.forEach((sir) => {
       options.push({
@@ -1933,6 +2103,7 @@ function evidenceTargets() {
         requirement_id: requirement.id,
         label: `↳ SIR • ${sir.text}`,
         owner_cell: requirement.owner_cell,
+        revision: requirement.revision,
       });
     });
   });

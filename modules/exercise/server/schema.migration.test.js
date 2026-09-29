@@ -29,6 +29,37 @@ function tableCounts(database, tables) {
   );
 }
 
+describe('revision migration', () => {
+  test('runs after the instructor schema predecessor without recreating existing tables', () => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), 'exercise-revision-migration-'));
+    const file = path.join(tmpDir, 'exercise.db');
+    const now = new Date().toISOString();
+    let database = openState(file, MIGRATIONS.slice(0, -1));
+    expect(database.prepare('PRAGMA user_version').get().user_version).toBe(MIGRATIONS.length - 1);
+    database.exec(`
+      INSERT INTO story (id, title, briefing, objectives, instructor_notes, updated_at)
+        VALUES (1, 'Story exists', '', '', '', '${now}');
+      INSERT INTO requirements (id, kind, text, priority, owner_cell, releasable_to, created_at, updated_at)
+        VALUES (1, 'PIR', 'Existing requirement', 0, 'white', '[]', '${now}', '${now}');
+      INSERT INTO reports (id, text, reliability, credibility, fields, owner_cell, releasable_to, created_at, updated_at)
+        VALUES (1, 'Existing report', 'A', 1, '{}', 'white', '[]', '${now}', '${now}');
+    `);
+    database.close();
+
+    database = openState(file, MIGRATIONS);
+    expect(database.prepare('PRAGMA user_version').get().user_version).toBe(MIGRATIONS.length);
+    expect(database.prepare('SELECT title FROM story WHERE id = 1').get().title).toBe(
+      'Story exists',
+    );
+    expect(database.prepare('SELECT revision FROM requirements WHERE id = 1').get().revision).toBe(
+      1,
+    );
+    expect(database.prepare('SELECT revision FROM reports WHERE id = 1').get().revision).toBe(1);
+    expect(database.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    database.close();
+  });
+});
+
 // A fresh clone (CI) has no local state db: nothing to prove against. The
 // migration runs on a copy only, never on the real file.
 describe.skipIf(!existsSync(REAL_DB))(
@@ -86,10 +117,10 @@ describe.skipIf(!existsSync(REAL_DB))(
 
 describe('evidence_links rebuild: orphan handling, re-parenting, and the dropped report_id cascade', () => {
   function seedPreMigrationDatabase(file) {
-    // Every migration except the last three (evidence_links rebuild,
-    // indicators.requirement_id, and the instructor authoring migration),
+    // Every migration except the last four (evidence_links rebuild,
+    // indicators.requirement_id, instructor authoring, and optimistic revisions),
     // so this seeds pre-migration shape.
-    const database = openState(file, MIGRATIONS.slice(0, MIGRATIONS.length - 3));
+    const database = openState(file, MIGRATIONS.slice(0, MIGRATIONS.length - 4));
     const now = new Date().toISOString();
     database.exec(`
       INSERT INTO requirements (id, kind, text, priority, owner_cell, releasable_to, created_at, updated_at)

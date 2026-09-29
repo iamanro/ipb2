@@ -16,6 +16,9 @@ switched on: the "OpenTopoMap", "Satellite HD" and "ČÚZK Ortho" basemaps, see
 [Basemaps](#basemaps), and the real-time [weather](#weather-online) layers
 and forecast.)
 
+Current priorities and observed rehearsal results: [Current backlog and acceptance
+evidence](docs/current-backlog.md). Deployment procedures: [Operator runbook](docs/operator-runbook.md).
+
 ```mermaid
 graph LR
   A[Browser] --> B[Vite dev/preview server]
@@ -1005,7 +1008,23 @@ events) connection — the IPB view, for instance, refetches the open study
 when another tab changes it. A cell-owned item's event only reaches White
 (and admins) plus whichever cells it's owned by or released to — a Blue
 tab never hears about a Red-owned change, the same as it can't fetch it.
-There is no field-level merge: the last write wins, and a tab never hears
+There is no field-level merge. Reports and requirements use integer `revision`
+values: clients must send the revision they read when updating, deleting,
+releasing or reassigning an existing item. Requirement SIR, indicator and evidence
+mutations send the **parent requirement's** revision. A missing revision returns
+400; a stale revision returns 409 with `code: "stale_revision"` and
+`current_revision`. Authorization still runs first. Related changes invalidate
+revisions, including report-to-track linking and changes affecting requirement
+evidence; callers must use the revision from a fresh response after a mutation.
+
+The report editor keeps its unsaved draft through live refreshes and conflicts.
+**Reload latest** replaces that draft with the current report; **Reapply draft to
+latest** retains it against the latest revision and requires another explicit
+save. If the report is deleted or becomes unavailable, the draft remains visible
+without a save action. Requirement/SIR/indicator drafts survive local refreshes;
+a stale part submission offers reload/reapply rather than silently discarding
+what was typed. Draft retention is in-memory, not persistence across a browser
+reload. Other item kinds still use last-write-wins behavior. A tab never hears
 about its own changes twice. A signed-in user is capped at 8 concurrent
 streams (an accidental pile of stale tabs shouldn't starve everyone else's
 live updates); a stream is bound to the session that opened it, closed

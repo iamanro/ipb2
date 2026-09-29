@@ -218,7 +218,8 @@ async function fileReport(user, cellSizes) {
   const result = await user.client.request('write', '/api/exercise/reports', {
     body: { text, reliability: 'B', credibility: 2 },
   });
-  if (result.status === 200) user.reports.push(result.json.id);
+  if (result.status === 200)
+    user.reports.push({ id: result.json.id, revision: result.json.revision });
   else pendingReports.delete(text);
 }
 
@@ -355,8 +356,16 @@ async function main() {
 
   // Clean up: each user's own reports, then the users themselves.
   for (const user of users) {
-    for (const id of user.reports)
-      await user.client.request('cleanup', `/api/exercise/reports/${id}`, { method: 'DELETE' });
+    for (const { id, revision } of user.reports) {
+      const removed = await user.client.request('cleanup', `/api/exercise/reports/${id}`, {
+        method: 'DELETE',
+        body: { revision },
+      });
+      if (removed.status !== 200)
+        throw new Error(
+          `deleting load report ${id}: ${removed.status} ${JSON.stringify(removed.json)}`,
+        );
+    }
     await admin.request('cleanup', `/api/auth/users/${user.name}`, { method: 'DELETE' });
   }
   console.log('Removed the load-test users and their reports.');
