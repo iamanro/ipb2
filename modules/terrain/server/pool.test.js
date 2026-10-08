@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { HttpError } from '../../../server/http.ts';
-import { createTerrainPool } from './pool.js';
+import { createTerrainPool } from './pool.ts';
 
 const FIXTURE_WORKER = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  'pool.fixture.worker.js',
+  'pool.fixture.worker.ts',
 );
 
 let pool;

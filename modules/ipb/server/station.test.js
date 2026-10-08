@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { distanceAndBearing, fetchNearestStation, summariseMetar } from './station.js';
+import { distanceAndBearing, fetchNearestStation, summariseMetar } from './station.ts';
 
 const LIBAVA = { lon: 17.52, lat: 49.68 };
 // Trimmed aviationweather.gov JSON, as fetched for this area.

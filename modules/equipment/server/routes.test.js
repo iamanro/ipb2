@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { cardsParams } from './routes.js';
+import { cardsParams } from './routes.ts';
 
 describe('cardsParams (POST /api/equipment/cards body)', () => {
   test('rejects a body that is not a JSON object with a 400, not a crash', () => {

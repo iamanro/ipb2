@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import { LEGEND } from './mobility.js';
-import { renderHillshade, renderSlopeClasses } from './rasterTiles.js';
-import { tileRange } from './tiles.js';
+import { LEGEND } from './mobility.ts';
+import { renderHillshade, renderSlopeClasses } from './rasterTiles.ts';
+import { tileRange } from './tiles.ts';
 
 // A zoom-12 tile inside the Libavá test area; the elevation functions below
 // ignore where they are, only how they slope.

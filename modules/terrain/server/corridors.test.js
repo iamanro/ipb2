@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import { suggestAvenues } from './corridors.js';
-import { GO, NO_GO, SLOW_GO } from './landcover.js';
-import { METRES_PER_DEGREE_LATITUDE, latticeOf, longitudeScale, metresBetween } from './lattice.js';
+import { suggestAvenues } from './corridors.ts';
+import { GO, NO_GO, SLOW_GO } from './landcover.ts';
+import { METRES_PER_DEGREE_LATITUDE, latticeOf, longitudeScale, metresBetween } from './lattice.ts';
 
 const CELL = 50; // metres
 const WEST = 0;

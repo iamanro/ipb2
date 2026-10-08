@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { openState } from '../../../server/state.ts';
-import { MIGRATIONS } from './schema.js';
+import { MIGRATIONS } from './schema.ts';
 
 const REAL_DB = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

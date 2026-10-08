@@ -74,7 +74,7 @@ const ANNOUNCE = Symbol('announce');
 const DEFAULT_BODY_LIMIT = 1 << 20;
 
 /** One route a module declares (see the module doc above for each field). */
-type RouteSpec = {
+export type RouteSpec = {
   method: string;
   path: string | RegExp;
   verb: string;

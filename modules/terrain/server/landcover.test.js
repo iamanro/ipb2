@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { NO_GO, SLOW_GO, coverClass } from './landcover.js';
+import { NO_GO, SLOW_GO, coverClass } from './landcover.ts';
 
 describe('coverClass', () => {
   test('rivers and canals block movement, but mapped streams only restrict it', () => {

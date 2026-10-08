@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { createChmiClient, latestValues, parseStations } from './chmi.js';
+import { createChmiClient, latestValues, parseStations } from './chmi.ts';
 
 const LIBAVA = { lon: 17.52, lat: 49.68 };
 const NOW = Date.parse('2026-09-27T12:30:00Z');

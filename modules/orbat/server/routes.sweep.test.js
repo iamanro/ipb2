@@ -22,7 +22,7 @@ beforeAll(async () => {
     `ipb-orbat-sweep-test-${process.pid}-${Math.random().toString(36).slice(2)}`,
   );
   process.env.IPB_STATE_ROOT = stateRoot;
-  ({ default: routes } = await import('./routes.js'));
+  ({ default: routes } = await import('./routes.ts'));
   ({ createDispatcher } = await import('../../../server/dispatch.ts'));
   ({ sweepRoutes } = await import('../../../server/routeSweep.ts'));
   dispatcher = createDispatcher([routes]);

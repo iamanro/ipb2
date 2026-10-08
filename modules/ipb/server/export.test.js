@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { sanitizeFilename, toGeoJson, toKml } from './export.js';
+import { sanitizeFilename, toGeoJson, toKml } from './export.ts';
 
 const STUDY = { name: 'Op <Griffin> "Alpha" & Bravo' };
 

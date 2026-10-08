@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { dueEvents, reanchor, scenarioNowMs } from './scenarioClock.js';
+import { dueEvents, reanchor, scenarioNowMs } from './scenarioClock.ts';
 
 const BASE_REAL = new Date('2026-01-01T00:00:00.000Z').getTime();
 const BASE_SCENARIO = new Date('2026-06-01T06:00:00.000Z').getTime();

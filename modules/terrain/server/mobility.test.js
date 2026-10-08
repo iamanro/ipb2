@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { GO, NO_GO, SLOW_GO, UNKNOWN } from './landcover.js';
-import { slopeClass } from './mobility.js';
+import { GO, NO_GO, SLOW_GO, UNKNOWN } from './landcover.ts';
+import { slopeClass } from './mobility.ts';
 
 // Slope bands are doctrine (cross-country mobility classification), not
 // arbitrary tuning: 10 deg and 30 deg are the boundaries, and each boundary
