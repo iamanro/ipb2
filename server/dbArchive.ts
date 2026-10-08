@@ -10,7 +10,7 @@ export function archiveRoot() {
 }
 
 /** `PRAGMA integrity_check` on a database file, read-only: 'ok' or the first problems found. */
-export function integrityCheck(file) {
+export function integrityCheck(file: string): string {
   const database = new DatabaseSync(file, { readOnly: true });
   try {
     const rows = database.prepare('PRAGMA integrity_check').all();
@@ -29,7 +29,7 @@ export function integrityCheck(file) {
  * implementation of "copy a database file safely", not two silently
  * drifting apart.
  */
-export function vacuumInto(source, dest) {
+export function vacuumInto(source: string, dest: string) {
   const database = new DatabaseSync(source, { readOnly: true });
   try {
     database.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);

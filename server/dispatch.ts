@@ -50,9 +50,11 @@
  * body)` runs one of its routes without HTTP, announced like any other.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
 
-import { HttpError, sendJson } from './http.ts';
-import type { Actor } from './policy.ts';
+import { HttpError, isJsonObject, sendJson, type Json } from './http.ts';
+import type { LiveEvent } from './live.ts';
+import type { Actor, OwnedItem } from './policy.ts';
 import {
   canEdit,
   canRelease,
@@ -65,31 +67,118 @@ import {
   roleAtLeast,
   visibilitySql,
 } from './policy.ts';
-import { transact } from './state.ts';
+import { transact, type Row } from './state.ts';
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const VERBS = new Set(['see', 'change', 'create', 'list', 'none']);
 const REACHES = new Set(['everyone', 'white', 'handler']);
-const ANNOUNCE = Symbol('announce');
+const ANNOUNCE: unique symbol = Symbol('announce');
 const DEFAULT_BODY_LIMIT = 1 << 20;
+
+/** A row of a cell-owned item table: it always carries these columns. */
+export type ItemRow = Row & {
+  id: number;
+  owner_cell: string;
+  releasable_to: string | null;
+  revision?: number;
+};
+
+/** True when `row` has the columns every cell-owned item table carries. */
+export function isItemRow(row: Row | null | undefined): row is ItemRow {
+  return (
+    row != null &&
+    typeof row.id === 'number' &&
+    typeof row.owner_cell === 'string' &&
+    (row.releasable_to === null || typeof row.releasable_to === 'string')
+  );
+}
+
+/** What a handler composes access with: bound to the requester, never exposing them. */
+export type Access = {
+  white: boolean;
+  cell: string | null;
+  see(kind: string, id: number): Row;
+  canEdit(itemRow: OwnedItem): boolean;
+  visible(kind: string, options?: { alias?: string }): { sql: string; params: string[] };
+};
+/** The ownership a 'create' route must store on its new item. */
+export type Owner = { owner_cell: string; releasable_to: string[] };
+export type HandlerContext = {
+  item: ItemRow | undefined;
+  part: Row | undefined;
+  params: Record<string, string>;
+  query: URLSearchParams;
+  body: Json;
+  owner: Owner | undefined;
+  access: Access;
+  actorName: string | undefined;
+  request: IncomingMessage | null;
+  response: ServerResponse | null;
+};
+/** A 'handler'-reach route's result: the body, and the cells that hear about it. */
+export type Announcement = { [ANNOUNCE]: true; value: Json; cells: string[] };
+/** A handler's JSON body, or undefined when it sent the response itself. */
+export type HandlerResult = Json | Announcement | undefined;
 
 /** One route a module declares (see the module doc above for each field). */
 export type RouteSpec = {
   method: string;
   path: string | RegExp;
-  verb: string;
+  verb: 'see' | 'change' | 'create' | 'list' | 'none';
   item?: string;
   part?: string;
   role?: string;
-  reach?: string;
+  reach?: 'everyone' | 'white' | 'handler';
   changes?: boolean;
   bodyLimit?: number;
-  handler?: (context: any) => unknown;
+  handler: (context: HandlerContext) => HandlerResult | Promise<HandlerResult>;
 };
-type CompiledRoute = RouteSpec & { match: (path: string) => Record<string, string> | null };
+export type OwnershipChange = {
+  kind: string;
+  action: 'release' | 'reassign';
+  before: ItemRow;
+  after: ItemRow;
+  actorName: string | undefined;
+};
+export type ItemSpec = {
+  table: string;
+  path?: string;
+  label: string;
+  /** The table has a `revision` column that release/reassign must match and bump. */
+  revision?: boolean;
+  shape(row: ItemRow, context: { access: Access }): Json;
+  onOwnership?(change: OwnershipChange): void;
+};
+export type PartSpec = { table: string; item: string; column: string; label: string };
+export type ModuleSpec = {
+  id: string;
+  close?(): void;
+  database?: () => DatabaseSync;
+  items?: Record<string, ItemSpec>;
+  parts?: Record<string, PartSpec>;
+  routes?: RouteSpec[];
+  connect?(server: { runAs: RunAs }): void;
+};
+export type RunAs = (actor: Actor, method: string, route: string, body?: Json) => Promise<Json>;
+
+/** A declared route, or one of the generated release/reassign routes (no handler). */
+type CompiledRoute = (
+  | RouteSpec
+  | (Omit<RouteSpec, 'verb' | 'handler'> & { verb: 'release' | 'reassign'; handler?: undefined })
+) & { match: (path: string) => Record<string, string> | null };
+type CompiledModule = {
+  module: ModuleSpec;
+  items: Record<string, ItemSpec>;
+  parts: Record<string, PartSpec>;
+  routes: CompiledRoute[];
+};
+
+function isAnnouncement(result: HandlerResult): result is Announcement {
+  return typeof result === 'object' && result !== null && ANNOUNCE in result;
+}
 
 /** What a `reach: 'handler'` route returns: the body, and the cells that hear about it. */
-export function announce(value, cells) {
+export function announce(value: Json, cells: string[]): Announcement {
   if (!Array.isArray(cells) || cells.some((cell) => !CELLS.includes(cell))) {
     throw new Error(`announce: cells must be a list of ${CELLS.join('/')}.`);
   }
@@ -97,7 +186,7 @@ export function announce(value, cells) {
 }
 
 /** The actor for changes the server makes on its own (inject firing): counts as White. */
-export const EXERCISE_CONTROL = Object.freeze({
+export const EXERCISE_CONTROL: Actor = Object.freeze({
   name: 'scenario clock',
   admin: false,
   cell: 'white',
@@ -111,7 +200,7 @@ function compilePath(path: string | RegExp): (route: string) => Record<string, s
   return (route) => {
     const parts = route.split('/');
     if (parts.length !== segments.length) return null;
-    const params = {};
+    const params: Record<string, string> = {};
     for (let index = 0; index < segments.length; index += 1) {
       const segment = segments[index];
       if (segment.startsWith(':')) {
@@ -125,14 +214,16 @@ function compilePath(path: string | RegExp): (route: string) => Record<string, s
   };
 }
 
-function integerId(text, label) {
+function integerId(text: string | undefined, label: string) {
   if (!/^\d+$/.test(text ?? '')) throw new HttpError(404, `${label} ${text} not found.`);
   return Number(text);
 }
 
-function requireRevision(label, item, body) {
-  if (!Number.isInteger(body?.revision)) throw new HttpError(400, `${label} revision is required.`);
-  if (body.revision !== item.revision) {
+function requireRevision(label: string, item: ItemRow, body: Json) {
+  const revision = isJsonObject(body) ? body.revision : undefined;
+  if (typeof revision !== 'number' || !Number.isInteger(revision))
+    throw new HttpError(400, `${label} revision is required.`);
+  if (revision !== item.revision) {
     throw new HttpError(409, `${label} ${item.id} changed; reload latest before saving.`, {
       code: 'stale_revision',
       current_revision: item.revision,
@@ -141,28 +232,28 @@ function requireRevision(label, item, body) {
 }
 
 /** Reads a JSON body, or null when there is none (a bodiless POST/DELETE). */
-async function readBody(request, limit) {
+async function readBody(request: IncomingMessage | null, limit: number): Promise<Json> {
   if (!request) return null;
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request) {
+  for await (const chunk of request as AsyncIterable<Buffer>) {
     size += chunk.length;
     if (size > limit) throw new HttpError(413, 'The request body is too large.');
     chunks.push(chunk);
   }
   if (!size) return null;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const parsed: Json = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return parsed;
   } catch {
     throw new HttpError(400, 'The body is not valid JSON.');
   }
 }
 
 /** Validates a module's declaration once, at dispatcher creation, so a typo fails at startup. */
-function compileModule(module: any) {
-  // ponytail: module declarations stay untyped (any) until modules/*/module.js are converted.
-  const items: Record<string, any> = module.items ?? {};
-  const parts: Record<string, any> = module.parts ?? {};
+function compileModule(module: ModuleSpec): CompiledModule {
+  const items = module.items ?? {};
+  const parts = module.parts ?? {};
   for (const [kind, part] of Object.entries(parts)) {
     if (!items[part.item])
       throw new Error(`${module.id}: part "${kind}" names unknown item "${part.item}".`);
@@ -187,7 +278,7 @@ function compileModule(module: any) {
         `${module.id}: ${route.method} ${route.path} names an item in its path but declares no item kind.`,
       );
     }
-    if (['see', 'change', 'create'].includes(route.verb) && !items[route.item]) {
+    if (['see', 'change', 'create'].includes(route.verb) && !(route.item && items[route.item])) {
       throw new Error(
         `${module.id}: ${route.method} ${route.path} names unknown item "${route.item}".`,
       );
@@ -227,26 +318,40 @@ function compileModule(module: any) {
   return { module, items, parts, routes };
 }
 
+export type AuditEntry = {
+  user: string | undefined;
+  method: string;
+  path: string;
+  status: number;
+  client: string | null;
+};
+
 export function createDispatcher(
-  modules: any[],
+  modules: ModuleSpec[],
   {
     publish = () => {},
     audit = () => {},
-  }: { publish?: (event: object) => void; audit?: (entry: object) => void } = {},
+  }: { publish?: (event: LiveEvent) => void; audit?: (entry: AuditEntry) => void } = {},
 ) {
   const compiled = new Map(modules.map((module) => [module.id, compileModule(module)]));
 
-  function fetchRow(entry, table, id) {
-    return entry.module.database().prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) ?? null;
+  function database(entry: CompiledModule): DatabaseSync {
+    if (!entry.module.database) throw new Error(`${entry.module.id}: items need database().`);
+    return entry.module.database();
+  }
+
+  function fetchRow(entry: CompiledModule, table: string, id: SQLOutputValue): Row | null {
+    if (id instanceof Uint8Array) return null;
+    return database(entry).prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) ?? null;
   }
 
   /** The access capability a handler gets: bound to the requester, never exposing them. */
-  function accessFor(entry, actor) {
+  function accessFor(entry: CompiledModule, actor: Actor): Access {
     return {
       white: isWhite(actor),
       cell: actor?.cell ?? null,
       /** A row of any item or part kind the requester can see, or 404. */
-      see(kind, id) {
+      see(kind: string, id: number) {
         const part = entry.parts[kind];
         const itemKind = part ? part.item : kind;
         const spec = entry.items[itemKind];
@@ -254,13 +359,14 @@ export function createDispatcher(
         const label = (part ?? spec).label;
         const row = fetchRow(entry, (part ?? spec).table, id);
         const item = row && (part ? fetchRow(entry, spec.table, row[part.column]) : row);
-        if (!item || !canSee(actor, item)) throw new HttpError(404, `${label} ${id} not found.`);
+        if (!row || !isItemRow(item) || !canSee(actor, item))
+          throw new HttpError(404, `${label} ${id} not found.`);
         return row;
       },
       /** Whether the requester may change this item row (for per-row flags in a response). */
-      canEdit: (itemRow) => canEdit(actor, itemRow),
+      canEdit: (itemRow: OwnedItem) => canEdit(actor, itemRow),
       /** The WHERE condition limiting an item kind's list to what the requester can see. */
-      visible(kind, options) {
+      visible(kind: string, options?: { alias?: string }) {
         if (!entry.items[kind])
           throw new Error(`${entry.module.id}: visible() needs an item kind, got "${kind}".`);
         return visibilitySql(actor, options);
@@ -268,49 +374,77 @@ export function createDispatcher(
     };
   }
 
-  function resolveItem(entry, route, params, actor) {
-    const spec = entry.items[route.item];
+  function resolveItem(
+    entry: CompiledModule,
+    route: CompiledRoute,
+    params: Record<string, string>,
+    actor: Actor,
+  ): { item: ItemRow; part: Row | undefined } {
+    const { spec } = routeItem(entry, route);
     const id = integerId(params.item, spec.label);
     const item = fetchRow(entry, spec.table, id);
-    if (!item || !canSee(actor, item)) throw new HttpError(404, `${spec.label} ${id} not found.`);
-    let part = null;
+    if (!isItemRow(item) || !canSee(actor, item))
+      throw new HttpError(404, `${spec.label} ${id} not found.`);
+    let part: Row | undefined;
     if (route.part) {
       const partSpec = entry.parts[route.part];
       const partId = integerId(params.part, partSpec.label);
-      part = fetchRow(entry, partSpec.table, partId);
-      if (!part || part[partSpec.column] !== id)
+      const row = fetchRow(entry, partSpec.table, partId);
+      if (!row || row[partSpec.column] !== id)
         throw new HttpError(404, `${partSpec.label} ${partId} not found.`);
+      part = row;
     }
     return { item, part };
   }
 
-  function ownershipChange(entry, route, item, actor, body, actorName) {
-    const spec = entry.items[route.item];
+  /** The item kind a route names and its spec; compileModule guaranteed both exist. */
+  function routeItem(
+    entry: CompiledModule,
+    route: CompiledRoute,
+  ): { kind: string; spec: ItemSpec } {
+    const kind = route.item;
+    const spec = kind ? entry.items[kind] : undefined;
+    if (!kind || !spec)
+      throw new Error(`${entry.module.id}: ${route.method} ${route.path} has no item.`);
+    return { kind, spec };
+  }
+
+  function ownershipChange(
+    entry: CompiledModule,
+    route: CompiledRoute & { verb: 'release' | 'reassign' },
+    item: ItemRow,
+    actor: Actor,
+    body: Json,
+    actorName: string | undefined,
+  ): { value: Json; cells: string[] } {
+    const { kind, spec } = routeItem(entry, route);
     const before = item;
     let ownerCell = item.owner_cell;
-    let releasable;
+    let releasable: string[];
+    const fields = isJsonObject(body) ? body : {};
     if (route.verb === 'release') {
       if (!canRelease(actor, item))
         throw new HttpError(403, `You may not release this ${spec.label}.`);
       if (spec.revision) requireRevision(spec.label, item, body);
-      releasable = normalizeRelease(body?.cells, ownerCell);
+      releasable = normalizeRelease(fields.cells, ownerCell);
     } else {
       if (!isWhite(actor)) throw new HttpError(403, `Only White may reassign this ${spec.label}.`);
       if (spec.revision) requireRevision(spec.label, item, body);
-      ownerCell = body?.owner_cell;
-      if (!CELLS.includes(ownerCell)) throw new HttpError(400, `Unknown cell: ${ownerCell}`);
+      const requested = fields.owner_cell;
+      if (typeof requested !== 'string' || !CELLS.includes(requested))
+        throw new HttpError(400, `Unknown cell: ${JSON.stringify(requested)}`);
+      ownerCell = requested;
       releasable = normalizeRelease(liveCellsFor(item).slice(1), ownerCell);
     }
-    const database = entry.module.database();
-    const after = transact(database, () => {
+    const db = database(entry);
+    const after = transact(db, () => {
       const bumpRevision = spec.revision ? ', revision = revision + 1' : '';
-      database
-        .prepare(
-          `UPDATE ${spec.table} SET owner_cell = ?, releasable_to = ?${bumpRevision} WHERE id = ?`,
-        )
-        .run(ownerCell, JSON.stringify(releasable), item.id);
+      db.prepare(
+        `UPDATE ${spec.table} SET owner_cell = ?, releasable_to = ?${bumpRevision} WHERE id = ?`,
+      ).run(ownerCell, JSON.stringify(releasable), item.id);
       const row = fetchRow(entry, spec.table, item.id);
-      spec.onOwnership?.({ kind: route.item, action: route.verb, before, after: row, actorName });
+      if (!isItemRow(row)) throw new Error(`${spec.table} ${item.id} vanished mid-update.`);
+      spec.onOwnership?.({ kind, action: route.verb, before, after: row, actorName });
       return row;
     });
     const cells = [...new Set([...liveCellsFor(before), ...liveCellsFor(after)])];
@@ -339,8 +473,8 @@ export function createDispatcher(
     actor: Actor;
     request?: IncomingMessage | null;
     response?: ServerResponse | null;
-    body?: unknown;
-  }) {
+    body?: Json;
+  }): Promise<{ value: Json; changes: boolean; cells: string[] | null | undefined }> {
     const entry = compiled.get(moduleId);
     if (!entry) throw new HttpError(404, 'Unknown module.');
     let route: CompiledRoute | null = null;
@@ -368,15 +502,17 @@ export function createDispatcher(
     }
 
     const { item, part } =
-      route.item && route.verb !== 'create' ? resolveItem(entry, route, params, actor) : {};
-    if (route.verb === 'change' && !canEdit(actor, item)) {
+      route.item && route.verb !== 'create'
+        ? resolveItem(entry, route, params ?? {}, actor)
+        : { item: undefined, part: undefined };
+    if (route.verb === 'change' && item && !canEdit(actor, item)) {
       throw new HttpError(
         403,
         `Released to your cell for reading only; the ${item.owner_cell} cell owns it.`,
       );
     }
 
-    const body =
+    const body: Json =
       givenBody !== undefined
         ? givenBody
         : MUTATION_METHODS.has(method)
@@ -384,16 +520,22 @@ export function createDispatcher(
           : null;
     const actorName = actor.name;
 
-    let value;
-    let cells;
+    let value: Json;
+    let cells: string[] | undefined;
     if (route.verb === 'release' || route.verb === 'reassign') {
+      if (!item) throw new Error(`${moduleId}: ${method} ${route.path} resolved no item.`);
       ({ value, cells } = ownershipChange(entry, route, item, actor, body, actorName));
     } else {
-      let owner;
+      let owner: Owner | undefined;
+      const fields = isJsonObject(body) ? body : {};
       if (route.verb === 'create') {
-        const ownerCell = ownerCellForCreate(actor, body?.owner_cell ?? undefined);
-        const requested = body?.releasable_to ?? [];
-        if (requested.length && !canRelease(actor, { owner_cell: ownerCell })) {
+        const ownerCell = ownerCellForCreate(actor, fields.owner_cell ?? undefined);
+        const requested = fields.releasable_to ?? [];
+        if (
+          Array.isArray(requested) &&
+          requested.length &&
+          !canRelease(actor, { owner_cell: ownerCell })
+        ) {
           const label = route.item ? entry.items[route.item]?.label : null;
           throw new HttpError(403, `You may not release this ${label ?? 'item'}.`);
         }
@@ -405,10 +547,10 @@ export function createDispatcher(
       const query = url?.searchParams ?? new URLSearchParams();
       // Only the generated release/reassign routes lack a handler, and they returned above.
       if (!route.handler) throw new Error(`${moduleId}: ${method} ${path} has no handler.`);
-      value = await route.handler({
+      const result = await route.handler({
         item,
         part,
-        params,
+        params: params ?? {},
         query,
         body,
         owner,
@@ -418,31 +560,33 @@ export function createDispatcher(
         response,
       });
       if (route.reach === 'handler') {
-        if (!value?.[ANNOUNCE])
+        if (!isAnnouncement(result))
           throw new Error(
             `${moduleId}: ${method} ${route.path} must return announce(value, cells).`,
           );
-        ({ value, cells } = value);
-      } else if (value?.[ANNOUNCE]) {
+        ({ value, cells } = result);
+      } else if (isAnnouncement(result)) {
         throw new Error(
           `${moduleId}: ${method} ${route.path} returned announce() without reach: 'handler'.`,
         );
+      } else {
+        value = result ?? null;
       }
       if (
         route.verb === 'create' &&
-        value &&
-        typeof value === 'object' &&
+        owner &&
+        isJsonObject(value) &&
         'owner_cell' in value &&
         value.owner_cell !== owner.owner_cell
       ) {
         throw new Error(
-          `${moduleId}: ${method} ${route.path} stored owner_cell "${value.owner_cell}", not "${owner.owner_cell}".`,
+          `${moduleId}: ${method} ${route.path} stored owner_cell ${JSON.stringify(value.owner_cell)}, not "${owner.owner_cell}".`,
         );
       }
     }
 
     const changes = MUTATION_METHODS.has(method) && route.changes !== false;
-    let audience = null;
+    let audience: string[] | null | undefined = null;
     if (changes) {
       const everyone = route.verb === 'none' && route.reach === 'everyone';
       audience = everyone ? undefined : (cells ?? ['white']);
@@ -451,10 +595,29 @@ export function createDispatcher(
   }
 
   /** The HTTP entry point, called by server/api.ts after authentication. */
-  async function handle({ moduleId, route, url, request, response, actor, client, rawClient }) {
+  async function handle({
+    moduleId,
+    route,
+    url,
+    request,
+    response,
+    actor,
+    client,
+    rawClient,
+  }: {
+    moduleId: string;
+    route: string;
+    url: URL;
+    request: IncomingMessage;
+    response: ServerResponse;
+    actor: Actor;
+    client: string | null;
+    rawClient: string | null;
+  }) {
+    const method = request.method ?? 'GET';
     const result = await run({
       moduleId,
-      method: request.method,
+      method,
       route,
       url,
       actor,
@@ -466,7 +629,7 @@ export function createDispatcher(
         if (response.statusCode >= 400) return;
         publish({
           module: moduleId,
-          method: request.method,
+          method,
           route,
           client,
           user: actor.name,
@@ -475,7 +638,7 @@ export function createDispatcher(
         });
         audit({
           user: actor.name,
-          method: request.method,
+          method,
           path: url.pathname,
           status: response.statusCode,
           client: rawClient,
@@ -484,11 +647,17 @@ export function createDispatcher(
       if (response.writableEnded) finish();
       else response.once('finish', finish);
     }
-    if (!response.writableEnded && !response.headersSent) sendJson(response, result.value ?? null);
+    if (!response.writableEnded && !response.headersSent) sendJson(response, result.value);
   }
 
   /** Runs a route as `actor` without HTTP (server-originated changes), announcing it like any change. */
-  async function runAs(actor, moduleId, method, route, body = null) {
+  async function runAs(
+    actor: Actor,
+    moduleId: string,
+    method: string,
+    route: string,
+    body: Json = null,
+  ): Promise<Json> {
     const result = await run({ moduleId, method, route, actor, body });
     if (result.changes) {
       publish({

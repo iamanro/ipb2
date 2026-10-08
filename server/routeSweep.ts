@@ -1,4 +1,8 @@
+import type { createDispatcher } from './dispatch.ts';
 import { HttpError } from './http.ts';
+import type { Actor } from './policy.ts';
+
+type Fixture = { item: number; parts?: Record<string, number> };
 
 /**
  * The per-module guard ADR 0002 relies on, generated from the route table so
@@ -18,18 +22,30 @@ import { HttpError } from './http.ts';
  *     params: { <other :param>: value },           // e.g. { format: 'geojson' }
  *   })
  */
-export async function sweepRoutes({ dispatcher, moduleId, actor, fixtures, params = {} }) {
+export async function sweepRoutes({
+  dispatcher,
+  moduleId,
+  actor,
+  fixtures,
+  params = {},
+}: {
+  dispatcher: ReturnType<typeof createDispatcher>;
+  moduleId: string;
+  actor: Actor;
+  fixtures: Record<string, { hidden: Fixture; released: Fixture }>;
+  params?: Record<string, string | number>;
+}) {
   const failures: string[] = [];
   const routes = dispatcher
     .describe()
     .filter((route) => route.module === moduleId && route.item && route.verb !== 'create');
   for (const route of routes) {
-    const fixture = fixtures[route.item];
+    const fixture = route.item ? fixtures[route.item] : undefined;
     if (!fixture) {
       failures.push(`${route.method} ${route.path}: no fixture for item kind "${route.item}"`);
       continue;
     }
-    const cases: [string, number][] = [['hidden', 404]];
+    const cases: ['hidden' | 'released', number][] = [['hidden', 404]];
     if (route.method !== 'GET' && route.method !== 'HEAD') cases.push(['released', 403]);
     for (const [variant, expected] of cases) {
       const target = fixture[variant];
@@ -38,7 +54,7 @@ export async function sweepRoutes({ dispatcher, moduleId, actor, fixtures, param
         .map((segment) => {
           if (segment === ':item') return String(target.item);
           if (segment === ':part')
-            return String(target.parts?.[route.part] ?? 'missing-part-fixture');
+            return String((route.part && target.parts?.[route.part]) ?? 'missing-part-fixture');
           if (segment.startsWith(':')) return String(params[segment.slice(1)] ?? '1');
           return segment;
         })

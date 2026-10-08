@@ -2,7 +2,7 @@ import { crc32, deflateSync } from 'node:zlib';
 
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-function chunk(type, data) {
+function chunk(type: string, data: Buffer) {
   const length = Buffer.alloc(4);
   length.writeUInt32BE(data.length);
   const typeAndData = Buffer.concat([Buffer.from(type, 'ascii'), data]);
@@ -12,7 +12,7 @@ function chunk(type, data) {
 }
 
 /** Encode 8-bit RGBA pixels (row-major, `width * height * 4` bytes) as a PNG. */
-export function encodePng(width, height, rgba) {
+export function encodePng(width: number, height: number, rgba: Uint8Array | Uint8ClampedArray) {
   const stride = width * 4;
   // Each scanline is prefixed with its filter type; 0 (None) keeps this simple.
   const raw = Buffer.alloc((stride + 1) * height);

@@ -19,7 +19,17 @@ import { stateDirectory } from './state.ts';
 
 const SIDECARS = ['-wal', '-shm', '-journal'];
 
-export function declareStateDatabase({ id, file, exercise, defaultDir }) {
+export function declareStateDatabase({
+  id,
+  file,
+  exercise,
+  defaultDir,
+}: {
+  id: string;
+  file: string;
+  exercise: boolean;
+  defaultDir: string;
+}) {
   const closers = new Set<() => void>();
   const fullPath = () => path.join(stateDirectory(id, defaultDir), file);
 
@@ -40,7 +50,7 @@ export function declareStateDatabase({ id, file, exercise, defaultDir }) {
       return fullPath();
     },
     /** Registers what drops this database's open connection (a store's close and cached handle). */
-    onClose(closer) {
+    onClose(closer: () => void) {
       closers.add(closer);
     },
     close,
@@ -48,7 +58,7 @@ export function declareStateDatabase({ id, file, exercise, defaultDir }) {
     /** A `-wal`/`-shm` file exists: a running server has it open (a clean shutdown removes them). */
     looksOpen: () => existsSync(`${fullPath()}-wal`) || existsSync(`${fullPath()}-shm`),
     /** A consistent copy into `dir` (safe against a live writer); its size, or null if there's no database yet. */
-    copyInto(dir) {
+    copyInto(dir: string) {
       if (!existsSync(fullPath())) return null;
       const dest = path.join(dir, file);
       vacuumInto(fullPath(), dest);
@@ -61,8 +71,8 @@ export function declareStateDatabase({ id, file, exercise, defaultDir }) {
       removeSidecars();
     },
     /** Replaces it with `source` (a copy made by `copyInto`), which must pass an integrity check first. */
-    replaceFrom(source) {
-      let check;
+    replaceFrom(source: string) {
+      let check: string;
       try {
         check = integrityCheck(source);
       } catch (error) {

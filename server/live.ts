@@ -14,6 +14,17 @@ const MAX_CLIENTS = 64;
  * else's live updates by opening every global slot (IPB-AUTH-005). */
 const MAX_CLIENTS_PER_USER = 8;
 
+/** One change announcement; `cells` limits it to those cells (plus White). */
+export type LiveEvent = {
+  module: string;
+  route: string;
+  method?: string;
+  client?: string | null;
+  user?: string;
+  at?: string;
+  cells?: string[];
+};
+
 type LiveAccess = { cell: string | null; role: string | null; admin?: boolean | number };
 type LiveClient = {
   keepAlive: ReturnType<typeof setInterval>;
@@ -29,7 +40,7 @@ const clients = new Map<ServerResponse, LiveClient>();
 /** C4: a stream receives `event` when it carries no `cells` (a global
  * change), or the stream's user is White/admin, or the stream's cell is
  * among `event.cells`. */
-function deliverTo(meta, event) {
+function deliverTo(meta: LiveClient, event: LiveEvent) {
   if (!event.cells) return true;
   if (meta.admin || meta.cell === 'white') return true;
   return meta.cell != null && event.cells.includes(meta.cell);
@@ -37,7 +48,7 @@ function deliverTo(meta, event) {
 
 /** Broadcasts `event` (any JSON-serialisable value) to every open
  * subscriber it's visible to (C4). */
-export function publish(event) {
+export function publish(event: LiveEvent) {
   if (!clients.size) return;
   const payload = `data: ${JSON.stringify(event)}\n\n`;
   for (const [response, meta] of clients) {
@@ -49,7 +60,7 @@ export function subscriberCount() {
   return clients.size;
 }
 
-function countForUser(user) {
+function countForUser(user: string | undefined) {
   let n = 0;
   for (const meta of clients.values()) {
     if (meta.user === user) n += 1;
@@ -57,7 +68,7 @@ function countForUser(user) {
   return n;
 }
 
-function forget(response) {
+function forget(response: ServerResponse) {
   const meta = clients.get(response);
   if (!meta) return;
   clearInterval(meta.keepAlive);
@@ -146,7 +157,7 @@ export function handleLive(
 
 /** Ends every stream opened with this exact session token, e.g. right after
  * a same-process `POST /api/auth/logout` (IPB-AUTH-005). */
-export function closeStreamsForToken(tokenHash) {
+export function closeStreamsForToken(tokenHash: string | null) {
   if (!tokenHash) return;
   // Deleting the current (or an unvisited) entry mid-iteration is
   // well-defined for `Map`, so this needs no defensive array copy first.
@@ -163,7 +174,7 @@ export function closeStreamsForToken(tokenHash) {
  * with no channel into a running server's memory, so a CLI-driven removal
  * or password change relies on `revalidate` at the next keep-alive tick
  * instead — this is for same-process callers that can act immediately. */
-export function closeStreamsForUser(user) {
+export function closeStreamsForUser(user: string) {
   for (const [response, meta] of clients) {
     if (meta.user === user) {
       forget(response);

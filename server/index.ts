@@ -25,13 +25,13 @@
  */
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import http from 'node:http';
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
-import { createApiMiddleware, isBlockedStaticPath, resolveAuthMode } from './api.ts';
+import { createApiMiddleware, isBlockedStaticPath, resolveAuthMode, type AuthMode } from './api.ts';
 import { errorMessage } from './http.ts';
 import { dataDirectory, stateDirectory } from './state.ts';
 
@@ -60,7 +60,7 @@ const MIME_TYPES = new Map(
   }),
 );
 
-export function contentTypeFor(filePath) {
+export function contentTypeFor(filePath: string) {
   return MIME_TYPES.get(path.extname(filePath).toLowerCase()) || 'application/octet-stream';
 }
 
@@ -76,17 +76,17 @@ export function contentTypeFor(filePath) {
  * `/equipment/`, … (`src/main.js`'s `route()`), the same way `vp
  * dev`/`vp preview` behave.
  */
-export function createStaticHandler(distDir) {
+export function createStaticHandler(distDir: string) {
   const indexHtml = path.join(distDir, 'index.html');
   const assetsDir = path.join(distDir, 'assets') + path.sep;
 
-  return function serveStatic(request, response) {
+  return function serveStatic(request: IncomingMessage, response: ServerResponse): boolean {
     if (request.method !== 'GET' && request.method !== 'HEAD') return false;
     if (!existsSync(indexHtml)) return false;
 
-    let pathname;
+    let pathname: string;
     try {
-      pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+      pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
     } catch {
       response.writeHead(400).end('Bad request.');
       return true;
@@ -129,8 +129,8 @@ export function createStaticHandler(distDir) {
  * files are present rather than failing hard, since a fresh deployment may
  * still be missing the optional DMR4G detail or ortho imagery.
  */
-export function createHealthzHandler({ projectRoot }) {
-  return async function handleHealthz(response) {
+export function createHealthzHandler({ projectRoot }: { projectRoot: string }) {
+  return async function handleHealthz(response: ServerResponse) {
     const checks: {
       state: boolean;
       stateError?: string;
@@ -219,21 +219,29 @@ export function createHealthzHandler({ projectRoot }) {
  * (not read from module-level constants) so `index.test.js` can point them
  * at a throwaway tree without touching the real `dist/` or `modules/*`.
  */
-export function createRequestListener({ distDir, projectRoot, mode }) {
+export function createRequestListener({
+  distDir,
+  projectRoot,
+  mode,
+}: {
+  distDir: string;
+  projectRoot: string;
+  mode: AuthMode;
+}) {
   const { dispatch, close } = createApiMiddleware(mode);
   const serveStatic = createStaticHandler(distDir);
   const handleHealthz = createHealthzHandler({ projectRoot });
 
-  function listener(request, response) {
+  function listener(request: IncomingMessage, response: ServerResponse) {
     if (request.url === '/healthz') {
       handleHealthz(response).catch((error) => {
         if (!response.headersSent) response.writeHead(500);
-        response.end(JSON.stringify({ ok: false, error: error.message }));
+        response.end(JSON.stringify({ ok: false, error: errorMessage(error) }));
       });
       return;
     }
     dispatch(request, response, () => {
-      if (isBlockedStaticPath(request.url)) {
+      if (isBlockedStaticPath(request.url ?? '/')) {
         response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Not found.');
         return;
       }
@@ -262,7 +270,7 @@ async function main() {
   });
 
   let shuttingDown = false;
-  async function shutdown(signal) {
+  async function shutdown(signal: NodeJS.Signals) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[ipb] ${signal} received, shutting down…`);

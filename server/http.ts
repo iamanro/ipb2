@@ -1,5 +1,15 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from 'node:http';
+
+/** Any value `JSON.parse` can produce: what a request body is before validation. */
+export type Json = null | boolean | number | string | Json[] | JsonObject;
+export type JsonObject = { [key: string]: Json | undefined };
+
+/** A JSON object (not an array or null): the only body shape most routes accept. */
+export function isJsonObject(value: Json | undefined): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 /** `error.message` for an Error, else the thrown value as text: what a `catch` can report. */
 export function errorMessage(error: unknown): string {
@@ -17,7 +27,7 @@ export class HttpError extends Error {
   }
 }
 
-export function sendJson(response, value, status = 200) {
+export function sendJson(response: ServerResponse, value: Json, status = 200) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -28,7 +38,12 @@ export function sendJson(response, value, status = 200) {
 }
 
 /** Send a binary body. Tile URLs carry a data version, so they may be cached long. */
-export function sendBytes(response, body, contentType, cacheControl = 'no-store') {
+export function sendBytes(
+  response: ServerResponse,
+  body: Uint8Array,
+  contentType: string,
+  cacheControl = 'no-store',
+) {
   response.writeHead(200, {
     'Content-Type': contentType,
     'Content-Length': body.byteLength,
@@ -37,7 +52,13 @@ export function sendBytes(response, body, contentType, cacheControl = 'no-store'
   response.end(body);
 }
 
-export function integerParameter(query, name, fallback, minimum, maximum) {
+export function integerParameter(
+  query: URLSearchParams,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
   const raw = query.get(name);
   if (raw === null) return fallback;
   const value = Number.parseInt(raw, 10);
@@ -45,7 +66,13 @@ export function integerParameter(query, name, fallback, minimum, maximum) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-export function numberParameter(query, name, fallback, minimum, maximum) {
+export function numberParameter(
+  query: URLSearchParams,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
   const raw = query.get(name);
   if (raw === null) return fallback;
   const value = Number.parseFloat(raw);
@@ -54,20 +81,31 @@ export function numberParameter(query, name, fallback, minimum, maximum) {
 }
 
 /** Read a JSON request body. Rejects anything larger than `limit` bytes. */
-export async function readJson(request, limit = 1 << 20) {
+export async function readJson(request: IncomingMessage, limit = 1 << 20): Promise<Json> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of request) {
+  for await (const chunk of request as AsyncIterable<Buffer>) {
     size += chunk.length;
     if (size > limit) throw new HttpError(413, 'Request body too large.');
     chunks.push(chunk);
   }
   if (!size) throw new HttpError(400, 'A JSON body is required.');
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const parsed: Json = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return parsed;
   } catch {
     throw new HttpError(400, 'The body is not valid JSON.');
   }
+}
+
+/** A JSON request body that must be an object (every form-like route's body). */
+export async function readJsonObject(
+  request: IncomingMessage,
+  limit = 1 << 20,
+): Promise<JsonObject> {
+  const body = await readJson(request, limit);
+  if (!isJsonObject(body)) throw new HttpError(400, 'A JSON object body is required.');
+  return body;
 }
 
 /**
@@ -75,7 +113,12 @@ export async function readJson(request, limit = 1 << 20) {
  * requests, so a plain 200 response would force the client to download the
  * whole archive for every tile.
  */
-export async function serveFile(request, response, absolutePath, contentType) {
+export async function serveFile(
+  request: IncomingMessage,
+  response: ServerResponse,
+  absolutePath: string,
+  contentType: string,
+) {
   let info;
   try {
     info = await stat(absolutePath);
@@ -86,7 +129,7 @@ export async function serveFile(request, response, absolutePath, contentType) {
   // Revalidate on every use: these files are rebuilt in place, and a cached
   // byte range of the old file mixed with ranges of the new one is corrupt.
   const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
-  const headers = {
+  const headers: OutgoingHttpHeaders = {
     'Content-Type': contentType,
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-cache',

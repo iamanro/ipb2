@@ -18,12 +18,11 @@ import { statSync } from 'node:fs';
  * returns the current handle, or null while the first file does not exist;
  * errors from `open` propagate and the next `get()` tries again.
  */
-export function referenceFile<H extends { close(): void }>(
-  file: string | string[],
-  open: (file: any) => H,
+export function referenceFile<F extends string | string[], H extends { close(): void }>(
+  file: F,
+  open: (file: F) => H,
 ): { get(): H | null; close(): void } {
-  const multiple = Array.isArray(file);
-  const paths = multiple ? file : [file];
+  const paths: string[] = Array.isArray(file) ? file : [file];
   let handle: H | null = null;
   let identity: string | null = null;
   function close() {
@@ -39,7 +38,7 @@ export function referenceFile<H extends { close(): void }>(
         : null;
       if (current !== identity) {
         close();
-        if (current) handle = open(multiple ? paths : paths[0]);
+        if (current) handle = open(file);
         identity = current;
       }
       return handle;

@@ -1,6 +1,9 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from 'node:sqlite';
+
+/** A SQLite row as `node:sqlite` returns it; read columns with the readers below. */
+export type Row = Record<string, SQLOutputValue>;
 
 export type Migration =
   | string
@@ -12,7 +15,7 @@ export type Migration =
  * `$IPB_STATE_ROOT/<id>` when set, so end-to-end tests run against a
  * throwaway copy and never touch the analyst's own studies.
  */
-export function stateDirectory(moduleId, defaultDirectory) {
+export function stateDirectory(moduleId: string, defaultDirectory: string) {
   const root = process.env.IPB_STATE_ROOT;
   return root ? path.join(root, moduleId) : defaultDirectory;
 }
@@ -23,7 +26,7 @@ export function stateDirectory(moduleId, defaultDirectory) {
  * (read-only for the server, writable for the build tools) instead of one
  * per module inside the code tree.
  */
-export function dataDirectory(moduleId, defaultDirectory) {
+export function dataDirectory(moduleId: string, defaultDirectory: string) {
   const root = process.env.IPB_DATA_ROOT;
   return root ? path.join(root, moduleId) : defaultDirectory;
 }
@@ -86,7 +89,11 @@ export function openState(file: string, migrations: Migration[]): DatabaseSync {
  * preserved because that script copies them, so any other table's foreign key
  * into the rebuilt table survives untouched.
  */
-function runRebuildMigration(database, migration, index) {
+function runRebuildMigration(
+  database: DatabaseSync,
+  migration: { sql: string; rebuild: true },
+  index: number,
+) {
   database.exec('PRAGMA foreign_keys = OFF');
   try {
     transact(database, () => {
@@ -105,13 +112,58 @@ function runRebuildMigration(database, migration, index) {
   }
 }
 
+// Column readers: a row's value with its real type, or an error naming the
+// column when the schema and the code disagree (caught at the read, not later).
+function columnError(column: string, expected: string, value: SQLOutputValue | undefined) {
+  return new Error(`Column ${column}: expected ${expected}, got ${typeof value}.`);
+}
+
+export function text(row: Row, column: string): string {
+  const value = row[column];
+  if (typeof value !== 'string') throw columnError(column, 'text', value);
+  return value;
+}
+
+export function textOrNull(row: Row, column: string): string | null {
+  const value = row[column];
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw columnError(column, 'text or NULL', value);
+  return value;
+}
+
+/** An INTEGER or REAL column (node:sqlite returns both as JS numbers). */
+export function num(row: Row, column: string): number {
+  const value = row[column];
+  if (typeof value !== 'number') throw columnError(column, 'a number', value);
+  return value;
+}
+
+export function numOrNull(row: Row, column: string): number | null {
+  const value = row[column];
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number') throw columnError(column, 'a number or NULL', value);
+  return value;
+}
+
+/** A 0/1 INTEGER flag column. */
+export function flag(row: Row, column: string): boolean {
+  return num(row, column) !== 0;
+}
+
+/** A BLOB column. */
+export function blob(row: Row, column: string): Uint8Array {
+  const value = row[column];
+  if (!(value instanceof Uint8Array)) throw columnError(column, 'a blob', value);
+  return value;
+}
+
 /** The `n` of a `SELECT COUNT(*) AS n …` query, as a number. */
 export function countRows(database: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
   return Number(database.prepare(sql).get(...params)?.n ?? 0);
 }
 
 /** Run `work` in one transaction. Rolls back on any throw. */
-export function transact(database, work) {
+export function transact<T>(database: DatabaseSync, work: () => T): T {
   database.exec('BEGIN IMMEDIATE');
   try {
     const result = work();
