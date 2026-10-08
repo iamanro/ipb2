@@ -463,6 +463,17 @@
       font: var(--t-xs) / 1.4 var(--data);
     }
 
+    .graphic-intsum-print-map .print-map-missing {
+      padding: 2cm 1cm;
+      border: 2px solid var(--ink);
+      font: 700 var(--t-sm) / 1.4 var(--data);
+      text-align: center;
+    }
+
+    .graphic-intsum-print-status {
+      display: none;
+    }
+
     .salute-section select,
     .salute-section .chip-button {
       display: none;

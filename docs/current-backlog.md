@@ -176,6 +176,16 @@ Verify immediate printing after opening Products and after changing selections,
 as well as an empty situation and widely separated tracks. Do not certify a
 legend-only PDF as a successful graphic product.
 
+**Status (8 October 2026): implemented, verified in a headless browser.** Print preview on
+the graphic INTSUM now waits (up to 15 s) for a fresh, settled map frame
+(`map.nextFrame()`) and prints nothing, with a message, if none arrives. A browser-menu
+print without a frame puts "MAP NOT RENDERED" on the page instead of a legend-only
+product. The map frames every track and located report, widened to at least ~5.5 km
+and capped at zoom 15; the caption now reads `scale bar on map · 1 px ≈ 6.1 m`
+instead of rounding to `0 m`. Regression test: `e2e/products.e2e.js` (fails on the old
+code with an empty map canvas, passes now). Still to check by hand: a real PDF from
+Chrome's print dialog, and widely separated tracks.
+
 ### 4. Validate with a staff audience
 
 **Acceptance:** White, Blue and Red operators complete briefing → IPB → collection

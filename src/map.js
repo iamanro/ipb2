@@ -1662,9 +1662,10 @@ export function createMap(options) {
     return coveredInsets().map((inset) => inset + margin);
   }
 
-  function fitExtent(extent) {
+  /** `maxZoom` keeps a single point (a zero-size extent) from zooming to the last level. */
+  function fitExtent(extent, { maxZoom } = {}) {
     const extent3857 = transformExtent(extent, DATA_PROJECTION, MAP_PROJECTION);
-    map.getView().fit(extent3857, { padding: fitPadding(24), duration: 250 });
+    map.getView().fit(extent3857, { padding: fitPadding(24), duration: 250, maxZoom });
   }
 
   function getBounds() {
@@ -2205,8 +2206,22 @@ export function createMap(options) {
     return lastFrame;
   }
 
+  /**
+   * Resolves with the next settled frame (as `exportCanvas()` returns it),
+   * after asking for a render: unlike `exportCanvas()`, never a frame from
+   * before a view change or layer update that is still loading — what a
+   * print button waits on before calling `window.print()`.
+   */
+  function nextFrame() {
+    return new Promise((resolve) => {
+      frameWaiters.push(resolve);
+      map.render();
+    });
+  }
+
   let lastFrame = null;
   let frameTimer = null;
+  const frameWaiters = [];
   listenerKeys.push(
     map.on('rendercomplete', () => {
       window.clearTimeout(frameTimer);
@@ -2214,6 +2229,7 @@ export function createMap(options) {
       frameTimer = window.setTimeout(() => {
         const size = map.getSize();
         if (size?.[0] && size?.[1]) lastFrame = composeFrame(size);
+        if (lastFrame) frameWaiters.splice(0).forEach((resolve) => resolve(lastFrame));
       }, 250);
     }),
   );
@@ -2344,6 +2360,8 @@ export function createMap(options) {
   }
 
   function destroy() {
+    // A print still waiting on a frame gets none rather than hanging.
+    frameWaiters.splice(0).forEach((resolve) => resolve(null));
     cancelDraw();
     stopModify();
     stopEditing();
@@ -2397,6 +2415,7 @@ export function createMap(options) {
     drawArea,
     stopEditing,
     exportCanvas,
+    nextFrame,
     destroy,
   };
 }
