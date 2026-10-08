@@ -405,12 +405,12 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
     }
 
     const changes = MUTATION_METHODS.has(method) && route.changes !== false;
-    let announce = null;
+    let audience = null;
     if (changes) {
       const everyone = route.verb === 'none' && route.reach === 'everyone';
-      announce = everyone ? undefined : (cells ?? ['white']);
+      audience = everyone ? undefined : (cells ?? ['white']);
     }
-    return { value, changes, cells: announce };
+    return { value, changes, cells: audience };
   }
 
   /** The HTTP entry point, called by server/api.js after authentication. */

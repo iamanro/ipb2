@@ -55,7 +55,38 @@ export default defineConfig({
       },
     },
   },
+  // Oxlint: correctness, suspicious and perf as errors, with the plugins this
+  // codebase actually uses (setting `plugins` replaces the default set, so the
+  // defaults — eslint, typescript, unicorn, oxc — are listed too). Rules
+  // switched off below were measured against the code and found to be noise
+  // here; the reason is next to each one.
   lint: {
+    plugins: ['eslint', 'typescript', 'unicorn', 'oxc', 'import', 'promise', 'vitest', 'node'],
+    categories: {
+      correctness: 'error',
+      suspicious: 'error',
+      perf: 'error',
+    },
+    rules: {
+      // Closures over render state are the pattern of every client view.
+      'unicorn/consistent-function-scoping': 'off',
+      // Almost all sorts/reverses are on arrays just built by map/filter.
+      'unicorn/no-array-sort': 'off',
+      'unicorn/no-array-reverse': 'off',
+      // Every postMessage here is worker_threads, which has no target origin.
+      'unicorn/require-post-message-target-origin': 'off',
+      // Sequential awaits are deliberate: SQLite migrations, backup steps,
+      // load-test pacing, rate-limited upstream fetches.
+      'eslint/no-await-in-loop': 'off',
+      // Small arrays; the spread keeps rows immutable and readable.
+      'oxc/no-map-spread': 'off',
+      // `.then()` runs UI side effects after a fetch; nothing chains on it.
+      'promise/always-return': 'off',
+      // Side-effect imports are stylesheets and @fontsource faces.
+      'import/no-unassigned-import': ['error', { allow: ['**/*.css'] }],
+      // Tests assert through expectStatus()/assertNoOverlaps()-style helpers.
+      'vitest/expect-expect': ['error', { assertFunctionNames: ['expect', 'expect*', 'assert*'] }],
+    },
     ignorePatterns: ['dist/**', 'modules/*/data/**', 'modules/*/state/**', 'node_modules/**'],
   },
   fmt: {

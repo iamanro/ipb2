@@ -5,7 +5,7 @@ import { MIGRATIONS } from './schema.js';
 /** Mirrors `client/sidc.js`'s DEFAULT_SIDC: a friendly land infantry unit, no echelon. */
 const DEFAULT_SIDC = '10031000001211000000';
 const SIDC_PATTERN = /^\d{20}$/;
-const REINFORCED_VALUES = ['', '(+)', '(-)', '(±)'];
+const REINFORCED_VALUES = new Set(['', '(+)', '(-)', '(±)']);
 const MAX_UNITS_PER_IMPORT = 2000;
 const MAX_DEPTH = 24;
 
@@ -71,7 +71,7 @@ function limitedString(value, name, maxLength) {
 
 function validateReinforced(value, name = 'reinforced') {
   if (value === undefined || value === null) return '';
-  if (!REINFORCED_VALUES.includes(value)) {
+  if (!REINFORCED_VALUES.has(value)) {
     throw new HttpError(400, `${name} must be one of: '', '(+)', '(-)', '(±)'.`);
   }
   return value;

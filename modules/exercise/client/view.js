@@ -34,7 +34,7 @@ import template from './view.html?raw';
 const API = '/api/exercise';
 const IPB_API = '/api/ipb';
 const TERRAIN_API = '/api/terrain';
-const TABS = [
+const TABS = new Set([
   'instructor',
   'requirements',
   'geography',
@@ -45,7 +45,7 @@ const TABS = [
   'products',
   'scenario',
   'activity',
-];
+]);
 
 const AFFILIATIONS = ['friendly', 'hostile', 'neutral', 'unknown'];
 /** Must match the server's defaults — sent explicitly so a picked colour round-trips. */
@@ -266,7 +266,7 @@ function askConfirm(message, accept = 'Delete') {
 function readLocation() {
   const params = new URLSearchParams(window.location.search);
   const tab = params.get('tab');
-  const allowed = TABS.includes(tab) && (tab !== 'instructor' || isWhite());
+  const allowed = TABS.has(tab) && (tab !== 'instructor' || isWhite());
   state.tab = allowed ? tab : isWhite() ? 'instructor' : 'requirements';
 }
 
@@ -1545,6 +1545,7 @@ async function addSir(requirement, text, container) {
       reapply: async () => {
         await loadAll();
         const latest = state.requirements.find((entry) => entry.id === requirement.id);
+        // oxlint-disable-next-line eslint/preserve-caught-error -- a new condition, not a rethrow of the conflict
         if (!latest) throw new Error('Requirement is no longer available; draft kept.');
         renderPanel();
       },
@@ -1596,6 +1597,7 @@ async function addIndicator(requirement, sir, description, container) {
         const latest = state.requirements.find((entry) => entry.id === requirement.id);
         const latestSir = latest?.sirs.find((entry) => entry.id === sir.id);
         if (!latest || !latestSir)
+          // oxlint-disable-next-line eslint/preserve-caught-error -- a new condition, not a rethrow of the conflict
           throw new Error('Requirement or SIR is no longer available; draft kept.');
         renderPanel();
       },

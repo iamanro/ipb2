@@ -48,8 +48,8 @@ const FEATURE_KINDS = ['point', 'line', 'polygon', 'symbol', 'graphic', 'range-r
 const COA_KINDS = ['most-likely', 'most-dangerous'];
 const OBSERVED_STATUSES = ['expected', 'observed', 'not-observed'];
 const ANALYSIS_KINDS = ['mobility', 'viewshed', 'line-of-sight'];
-const NOTE_STEPS = ['step1', 'step2', 'step3', 'step4'];
-const STUDY_PATCH_FIELDS = [
+const NOTE_STEPS = new Set(['step1', 'step2', 'step3', 'step4']);
+const STUDY_PATCH_FIELDS = new Set([
   'name',
   'bounds',
   'ao',
@@ -60,12 +60,12 @@ const STUDY_PATCH_FIELDS = [
   'classification',
   'weather_thresholds',
   'checked',
-];
+]);
 /** A study create body may carry the ownership fields `server/dispatch.js`
  * itself reads (`owner_cell`, `releasable_to`) — resolved into `owner`
  * before this module ever sees them, so they're recognized here but never
  * read off `body`. */
-const STUDY_CREATE_FIELDS = ['name', 'bounds', 'owner_cell', 'releasable_to'];
+const STUDY_CREATE_FIELDS = new Set(['name', 'bounds', 'owner_cell', 'releasable_to']);
 
 /** `properties.graphic` → the geometry GeoJSON must have (C5's TACTICAL_GRAPHICS,
  * duplicated here as a server-side constant so this module never imports
@@ -362,7 +362,7 @@ function validateNotes(value) {
     throw new HttpError(400, 'notes must be a JSON object.');
   }
   for (const [key, text] of Object.entries(value)) {
-    if (!NOTE_STEPS.includes(key)) throw new HttpError(400, `Unknown notes field: ${key}.`);
+    if (!NOTE_STEPS.has(key)) throw new HttpError(400, `Unknown notes field: ${key}.`);
     if (typeof text !== 'string') throw new HttpError(400, `notes.${key} must be a string.`);
   }
   return value;
@@ -808,7 +808,7 @@ function createStudy(body, owner = { owner_cell: 'white', releasable_to: [] }) {
     throw new HttpError(400, 'A JSON object body is required.');
   }
   for (const key of Object.keys(body)) {
-    if (!STUDY_CREATE_FIELDS.includes(key)) throw new HttpError(400, `Unknown field: ${key}.`);
+    if (!STUDY_CREATE_FIELDS.has(key)) throw new HttpError(400, `Unknown field: ${key}.`);
   }
   if (typeof body.name !== 'string' || !body.name.trim()) {
     throw new HttpError(400, 'name is required.');
@@ -844,7 +844,7 @@ function validateStudyPatch(patch) {
   }
   const fields = {};
   for (const [key, value] of Object.entries(patch)) {
-    if (!STUDY_PATCH_FIELDS.includes(key)) throw new HttpError(400, `Unknown field: ${key}.`);
+    if (!STUDY_PATCH_FIELDS.has(key)) throw new HttpError(400, `Unknown field: ${key}.`);
     if (key === 'name') {
       if (typeof value !== 'string' || !value.trim()) {
         throw new HttpError(400, 'name must be a non-empty string.');
