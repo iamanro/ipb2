@@ -236,6 +236,7 @@ async function simulate(user, deadline, cellSizes) {
   let nextPan = 0;
   let nextReport = Date.now() + jitter(5_000, 30_000);
   let nextViewshed = Date.now() + jitter(10_000, 90_000);
+  // oxlint-disable-next-line eslint/no-unmodified-loop-condition -- set by the SIGINT handler while the loop awaits
   while (Date.now() < deadline && !stopping) {
     const now = Date.now();
     if (now >= nextPan) {

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { layoutTree } from './chart.js';
 
 /** Deterministic fake measure: no DOM, no milsymbol. */
-function fakeMeasure(unit) {
-  const width = 40 + ((unit.id.length * 7) % 30);
+function fakeMeasure(node) {
+  const width = 40 + ((node.id.length * 7) % 30);
   const height = 30;
   return {
     width,

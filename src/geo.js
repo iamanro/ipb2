@@ -5,6 +5,7 @@
 // server modules import this file too.
 import * as mgrsModule from 'mgrs';
 
+// oxlint-disable-next-line import/namespace -- mgrs is CommonJS; `default` exists only under some bundler interop modes
 const { forward, toPoint } = mgrsModule.forward ? mgrsModule : mgrsModule.default;
 
 const MGRS_BAND_LETTERS = 'CDEFGHJKLMNPQRSTUVWX';

@@ -5188,8 +5188,8 @@ function renderMcooGroup(bounds) {
     group.append(createElement('p', 'tool-hint', 'Set the AOI in step 1 first.'));
     return group;
   }
-  const cellLabel = createElement('label', 'inline-field');
-  cellLabel.append(createElement('span', null, 'Cell size'));
+  const cellSizeLabel = createElement('label', 'inline-field');
+  cellSizeLabel.append(createElement('span', null, 'Cell size'));
   const cellSelect = document.createElement('select');
   MOBILITY_CELL_SIZES.forEach((size) => {
     const option = document.createElement('option');
@@ -5201,7 +5201,7 @@ function renderMcooGroup(bounds) {
   cellSelect.addEventListener('change', () => {
     state.mobility.cell = Number(cellSelect.value);
   });
-  cellLabel.append(cellSelect);
+  cellSizeLabel.append(cellSelect);
   const runButton = editable(
     createElement('button', 'primary-button', state.mobility.running ? 'Running…' : 'Run MCOO'),
   );
@@ -5220,7 +5220,7 @@ function renderMcooGroup(bounds) {
     paintMobility();
   });
   opacityLabel.append(opacityInput);
-  group.append(cellLabel, runButton, opacityLabel);
+  group.append(cellSizeLabel, runButton, opacityLabel);
   return group;
 }
 

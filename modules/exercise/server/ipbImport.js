@@ -29,7 +29,7 @@ import { HttpError } from '../../../server/http.js';
  */
 
 const COA_KIND_LABELS = { 'most-likely': 'most likely', 'most-dangerous': 'most dangerous' };
-const NAI_KINDS = ['nai', 'tai'];
+const NAI_KINDS = new Set(['nai', 'tai']);
 
 export function ipbSourcePrefix(studyId) {
   return `ipb:${studyId}:`;
@@ -91,7 +91,7 @@ export function planIpbImport(input) {
       source: `${prefix}nai:${id}`,
       feature_id: id,
       study_id: studyId,
-      kind: NAI_KINDS.includes(nai.kind) ? nai.kind : 'nai',
+      kind: NAI_KINDS.has(nai.kind) ? nai.kind : 'nai',
       label: naiLabels.get(id),
       geometry: nai.geometry ?? null,
     };

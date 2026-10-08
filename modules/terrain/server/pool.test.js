@@ -150,12 +150,8 @@ describe('createTerrainPool', () => {
 
   test('HttpError instances survive instanceof checks', async () => {
     pool = createTerrainPool({ size: 1, workerFile: FIXTURE_WORKER });
-    try {
-      await pool.submit('fail', { status: 404, message: 'nope' }, { user: 'eve' });
-      throw new Error('expected rejection');
-    } catch (error) {
-      expect(error).toBeInstanceOf(HttpError);
-      expect(error.status).toBe(404);
-    }
+    const rejection = pool.submit('fail', { status: 404, message: 'nope' }, { user: 'eve' });
+    await expect(rejection).rejects.toBeInstanceOf(HttpError);
+    await expect(rejection).rejects.toMatchObject({ status: 404 });
   });
 });
