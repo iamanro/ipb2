@@ -1,11 +1,14 @@
 import type { SQLInputValue } from 'node:sqlite';
 // Instructor authoring: the private story and its situations.
 
-import { HttpError } from '../../../../server/http.ts';
+import { fieldsOf, HttpError, type Json } from '../../../../server/http.ts';
+import { countRows, numOrNull, type Row } from '../../../../server/state.ts';
 
 import { database } from './connection.ts';
+import { readSituation, readStory as readStoryColumns } from './rows.ts';
 import { listScenarioEvents } from './scenarioEvents.ts';
 import {
+  existingRow,
   fetchRow,
   mutate,
   now,
@@ -25,7 +28,8 @@ const SITUATION_STATUSES = ['planned', 'active', 'complete'];
 // lazy-insert-on-first-read pattern as `scenario_clock`), `situations` are
 // plain White rows with no `owner_cell`/`releasable_to` to check.
 
-function shapeStory(row) {
+function shapeStory(raw: Row) {
+  const row = readStoryColumns(raw);
   return {
     title: row.title,
     briefing: row.briefing,
@@ -34,7 +38,7 @@ function shapeStory(row) {
   };
 }
 
-function readStoryRow() {
+function readStoryRow(): Row {
   const row = fetchRow('story', 1);
   if (row) return row;
   database
@@ -42,7 +46,7 @@ function readStoryRow() {
       "INSERT INTO story (id, title, briefing, objectives, instructor_notes, updated_at) VALUES (1, '', '', '', '', ?)",
     )
     .run(now());
-  return fetchRow('story', 1);
+  return existingRow('story', 1);
 }
 
 export function readStory() {
@@ -52,7 +56,8 @@ export function readStory() {
 /** Every field is optional and free text (Blue-facing briefing, private
  * objectives/notes) — no length bound beyond the dispatcher's body cap;
  * an instructor authoring a briefing needs more room than a name field. */
-export function patchStory(patch) {
+export function patchStory(input: Json) {
+  const patch = fieldsOf(input);
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   for (const key of ['title', 'briefing', 'objectives', 'instructor_notes']) {
@@ -72,7 +77,8 @@ export function patchStory(patch) {
   });
 }
 
-function shapeSituation(row) {
+function shapeSituation(raw: Row) {
+  const row = readSituation(raw);
   return {
     id: row.id,
     title: row.title,
@@ -92,7 +98,7 @@ export function listSituations() {
 
 function nextSituationSortOrder() {
   const row = database.prepare('SELECT MAX(sort_order) AS m FROM situations').get();
-  return (row.m ?? -1) + 1;
+  return (row ? (numOrNull(row, 'm') ?? -1) : -1) + 1;
 }
 
 /** Setting a situation active deactivates whichever one was active before
@@ -100,7 +106,7 @@ function nextSituationSortOrder() {
  * pattern as `scenarios(active)` — the prior active situation moves to
  * 'complete' rather than back to 'planned': the instructor is advancing the
  * story to its next beat, not un-scheduling the one just finished. */
-function deactivatePriorSituation(excludeId, timestamp) {
+function deactivatePriorSituation(excludeId: number | null, timestamp: string) {
   database
     .prepare(
       "UPDATE situations SET status = 'complete', updated_at = ? WHERE status = 'active' AND id <> ?",
@@ -108,13 +114,14 @@ function deactivatePriorSituation(excludeId, timestamp) {
     .run(timestamp, excludeId ?? -1);
 }
 
-export function createSituation({
-  title,
-  ground_truth: groundTruth,
-  expected_response: expectedResponse,
-  status,
-  sort_order: sortOrder,
-}) {
+export function createSituation(input: Json) {
+  const {
+    title,
+    ground_truth: groundTruth,
+    expected_response: expectedResponse,
+    status,
+    sort_order: sortOrder,
+  } = fieldsOf(input);
   const cleanTitle = requireBoundedString(title, 'title', 200);
   const cleanGroundTruth = optionalString(groundTruth, 'ground_truth') ?? '';
   const cleanExpected = optionalString(expectedResponse, 'expected_response') ?? '';
@@ -135,12 +142,13 @@ export function createSituation({
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(cleanTitle, cleanGroundTruth, cleanExpected, cleanStatus, order, timestamp, timestamp);
-      return shapeSituation(fetchRow('situations', Number(lastInsertRowid)));
+      return shapeSituation(existingRow('situations', Number(lastInsertRowid)));
     },
   );
 }
 
-export function updateSituation(id, patch) {
+export function updateSituation(id: number, input: Json) {
+  const patch = fieldsOf(input);
   const existing = fetchRow('situations', id);
   if (!existing) throw new HttpError(404, `Situation ${id} not found.`);
   const cleanTitle = 'title' in patch ? requireBoundedString(patch.title, 'title', 200) : undefined;
@@ -188,7 +196,7 @@ export function updateSituation(id, patch) {
         .prepare(`UPDATE situations SET ${fields.join(', ')} WHERE id = ?`)
         .run(...params, id);
     }
-    return shapeSituation(fetchRow('situations', id));
+    return shapeSituation(existingRow('situations', id));
   });
 }
 
@@ -197,12 +205,14 @@ export function updateSituation(id, patch) {
  * schema exists only as a defensive backstop, never reached through this
  * route) — losing the link would be losing which authored beat a fired or
  * still-pending inject belongs to. */
-export function deleteSituation(id) {
+export function deleteSituation(id: number) {
   const existing = fetchRow('situations', id);
   if (!existing) throw new HttpError(404, `Situation ${id} not found.`);
-  const { n: referenced } = database
-    .prepare('SELECT COUNT(*) AS n FROM scenario_events WHERE situation_id = ?')
-    .get(id);
+  const referenced = countRows(
+    database,
+    'SELECT COUNT(*) AS n FROM scenario_events WHERE situation_id = ?',
+    id,
+  );
   if (referenced > 0) {
     throw new HttpError(
       409,

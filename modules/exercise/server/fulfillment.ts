@@ -9,14 +9,21 @@
  * `links` is `{ sirId, relation, credibility }[]`; a link recorded against
  * the requirement itself (no specific SIR) covers every SIR under it.
  */
+/** One cited report: which SIR it answers (null: the whole requirement), how, how credibly. */
+export type EvidenceInput = { sirId: number | null; relation: string; credibility: number };
+
 const CREDITABLE_RELATIONS = new Set(['confirms', 'partial']);
 const CREDIBILITY_THRESHOLD = 3;
 
-function isCreditable(link) {
+function isCreditable(link: EvidenceInput) {
   return CREDITABLE_RELATIONS.has(link.relation) && link.credibility <= CREDIBILITY_THRESHOLD;
 }
 
-export function computePirFulfillment(sirIds, links, { productIssued = false } = {}) {
+export function computePirFulfillment(
+  sirIds: number[],
+  links: EvidenceInput[],
+  { productIssued = false }: { productIssued?: boolean } = {},
+) {
   const creditable = links.filter(isCreditable);
   const blanket = creditable.some((link) => link.sirId === null);
   const covered = blanket

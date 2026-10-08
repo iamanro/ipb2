@@ -1,9 +1,13 @@
 import type { SQLInputValue } from 'node:sqlite';
 // The current situation: tracks and their position history.
 
-import { HttpError } from '../../../../server/http.ts';
+import type { Access, Owner } from '../../../../server/dispatch.ts';
+import { fieldsOf, HttpError, type Json } from '../../../../server/http.ts';
+import { releasableArray } from '../../../../server/policy.ts';
+import { num, text, type Row } from '../../../../server/state.ts';
 
 import { database } from './connection.ts';
+import { readTrack, readTrackPosition } from './rows.ts';
 import {
   cellsOf,
   fetchRow,
@@ -26,7 +30,8 @@ const TRACK_STATUSES = ['confirmed', 'suspected', 'destroyed', 'lost'];
 // full history. The head only ever moves forward in `observed_at` — an
 // out-of-order report still gets recorded, but cannot move it backwards.
 
-function shapeTrackPosition(row) {
+function shapeTrackPosition(raw: Row) {
+  const row = readTrackPosition(raw);
   return {
     id: row.id,
     lon: row.lon,
@@ -36,7 +41,8 @@ function shapeTrackPosition(row) {
   };
 }
 
-export function shapeTrack(row) {
+export function shapeTrack(raw: Row) {
+  const row = readTrack(raw);
   const history = database
     .prepare('SELECT * FROM track_positions WHERE track_id = ? ORDER BY observed_at, id')
     .all(row.id)
@@ -52,34 +58,32 @@ export function shapeTrack(row) {
     notes: row.notes,
     history,
     owner_cell: row.owner_cell,
-    releasable_to: JSON.parse(row.releasable_to),
+    releasable_to: releasableArray(row.releasable_to),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-export function listTracks(access) {
+export function listTracks(access: Access) {
   return visibleRows(access, 'track', 'tracks', 'observed_at DESC, id DESC').map(shapeTrack);
 }
 
-function getTrack(id) {
+function getTrack(id: number) {
   const row = fetchRow('tracks', id);
   if (!row) throw new HttpError(404, `Track ${id} not found.`);
   return shapeTrack(row);
 }
 
-export function requireTimestamp(value, name) {
-  const text = requireString(value, name);
-  if (Number.isNaN(new Date(text).getTime())) {
+export function requireTimestamp(value: Json | undefined, name: string): string {
+  const timestamp = requireString(value, name);
+  if (Number.isNaN(new Date(timestamp).getTime())) {
     throw new HttpError(400, `${name} must be a valid timestamp.`);
   }
-  return text;
+  return timestamp;
 }
 
-export function createTrack(
-  owner,
-  { sidc, designation, status, lon, lat, observed_at: observedAt, notes },
-) {
+export function createTrack(owner: Owner, input: Json) {
+  const { sidc, designation, status, lon, lat, observed_at: observedAt, notes } = fieldsOf(input);
   const validSidc = requireSidc(sidc);
   const validStatus = requireEnum(status ?? 'confirmed', 'status', TRACK_STATUSES);
   const validLon = requireLongitude(lon);
@@ -123,7 +127,9 @@ export function createTrack(
   );
 }
 
-export function updateTrack(item, patch) {
+export function updateTrack(item: Row, input: Json) {
+  const patch = fieldsOf(input);
+  const itemId = num(item, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('sidc' in patch) {
@@ -142,21 +148,22 @@ export function updateTrack(item, patch) {
     fields.push('notes = ?');
     params.push(optionalString(patch.notes, 'notes'));
   }
-  return mutate('track:update', String(item.id), cellsOf(item), () => {
+  return mutate('track:update', String(itemId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE tracks SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, item.id);
+        .run(...params, itemId);
     }
-    return getTrack(item.id);
+    return getTrack(itemId);
   });
 }
 
-export function deleteTrack(item) {
-  return mutate('track:delete', String(item.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM tracks WHERE id = ?').run(item.id);
+export function deleteTrack(item: Row) {
+  const itemId = num(item, 'id');
+  return mutate('track:delete', String(itemId), cellsOf(item), () => {
+    database.prepare('DELETE FROM tracks WHERE id = ?').run(itemId);
     return { deleted: true };
   });
 }
@@ -168,43 +175,43 @@ export function deleteTrack(item) {
  * dragging the map picture backwards. When `report_id` is given, that
  * report is linked back to this track.
  */
-export function addTrackPosition(
-  item,
-  { lon, lat, observed_at: observedAt, report_id: reportId },
-  access,
-) {
+export function addTrackPosition(item: Row, input: Json, access: Access) {
+  const { lon, lat, observed_at: observedAt, report_id: reportId } = fieldsOf(input);
+  const itemId = num(item, 'id');
+  const headObservedAt = text(item, 'observed_at');
   const validLon = requireLongitude(lon);
   const validLat = requireLatitude(lat);
   const validObserved = requireTimestamp(observedAt, 'observed_at');
   const validReportId =
     reportId === undefined || reportId === null ? null : resolveTrackReportId(reportId, access);
-  return mutate('track:position', String(item.id), cellsOf(item), () => {
+  return mutate('track:position', String(itemId), cellsOf(item), () => {
     const timestamp = now();
     database
       .prepare(
         `INSERT INTO track_positions (track_id, lon, lat, observed_at, report_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(item.id, validLon, validLat, validObserved, validReportId, timestamp);
-    if (new Date(validObserved).getTime() >= new Date(item.observed_at).getTime()) {
+      .run(itemId, validLon, validLat, validObserved, validReportId, timestamp);
+    if (new Date(validObserved).getTime() >= new Date(headObservedAt).getTime()) {
       database
         .prepare('UPDATE tracks SET lon = ?, lat = ?, observed_at = ?, updated_at = ? WHERE id = ?')
-        .run(validLon, validLat, validObserved, timestamp, item.id);
+        .run(validLon, validLat, validObserved, timestamp, itemId);
     }
     if (validReportId !== null) {
       database
         .prepare(
           'UPDATE reports SET track_id = ?, revision = revision + 1, updated_at = ? WHERE id = ?',
         )
-        .run(item.id, timestamp, validReportId);
+        .run(itemId, timestamp, validReportId);
       touchRequirementsForReport(validReportId);
     }
-    return getTrack(item.id);
+    return getTrack(itemId);
   });
 }
 
-function resolveTrackReportId(reportId, access) {
-  if (!Number.isInteger(reportId)) throw new HttpError(400, 'report_id must be an integer.');
+function resolveTrackReportId(reportId: Json, access: Access): number {
+  if (typeof reportId !== 'number' || !Number.isInteger(reportId))
+    throw new HttpError(400, 'report_id must be an integer.');
   access.see('report', reportId);
   return reportId;
 }

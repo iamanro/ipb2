@@ -20,10 +20,10 @@ export class HttpError extends Error {
   status: number;
 
   /** `details`: extra fields copied onto the error (and its JSON body). */
-  constructor(status: number, message: string, details: Record<string, unknown> | null = null) {
+  constructor(status: number, message: string, details: JsonObject | null = null) {
     super(message);
     this.status = status;
-    if (details && typeof details === 'object') Object.assign(this, details);
+    if (details) Object.assign(this, details);
   }
 }
 

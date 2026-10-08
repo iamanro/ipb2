@@ -2,13 +2,25 @@ import type { SQLInputValue } from 'node:sqlite';
 // PIRs/FFIRs with their SIRs, indicators and evidence links, and how far each
 // is answered.
 
-import { HttpError } from '../../../../server/http.ts';
+import type { Access, Owner } from '../../../../server/dispatch.ts';
+import { fieldsOf, HttpError, type Json } from '../../../../server/http.ts';
+import { releasableArray } from '../../../../server/policy.ts';
+import { num, type Row } from '../../../../server/state.ts';
 import { computePirFulfillment } from '../fulfillment.ts';
 
 import { database } from './connection.ts';
 import {
+  readEvidenceLink,
+  readIndicator,
+  readReport,
+  readRequirement,
+  readSir,
+  type EvidenceLinkRow,
+} from './rows.ts';
+import {
   assertRevision,
   cellsOf,
+  existingRow,
   fetchRow,
   mutate,
   now,
@@ -20,17 +32,12 @@ import {
   visibleRows,
 } from './shared.ts';
 
-// Duplicated from `server/policy.ts`, not imported (docs/adr/0002 rule 4: a
-// store takes no user and imports nothing from policy.js) — the same reason
-// `src/release.js` keeps its own copy for the browser bundle. This is the
-// only place the store still needs the literal cell list, to validate an
-// inject's `release_to`.
-
 const REQUIREMENT_KINDS = ['PIR', 'FFIR'];
 const TARGET_KINDS = ['requirement', 'sir'];
 const RELATIONS = ['confirms', 'denies', 'partial', 'context'];
 
-function shapeIndicator(row) {
+function shapeIndicator(raw: Row) {
+  const row = readIndicator(raw);
   return {
     id: row.id,
     sir_id: row.sir_id,
@@ -43,7 +50,8 @@ function shapeIndicator(row) {
   };
 }
 
-export function shapeEvidenceLinkBase(row) {
+export function shapeEvidenceLinkBase(raw: Row) {
+  const row: EvidenceLinkRow = readEvidenceLink(raw);
   return {
     id: row.id,
     report_id: row.report_id,
@@ -58,7 +66,8 @@ export function shapeEvidenceLinkBase(row) {
 
 /** A light citation preview — never the full shaped report (no need for its
  * own nested links), and only when the viewer can still see it. */
-function reportSummary(row) {
+function reportSummary(raw: Row) {
+  const row = readReport(raw);
   return {
     id: row.id,
     text: row.text,
@@ -77,12 +86,13 @@ function reportSummary(row) {
  * (reassigned away since the link was made) shows neither: `report: null`,
  * `withdrawn: false`, same as any other row this viewer isn't shown.
  */
-function shapeEvidenceLinkWithReport(row, access) {
-  const reportRow = fetchRow('reports', row.report_id);
-  let report: any = null;
+function shapeEvidenceLinkWithReport(row: Row, access: Access) {
+  const reportId = num(row, 'report_id');
+  const reportRow = fetchRow('reports', reportId);
+  let report: ReturnType<typeof reportSummary> | null = null;
   if (reportRow) {
     try {
-      access.see('report', row.report_id);
+      access.see('report', reportId);
       report = reportSummary(reportRow);
     } catch {
       report = null;
@@ -91,9 +101,14 @@ function shapeEvidenceLinkWithReport(row, access) {
   return { ...shapeEvidenceLinkBase(row), report, withdrawn: !reportRow };
 }
 
+/** A fulfillment input row: one cited report's relation and credibility. */
+function evidence(row: Row, sirId: number | null) {
+  return { sirId, relation: String(row.relation), credibility: num(row, 'credibility') };
+}
+
 /** A SIR's fulfillment counts only evidence from reports the requester can
  * currently see (docs/adr/0002 rule: fulfillment is per viewer). */
-function sirFulfillment(sirId, access) {
+function sirFulfillment(sirId: number, access: Access) {
   const { sql, params } = access.visible('report', { alias: 'r' });
   const links = database
     .prepare(
@@ -102,11 +117,12 @@ function sirFulfillment(sirId, access) {
        WHERE el.target_kind = 'sir' AND el.target_id = ? AND ${sql}`,
     )
     .all(sirId, ...params)
-    .map((row) => ({ sirId, relation: row.relation, credibility: row.credibility }));
+    .map((row) => evidence(row, sirId));
   return computePirFulfillment([sirId], links);
 }
 
-function shapeSir(row, access) {
+function shapeSir(raw: Row, access: Access) {
+  const row = readSir(raw);
   const indicators = database
     .prepare('SELECT * FROM indicators WHERE sir_id = ? ORDER BY created_at, id')
     .all(row.id)
@@ -133,7 +149,7 @@ function shapeSir(row, access) {
   };
 }
 
-export function requirementFulfillment(requirementId, sirIds, access) {
+export function requirementFulfillment(requirementId: number, sirIds: number[], access: Access) {
   const { sql, params } = access.visible('report', { alias: 'r' });
   const blanket = database
     .prepare(
@@ -142,7 +158,7 @@ export function requirementFulfillment(requirementId, sirIds, access) {
        WHERE el.target_kind = 'requirement' AND el.target_id = ? AND ${sql}`,
     )
     .all(requirementId, ...params)
-    .map((row) => ({ sirId: null, relation: row.relation, credibility: row.credibility }));
+    .map((row) => evidence(row, null));
   const perSir = sirIds.length
     ? database
         .prepare(
@@ -151,12 +167,13 @@ export function requirementFulfillment(requirementId, sirIds, access) {
            WHERE el.target_kind = 'sir' AND el.target_id IN (${sirIds.map(() => '?').join(',')}) AND ${sql}`,
         )
         .all(...sirIds, ...params)
-        .map((row) => ({ sirId: row.sir_id, relation: row.relation, credibility: row.credibility }))
+        .map((row) => evidence(row, num(row, 'sir_id')))
     : [];
   return computePirFulfillment(sirIds, [...blanket, ...perSir]);
 }
 
-export function shapeRequirement(row, { access }) {
+export function shapeRequirement(raw: Row, { access }: { access: Access }) {
+  const row = readRequirement(raw);
   const sirs = database
     .prepare('SELECT * FROM sirs WHERE requirement_id = ? ORDER BY created_at, id')
     .all(row.id)
@@ -183,25 +200,22 @@ export function shapeRequirement(row, { access }) {
     ),
     source: row.source,
     owner_cell: row.owner_cell,
-    releasable_to: JSON.parse(row.releasable_to),
+    releasable_to: releasableArray(row.releasable_to),
     revision: row.revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-export function listRequirements(access) {
+export function listRequirements(access: Access) {
   return visibleRows(access, 'requirement', 'requirements', 'priority DESC, created_at, id').map(
     (row) => shapeRequirement(row, { access }),
   );
 }
 
-export function createRequirement(
-  owner,
-  { kind, text, decision_point: decisionPoint, ltiov, priority },
-  access,
-) {
-  requireEnum(kind, 'kind', REQUIREMENT_KINDS);
+export function createRequirement(owner: Owner, input: Json, access: Access) {
+  const { kind, text, decision_point: decisionPoint, ltiov, priority } = fieldsOf(input);
+  const cleanKind = requireEnum(kind, 'kind', REQUIREMENT_KINDS);
   const cleanText = requireString(text, 'text');
   const timestamp = now();
   return mutate(
@@ -215,23 +229,25 @@ export function createRequirement(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
-          kind,
+          cleanKind,
           cleanText,
           optionalString(decisionPoint, 'decision_point'),
           optionalString(ltiov, 'ltiov'),
-          Number.isInteger(priority) ? priority : 0,
+          typeof priority === 'number' && Number.isInteger(priority) ? priority : 0,
           owner.owner_cell,
           JSON.stringify(owner.releasable_to),
           timestamp,
           timestamp,
         );
-      return shapeRequirement(fetchRow('requirements', Number(lastInsertRowid)), { access });
+      return shapeRequirement(existingRow('requirements', Number(lastInsertRowid)), { access });
     },
   );
 }
 
-export function updateRequirement(item, patch, access) {
-  assertRevision('Requirement', item, patch);
+export function updateRequirement(item: Row, input: Json, access: Access) {
+  assertRevision('Requirement', item, input);
+  const patch = fieldsOf(input);
+  const itemId = num(item, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('text' in patch) {
@@ -247,33 +263,37 @@ export function updateRequirement(item, patch, access) {
     params.push(optionalString(patch.ltiov, 'ltiov'));
   }
   if ('priority' in patch) {
-    if (!Number.isInteger(patch.priority)) throw new HttpError(400, 'priority must be an integer.');
+    const priority = patch.priority;
+    if (typeof priority !== 'number' || !Number.isInteger(priority))
+      throw new HttpError(400, 'priority must be an integer.');
     fields.push('priority = ?');
-    params.push(patch.priority);
+    params.push(priority);
   }
-  return mutate('requirement:update', String(item.id), cellsOf(item), () => {
+  return mutate('requirement:update', String(itemId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('revision = revision + 1', 'updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE requirements SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, item.id);
+        .run(...params, itemId);
     }
-    return shapeRequirement(fetchRow('requirements', item.id), { access });
+    return shapeRequirement(existingRow('requirements', itemId), { access });
   });
 }
 
-export function deleteRequirement(item, input) {
+export function deleteRequirement(item: Row, input: Json) {
   assertRevision('Requirement', item, input);
-  return mutate('requirement:delete', String(item.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM requirements WHERE id = ?').run(item.id);
+  const itemId = num(item, 'id');
+  return mutate('requirement:delete', String(itemId), cellsOf(item), () => {
+    database.prepare('DELETE FROM requirements WHERE id = ?').run(itemId);
     return { deleted: true };
   });
 }
 
-export function createSir(item, input, access) {
+export function createSir(item: Row, input: Json, access: Access) {
   assertRevision('Requirement', item, input);
-  const { text, time_window_start: start, time_window_end: end, nai_id: naiId } = input;
+  const itemId = num(item, 'id');
+  const { text, time_window_start: start, time_window_end: end, nai_id: naiId } = fieldsOf(input);
   const cleanText = requireString(text, 'text');
   const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null, access);
   const timestamp = now();
@@ -288,7 +308,7 @@ export function createSir(item, input, access) {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
-          item.id,
+          itemId,
           cleanText,
           optionalString(start, 'time_window_start'),
           optionalString(end, 'time_window_end'),
@@ -296,14 +316,17 @@ export function createSir(item, input, access) {
           timestamp,
           timestamp,
         );
-      touchRequirementRevision(item.id);
-      return shapeSir(fetchRow('sirs', Number(lastInsertRowid)), access);
+      touchRequirementRevision(itemId);
+      return shapeSir(existingRow('sirs', Number(lastInsertRowid)), access);
     },
   );
 }
 
-export function updateSir(item, part, patch, access) {
-  assertRevision('Requirement', item, patch);
+export function updateSir(item: Row, part: Row, input: Json, access: Access) {
+  assertRevision('Requirement', item, input);
+  const patch = fieldsOf(input);
+  const itemId = num(item, 'id');
+  const partId = num(part, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('text' in patch) {
@@ -322,32 +345,35 @@ export function updateSir(item, part, patch, access) {
     fields.push('nai_id = ?');
     params.push(resolveNaiId(patch.nai_id, null, null, access));
   }
-  return mutate('sir:update', String(part.id), cellsOf(item), () => {
+  return mutate('sir:update', String(partId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE sirs SET ${fields.join(', ')} WHERE id = ?`).run(...params, part.id);
-      touchRequirementRevision(item.id);
+      database.prepare(`UPDATE sirs SET ${fields.join(', ')} WHERE id = ?`).run(...params, partId);
+      touchRequirementRevision(itemId);
     }
-    return shapeSir(fetchRow('sirs', part.id), access);
+    return shapeSir(existingRow('sirs', partId), access);
   });
 }
 
-export function deleteSir(item, part, input) {
+export function deleteSir(item: Row, part: Row, input: Json) {
   assertRevision('Requirement', item, input);
-  return mutate('sir:delete', String(part.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM sirs WHERE id = ?').run(part.id);
-    touchRequirementRevision(item.id);
+  const partId = num(part, 'id');
+  return mutate('sir:delete', String(partId), cellsOf(item), () => {
+    database.prepare('DELETE FROM sirs WHERE id = ?').run(partId);
+    touchRequirementRevision(num(item, 'id'));
     return { deleted: true };
   });
 }
 
-export function createIndicator(item, input) {
+export function createIndicator(item: Row, input: Json) {
   assertRevision('Requirement', item, input);
-  const { sir_id: sirId, description } = input;
-  if (!Number.isInteger(sirId)) throw new HttpError(400, 'sir_id must be an integer.');
+  const itemId = num(item, 'id');
+  const { sir_id: sirId, description } = fieldsOf(input);
+  if (typeof sirId !== 'number' || !Number.isInteger(sirId))
+    throw new HttpError(400, 'sir_id must be an integer.');
   const sir = fetchRow('sirs', sirId);
-  if (!sir || sir.requirement_id !== item.id) {
+  if (!sir || sir.requirement_id !== itemId) {
     throw new HttpError(400, `sir_id ${sirId} does not belong to this requirement.`);
   }
   const cleanDescription = requireString(description, 'description');
@@ -361,15 +387,17 @@ export function createIndicator(item, input) {
         .prepare(
           'INSERT INTO indicators (sir_id, requirement_id, description, observed, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)',
         )
-        .run(sirId, item.id, cleanDescription, timestamp, timestamp);
-      touchRequirementRevision(item.id);
-      return shapeIndicator(fetchRow('indicators', Number(lastInsertRowid)));
+        .run(sirId, itemId, cleanDescription, timestamp, timestamp);
+      touchRequirementRevision(itemId);
+      return shapeIndicator(existingRow('indicators', Number(lastInsertRowid)));
     },
   );
 }
 
-export function updateIndicator(item, part, patch) {
-  assertRevision('Requirement', item, patch);
+export function updateIndicator(item: Row, part: Row, input: Json) {
+  assertRevision('Requirement', item, input);
+  const patch = fieldsOf(input);
+  const partId = num(part, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('description' in patch) {
@@ -380,24 +408,25 @@ export function updateIndicator(item, part, patch) {
     fields.push('observed = ?');
     params.push(patch.observed ? 1 : 0);
   }
-  return mutate('indicator:update', String(part.id), cellsOf(item), () => {
+  return mutate('indicator:update', String(partId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE indicators SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, part.id);
-      touchRequirementRevision(item.id);
+        .run(...params, partId);
+      touchRequirementRevision(num(item, 'id'));
     }
-    return shapeIndicator(fetchRow('indicators', part.id));
+    return shapeIndicator(existingRow('indicators', partId));
   });
 }
 
-export function deleteIndicator(item, part, input) {
+export function deleteIndicator(item: Row, part: Row, input: Json) {
   assertRevision('Requirement', item, input);
-  return mutate('indicator:delete', String(part.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM indicators WHERE id = ?').run(part.id);
-    touchRequirementRevision(item.id);
+  const partId = num(part, 'id');
+  return mutate('indicator:delete', String(partId), cellsOf(item), () => {
+    database.prepare('DELETE FROM indicators WHERE id = ?').run(partId);
+    touchRequirementRevision(num(item, 'id'));
     return { deleted: true };
   });
 }
@@ -408,56 +437,65 @@ export function deleteIndicator(item, part, input) {
  * itself; `'sir'` needs a `target_id` that is actually one of its SIRs. The
  * cited report is read with `access.see`, exactly the contract's "creating
  * a link changes its target, not the report" rule. */
-export function createEvidenceLink(item, input, access) {
+export function createEvidenceLink(item: Row, input: Json, access: Access) {
   assertRevision('Requirement', item, input);
+  const itemId = num(item, 'id');
   const {
     report_id: reportId,
     target_kind: targetKind,
     target_id: targetId,
     relation,
     note,
-  } = input;
-  requireEnum(targetKind, 'target_kind', TARGET_KINDS);
-  let cleanTargetId;
-  if (targetKind === 'requirement') {
-    cleanTargetId = targetId ?? item.id;
-    if (cleanTargetId !== item.id) throw new HttpError(400, 'target_id must be this requirement.');
+  } = fieldsOf(input);
+  const cleanTargetKind = requireEnum(targetKind, 'target_kind', TARGET_KINDS);
+  let cleanTargetId: number;
+  if (cleanTargetKind === 'requirement') {
+    if ((targetId ?? itemId) !== itemId)
+      throw new HttpError(400, 'target_id must be this requirement.');
+    cleanTargetId = itemId;
   } else {
-    if (!Number.isInteger(targetId)) throw new HttpError(400, 'target_id must be an integer.');
+    if (typeof targetId !== 'number' || !Number.isInteger(targetId))
+      throw new HttpError(400, 'target_id must be an integer.');
     const sir = fetchRow('sirs', targetId);
-    if (!sir || sir.requirement_id !== item.id) {
+    if (!sir || sir.requirement_id !== itemId) {
       throw new HttpError(400, `target_id ${targetId} is not a SIR of this requirement.`);
     }
     cleanTargetId = targetId;
   }
-  if (!Number.isInteger(reportId)) throw new HttpError(400, 'report_id must be an integer.');
+  if (typeof reportId !== 'number' || !Number.isInteger(reportId))
+    throw new HttpError(400, 'report_id must be an integer.');
   const report = access.see('report', reportId);
-  requireEnum(relation, 'relation', RELATIONS);
-  return mutate('evidence:link', `report:${report.id}`, cellsOf(item), () => {
+  const cleanRelation = requireEnum(relation, 'relation', RELATIONS);
+  const reportRowId = num(report, 'id');
+  return mutate('evidence:link', `report:${reportRowId}`, cellsOf(item), () => {
     const { lastInsertRowid } = database
       .prepare(
         `INSERT INTO evidence_links (report_id, requirement_id, target_kind, target_id, relation, note, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        report.id,
-        item.id,
-        targetKind,
+        reportRowId,
+        itemId,
+        cleanTargetKind,
         cleanTargetId,
-        relation,
+        cleanRelation,
         optionalString(note, 'note'),
         now(),
       );
-    touchRequirementRevision(item.id);
-    return shapeEvidenceLinkWithReport(fetchRow('evidence_links', Number(lastInsertRowid)), access);
+    touchRequirementRevision(itemId);
+    return shapeEvidenceLinkWithReport(
+      existingRow('evidence_links', Number(lastInsertRowid)),
+      access,
+    );
   });
 }
 
-export function deleteEvidenceLink(item, part, input) {
+export function deleteEvidenceLink(item: Row, part: Row, input: Json) {
   assertRevision('Requirement', item, input);
-  return mutate('evidence:unlink', String(part.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM evidence_links WHERE id = ?').run(part.id);
-    touchRequirementRevision(item.id);
+  const partId = num(part, 'id');
+  return mutate('evidence:unlink', String(partId), cellsOf(item), () => {
+    database.prepare('DELETE FROM evidence_links WHERE id = ?').run(partId);
+    touchRequirementRevision(num(item, 'id'));
     return { deleted: true };
   });
 }

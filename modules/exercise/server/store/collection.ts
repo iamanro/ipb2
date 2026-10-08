@@ -2,12 +2,24 @@ import type { SQLInputValue } from 'node:sqlite';
 // The collection plan: collectors, taskings and their conflicts.
 
 import { formatDtg } from '../../../../src/dtg.js';
-import { HttpError } from '../../../../server/http.ts';
+import type { Access, Owner } from '../../../../server/dispatch.ts';
+import { fieldsOf, HttpError, type Json } from '../../../../server/http.ts';
+import { releasableArray } from '../../../../server/policy.ts';
+import { num, textOrNull, type Row } from '../../../../server/state.ts';
 import { areaName } from '../ipbImport.ts';
 
 import { database } from './connection.ts';
 import {
+  readCollector,
+  readNai,
+  readRequirement,
+  readSir,
+  readTasking,
+  type TaskingRow,
+} from './rows.ts';
+import {
   cellsOf,
+  existingRow,
   fetchRow,
   mutate,
   now,
@@ -34,15 +46,16 @@ const DISCIPLINES = [
 
 const TASKING_STATUSES = ['planned', 'tasked', 'active', 'complete', 'cancelled'];
 
-export function shapeCollector(row) {
-  return { ...row, releasable_to: JSON.parse(row.releasable_to) };
+export function shapeCollector(raw: Row) {
+  const collector = readCollector(raw);
+  return { ...collector, releasable_to: releasableArray(collector.releasable_to) };
 }
 
-export function listCollectors(access) {
+export function listCollectors(access: Access) {
   return visibleRows(access, 'collector', 'collectors', 'name, id').map(shapeCollector);
 }
 
-function requirePositiveNumberOrNull(value, name) {
+function requirePositiveNumberOrNull(value: Json | undefined, name: string): number | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     throw new HttpError(400, `${name} must be a positive number.`);
@@ -51,7 +64,7 @@ function requirePositiveNumberOrNull(value, name) {
 }
 
 /** `available_from`/`available_to` are each optional, but if both are given the first must precede the second. */
-function validateAvailability(from, to) {
+function validateAvailability(from: Json | undefined, to: Json | undefined) {
   const validFrom = optionalString(from, 'available_from');
   const validTo = optionalString(to, 'available_to');
   if (validFrom && validTo && new Date(validFrom).getTime() >= new Date(validTo).getTime()) {
@@ -60,9 +73,8 @@ function validateAvailability(from, to) {
   return { validFrom, validTo };
 }
 
-export function createCollector(
-  owner,
-  {
+export function createCollector(owner: Owner, input: Json) {
+  const {
     name,
     discipline,
     unit,
@@ -70,8 +82,7 @@ export function createCollector(
     available_from: availableFrom,
     available_to: availableTo,
     notes,
-  },
-) {
+  } = fieldsOf(input);
   const validName = requireString(name, 'name');
   const validDiscipline = requireEnum(discipline, 'discipline', DISCIPLINES);
   const validUnit = optionalString(unit, 'unit');
@@ -102,12 +113,14 @@ export function createCollector(
           timestamp,
           timestamp,
         );
-      return shapeCollector(fetchRow('collectors', Number(lastInsertRowid)));
+      return shapeCollector(existingRow('collectors', Number(lastInsertRowid)));
     },
   );
 }
 
-export function updateCollector(item, patch) {
+export function updateCollector(item: Row, input: Json) {
+  const patch = fieldsOf(input);
+  const itemId = num(item, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('name' in patch) {
@@ -127,8 +140,9 @@ export function updateCollector(item, patch) {
     params.push(requirePositiveNumberOrNull(patch.range_km, 'range_km'));
   }
   if ('available_from' in patch || 'available_to' in patch) {
-    const from = 'available_from' in patch ? patch.available_from : item.available_from;
-    const to = 'available_to' in patch ? patch.available_to : item.available_to;
+    const from =
+      'available_from' in patch ? patch.available_from : textOrNull(item, 'available_from');
+    const to = 'available_to' in patch ? patch.available_to : textOrNull(item, 'available_to');
     const validated = validateAvailability(from, to);
     if ('available_from' in patch) {
       fields.push('available_from = ?');
@@ -143,38 +157,50 @@ export function updateCollector(item, patch) {
     fields.push('notes = ?');
     params.push(optionalString(patch.notes, 'notes'));
   }
-  return mutate('collector:update', String(item.id), cellsOf(item), () => {
+  return mutate('collector:update', String(itemId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE collectors SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, item.id);
+        .run(...params, itemId);
     }
-    return shapeCollector(fetchRow('collectors', item.id));
+    return shapeCollector(existingRow('collectors', itemId));
   });
 }
 
-export function deleteCollector(item) {
-  return mutate('collector:delete', String(item.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM collectors WHERE id = ?').run(item.id);
+export function deleteCollector(item: Row) {
+  const itemId = num(item, 'id');
+  return mutate('collector:delete', String(itemId), cellsOf(item), () => {
+    database.prepare('DELETE FROM collectors WHERE id = ?').run(itemId);
     return { deleted: true };
   });
 }
 
 /** "COLLECTOR x: collect SIR y at NAI z from DTG to DTG; report NLT LTIOV". */
-function generateSor(row, collector, sir, nai) {
-  const collectorName = collector ? collector.name : `Collector #${row.collector_id}`;
+function generateSor(
+  row: TaskingRow,
+  collector: Row | null,
+  sirRow: Row | null,
+  naiRow: Row | null,
+) {
+  const sir = sirRow && readSir(sirRow);
+  const nai = naiRow && readNai(naiRow);
+  const collectorName = collector
+    ? readCollector(collector).name
+    : `Collector #${row.collector_id}`;
   const sirText = sir ? sir.text : `SIR #${row.sir_id}`;
   const area = nai ? areaName(nai.kind, nai.label) : 'no NAI';
   const start = formatDtg(new Date(row.start_at).getTime());
   const end = formatDtg(new Date(row.end_at).getTime());
-  const requirement = sir ? fetchRow('requirements', sir.requirement_id) : null;
-  const ltiov = requirement?.ltiov ? formatDtg(new Date(requirement.ltiov).getTime()) : 'unset';
+  const requirementRow = sir ? fetchRow('requirements', sir.requirement_id) : null;
+  const ltiovText = requirementRow ? readRequirement(requirementRow).ltiov : null;
+  const ltiov = ltiovText ? formatDtg(new Date(ltiovText).getTime()) : 'unset';
   return `${collectorName}: collect ${sirText} at ${area} from ${start} to ${end}; report NLT ${ltiov}`;
 }
 
-export function shapeTasking(row) {
+export function shapeTasking(raw: Row) {
+  const row = readTasking(raw);
   const collector = fetchRow('collectors', row.collector_id);
   const sir = fetchRow('sirs', row.sir_id);
   const nai = row.nai_id ? fetchRow('nais', row.nai_id) : null;
@@ -190,17 +216,17 @@ export function shapeTasking(row) {
     notes: row.notes,
     sor: generateSor(row, collector, sir, nai),
     owner_cell: row.owner_cell,
-    releasable_to: JSON.parse(row.releasable_to),
+    releasable_to: releasableArray(row.releasable_to),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-export function listTaskings(access) {
+export function listTaskings(access: Access) {
   return visibleRows(access, 'tasking', 'taskings', 'start_at, id').map(shapeTasking);
 }
 
-function validateTaskingWindow(startAt, endAt) {
+function validateTaskingWindow(startAt: Json | undefined, endAt: Json | undefined) {
   const start = requireTimestamp(startAt, 'start_at');
   const end = requireTimestamp(endAt, 'end_at');
   if (new Date(start).getTime() >= new Date(end).getTime()) {
@@ -211,28 +237,30 @@ function validateTaskingWindow(startAt, endAt) {
 
 /** Taskings read the collector and the SIR's requirement via `access.see`
  * (docs/adr/0002 rule 1: ids of other items arriving in a body). */
-function requireCollectorId(value, access) {
-  if (!Number.isInteger(value)) throw new HttpError(400, 'collector_id must be an integer.');
+function requireCollectorId(value: Json | undefined, access: Access): number {
+  if (typeof value !== 'number' || !Number.isInteger(value))
+    throw new HttpError(400, 'collector_id must be an integer.');
   access.see('collector', value);
   return value;
 }
 
-function requireSirId(value, access) {
-  if (!Number.isInteger(value)) throw new HttpError(400, 'sir_id must be an integer.');
+function requireSirId(value: Json | undefined, access: Access): number {
+  if (typeof value !== 'number' || !Number.isInteger(value))
+    throw new HttpError(400, 'sir_id must be an integer.');
   access.see('sir', value);
   return value;
 }
 
-function resolveTaskingReportId(value, access) {
+function resolveTaskingReportId(value: Json | undefined, access: Access): number | null {
   if (value === undefined || value === null) return null;
-  if (!Number.isInteger(value)) throw new HttpError(400, 'report_id must be an integer.');
+  if (typeof value !== 'number' || !Number.isInteger(value))
+    throw new HttpError(400, 'report_id must be an integer.');
   access.see('report', value);
   return value;
 }
 
-export function createTasking(
-  owner,
-  {
+export function createTasking(owner: Owner, input: Json, access: Access) {
+  const {
     collector_id: collectorId,
     sir_id: sirId,
     nai_id: naiId,
@@ -241,9 +269,7 @@ export function createTasking(
     status,
     report_id: reportId,
     notes,
-  },
-  access,
-) {
+  } = fieldsOf(input);
   const validCollectorId = requireCollectorId(collectorId, access);
   const validSirId = requireSirId(sirId, access);
   const validNaiId = naiId === undefined ? null : resolveNaiId(naiId, null, null, access);
@@ -276,12 +302,14 @@ export function createTasking(
           timestamp,
           timestamp,
         );
-      return shapeTasking(fetchRow('taskings', Number(lastInsertRowid)));
+      return shapeTasking(existingRow('taskings', Number(lastInsertRowid)));
     },
   );
 }
 
-export function updateTasking(item, patch, access) {
+export function updateTasking(item: Row, input: Json, access: Access) {
+  const patch = fieldsOf(input);
+  const itemId = num(item, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('collector_id' in patch) {
@@ -296,8 +324,8 @@ export function updateTasking(item, patch, access) {
     fields.push('nai_id = ?');
     params.push(resolveNaiId(patch.nai_id, null, null, access));
   }
-  const startAt = 'start_at' in patch ? patch.start_at : item.start_at;
-  const endAt = 'end_at' in patch ? patch.end_at : item.end_at;
+  const startAt = 'start_at' in patch ? patch.start_at : textOrNull(item, 'start_at');
+  const endAt = 'end_at' in patch ? patch.end_at : textOrNull(item, 'end_at');
   if ('start_at' in patch || 'end_at' in patch) {
     const { start, end } = validateTaskingWindow(startAt, endAt);
     if ('start_at' in patch) {
@@ -321,21 +349,22 @@ export function updateTasking(item, patch, access) {
     fields.push('notes = ?');
     params.push(optionalString(patch.notes, 'notes'));
   }
-  return mutate('tasking:update', String(item.id), cellsOf(item), () => {
+  return mutate('tasking:update', String(itemId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE taskings SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, item.id);
+        .run(...params, itemId);
     }
-    return shapeTasking(fetchRow('taskings', item.id));
+    return shapeTasking(existingRow('taskings', itemId));
   });
 }
 
-export function deleteTasking(item) {
-  return mutate('tasking:delete', String(item.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM taskings WHERE id = ?').run(item.id);
+export function deleteTasking(item: Row) {
+  const itemId = num(item, 'id');
+  return mutate('tasking:delete', String(itemId), cellsOf(item), () => {
+    database.prepare('DELETE FROM taskings WHERE id = ?').run(itemId);
     return { deleted: true };
   });
 }
@@ -346,44 +375,45 @@ export function deleteTasking(item) {
  * window. Read-only, so no activity entry. Only draws on taskings/collectors
  * the requester can currently see (docs/adr/0002: per-viewer reads).
  */
-export function listCollectionConflicts(access) {
+export function listCollectionConflicts(access: Access) {
   const taskings = visibleRows(access, 'tasking', 'taskings', 'collector_id, start_at').map(
     shapeTasking,
   );
-  const collectors = new Map<unknown, any>(
-    visibleRows(access, 'collector', 'collectors', 'id').map((c) => [c.id, c]),
+  const collectors = new Map(
+    visibleRows(access, 'collector', 'collectors', 'id')
+      .map(readCollector)
+      .map((collector) => [collector.id, collector]),
   );
 
-  const byCollector = new Map();
+  const byCollector = new Map<number, typeof taskings>();
   for (const tasking of taskings) {
-    if (!byCollector.has(tasking.collector_id)) byCollector.set(tasking.collector_id, []);
-    byCollector.get(tasking.collector_id).push(tasking);
+    const list = byCollector.get(tasking.collector_id) ?? [];
+    list.push(tasking);
+    byCollector.set(tasking.collector_id, list);
   }
-  const overlaps: any[] = [];
+  const ms = (timestamp: string) => new Date(timestamp).getTime();
+  const overlaps: { kind: 'overlap'; collector_id: number; tasking_ids: number[] }[] = [];
   for (const [collectorId, list] of byCollector) {
     for (let i = 0; i < list.length; i += 1) {
       for (let j = i + 1; j < list.length; j += 1) {
         const a = list[i];
         const b = list[j];
-        if (
-          new Date(a.start_at) < new Date(b.end_at) &&
-          new Date(b.start_at) < new Date(a.end_at)
-        ) {
+        if (ms(a.start_at) < ms(b.end_at) && ms(b.start_at) < ms(a.end_at)) {
           overlaps.push({ kind: 'overlap', collector_id: collectorId, tasking_ids: [a.id, b.id] });
         }
       }
     }
   }
 
-  const outside: any[] = [];
+  const outside: { kind: 'unavailable'; collector_id: number; tasking_id: number }[] = [];
   for (const tasking of taskings) {
     const collector = collectors.get(tasking.collector_id);
     if (!collector) continue;
-    const from = collector.available_from ? new Date(collector.available_from) : null;
-    const to = collector.available_to ? new Date(collector.available_to) : null;
-    const start = new Date(tasking.start_at);
-    const end = new Date(tasking.end_at);
-    if ((from && start < from) || (to && end > to)) {
+    const from = collector.available_from ? ms(collector.available_from) : null;
+    const to = collector.available_to ? ms(collector.available_to) : null;
+    const start = ms(tasking.start_at);
+    const end = ms(tasking.end_at);
+    if ((from !== null && start < from) || (to !== null && end > to)) {
       outside.push({
         kind: 'unavailable',
         collector_id: tasking.collector_id,

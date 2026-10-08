@@ -1,18 +1,22 @@
 import type { SQLInputValue } from 'node:sqlite';
 // Requests for information and their state machine.
 
-import { HttpError } from '../../../../server/http.ts';
-import { normalizeRelease } from '../../../../server/policy.ts';
+import type { Access, Owner } from '../../../../server/dispatch.ts';
+import { fieldsOf, HttpError, type Json } from '../../../../server/http.ts';
+import { normalizeRelease, releasableArray } from '../../../../server/policy.ts';
+import { num, type Row } from '../../../../server/state.ts';
 import { canTransition } from '../rfiMachine.ts';
 
 import { database } from './connection.ts';
+import { readReport, readRfi, readSir } from './rows.ts';
 import {
   cellsOf,
-  fetchRow,
+  existingRow,
   mutate,
   now,
   optionalString,
   requireEnum,
+  requireInteger,
   requireString,
   touchRequirementRevision,
   touchRequirementsForReport,
@@ -21,28 +25,27 @@ import {
 
 const RFI_PRIORITIES = ['routine', 'priority', 'immediate'];
 
-export function shapeRfi(row) {
-  return { ...row, releasable_to: JSON.parse(row.releasable_to) };
+export function shapeRfi(raw: Row) {
+  const rfi = readRfi(raw);
+  return { ...rfi, releasable_to: releasableArray(rfi.releasable_to) };
 }
 
-export function listRfis(access) {
+export function listRfis(access: Access) {
   return visibleRows(access, 'rfi', 'rfis', 'created_at DESC, id DESC').map(shapeRfi);
 }
 
-export function createRfi(
-  owner,
-  { requester, requirement_id: requirementId, sir_id: sirId, question, priority, nlt },
-  access,
-) {
+export function createRfi(owner: Owner, input: Json, access: Access) {
+  const { requester, requirement_id, sir_id, question, priority, nlt } = fieldsOf(input);
+  const requirementId =
+    requirement_id === undefined || requirement_id === null
+      ? null
+      : requireInteger(requirement_id, 'requirement_id');
+  const sirId = sir_id === undefined || sir_id === null ? null : requireInteger(sir_id, 'sir_id');
   const cleanQuestion = requireString(question, 'question');
   const cleanPriority =
     priority === undefined ? 'routine' : requireEnum(priority, 'priority', RFI_PRIORITIES);
-  if (requirementId !== undefined && requirementId !== null) {
-    access.see('requirement', requirementId);
-  }
-  if (sirId !== undefined && sirId !== null) {
-    access.see('sir', sirId);
-  }
+  if (requirementId !== null) access.see('requirement', requirementId);
+  if (sirId !== null) access.see('sir', sirId);
   const timestamp = now();
   return mutate(
     'rfi:create',
@@ -56,8 +59,8 @@ export function createRfi(
         )
         .run(
           optionalString(requester, 'requester'),
-          requirementId ?? null,
-          sirId ?? null,
+          requirementId,
+          sirId,
           cleanQuestion,
           cleanPriority,
           optionalString(nlt, 'nlt'),
@@ -66,12 +69,14 @@ export function createRfi(
           timestamp,
           timestamp,
         );
-      return shapeRfi(fetchRow('rfis', Number(lastInsertRowid)));
+      return shapeRfi(existingRow('rfis', Number(lastInsertRowid)));
     },
   );
 }
 
-export function updateRfi(item, patch) {
+export function updateRfi(item: Row, input: Json) {
+  const patch = fieldsOf(input);
+  const itemId = num(item, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('assignee' in patch) {
@@ -90,13 +95,13 @@ export function updateRfi(item, patch) {
     fields.push('nlt = ?');
     params.push(optionalString(patch.nlt, 'nlt'));
   }
-  return mutate('rfi:update', String(item.id), cellsOf(item), () => {
+  return mutate('rfi:update', String(itemId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
-      database.prepare(`UPDATE rfis SET ${fields.join(', ')} WHERE id = ?`).run(...params, item.id);
+      database.prepare(`UPDATE rfis SET ${fields.join(', ')} WHERE id = ?`).run(...params, itemId);
     }
-    return shapeRfi(fetchRow('rfis', item.id));
+    return shapeRfi(existingRow('rfis', itemId));
   });
 }
 
@@ -110,71 +115,76 @@ export function updateRfi(item, patch) {
  * non-White RFI, the answer report is automatically released to the
  * requesting cell — otherwise the requester couldn't see their own answer.
  */
-export function transitionRfi(
-  item,
-  { state: toState, answer_report_id: answerReportId, relation },
-  access,
-) {
-  if (!canTransition(item.state, toState)) {
-    throw new HttpError(409, `Cannot move an RFI from ${item.state} to ${toState}.`);
+export function transitionRfi(item: Row, input: Json, access: Access) {
+  const { state, answer_report_id, relation } = fieldsOf(input);
+  const rfi = readRfi(item);
+  const toState = typeof state === 'string' ? state : JSON.stringify(state ?? null);
+  if (!canTransition(rfi.state, toState)) {
+    throw new HttpError(409, `Cannot move an RFI from ${rfi.state} to ${toState}.`);
   }
   if (toState === 'answered' && !access.white) {
     throw new HttpError(403, 'Only White may answer an RFI.');
   }
-  let answerReport: any = null;
+  const answerReportId =
+    typeof answer_report_id === 'number' && Number.isInteger(answer_report_id)
+      ? answer_report_id
+      : null;
+  const relationName = optionalString(relation, 'relation') ?? 'confirms';
+  let answerReport = null;
   if (toState === 'answered') {
-    if (!Number.isInteger(answerReportId)) {
+    if (answerReportId === null) {
       throw new HttpError(400, 'answer_report_id is required to answer an RFI.');
     }
-    answerReport = access.see('report', answerReportId);
+    answerReport = readReport(access.see('report', answerReportId));
   }
-  return mutate('rfi:transition', `${item.state}->${toState}`, cellsOf(item), () => {
+  return mutate('rfi:transition', `${rfi.state}->${toState}`, cellsOf(item), () => {
     database
       .prepare(
         'UPDATE rfis SET state = ?, answer_report_id = COALESCE(?, answer_report_id), updated_at = ? WHERE id = ?',
       )
-      .run(toState, answerReportId ?? null, now(), item.id);
-    if (toState === 'answered' && (item.requirement_id || item.sir_id)) {
-      const targetKind = item.sir_id ? 'sir' : 'requirement';
-      const targetId = item.sir_id ?? item.requirement_id;
-      const requirementId = item.sir_id
-        ? fetchRow('sirs', item.sir_id).requirement_id
-        : item.requirement_id;
+      .run(toState, answerReportId, now(), rfi.id);
+    if (answerReport && (rfi.requirement_id || rfi.sir_id)) {
+      const targetKind = rfi.sir_id ? 'sir' : 'requirement';
+      const targetId = rfi.sir_id ?? rfi.requirement_id;
+      const requirementId = rfi.sir_id
+        ? readSir(existingRow('sirs', rfi.sir_id)).requirement_id
+        : num(item, 'requirement_id');
       database
         .prepare(
           `INSERT INTO evidence_links (report_id, requirement_id, target_kind, target_id, relation, note, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
-          answerReportId,
+          answerReport.id,
           requirementId,
           targetKind,
           targetId,
-          relation ?? 'confirms',
+          relationName,
           'Auto-linked from RFI answer.',
           now(),
         );
       touchRequirementRevision(requirementId);
     }
-    if (toState === 'answered' && answerReport && answerReport.owner_cell !== item.owner_cell) {
+    if (answerReport && answerReport.owner_cell !== rfi.owner_cell) {
       const released = normalizeRelease(
-        [...JSON.parse(answerReport.releasable_to), item.owner_cell],
+        [...releasableArray(answerReport.releasable_to), rfi.owner_cell],
         answerReport.owner_cell,
       );
       database
         .prepare(
           'UPDATE reports SET releasable_to = ?, revision = revision + 1, updated_at = ? WHERE id = ?',
         )
-        .run(JSON.stringify(released), now(), answerReportId);
-      touchRequirementsForReport(answerReportId);
+        .run(JSON.stringify(released), now(), answerReport.id);
+      touchRequirementsForReport(answerReport.id);
     }
-    return shapeRfi(fetchRow('rfis', item.id));
+    return shapeRfi(existingRow('rfis', rfi.id));
   });
 }
 
-export function deleteRfi(item) {
-  return mutate('rfi:delete', String(item.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM rfis WHERE id = ?').run(item.id);
+export function deleteRfi(item: Row) {
+  const itemId = num(item, 'id');
+  return mutate('rfi:delete', String(itemId), cellsOf(item), () => {
+    database.prepare('DELETE FROM rfis WHERE id = ?').run(itemId);
     return { deleted: true };
   });
 }

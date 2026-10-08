@@ -1,7 +1,8 @@
 import type { SQLInputValue } from 'node:sqlite';
 // Exercise scenarios: fictional countries and renamed places over Czechia.
 
-import { HttpError } from '../../../../server/http.ts';
+import { fieldsOf, HttpError, type Json } from '../../../../server/http.ts';
+import { countRows, num, type Row } from '../../../../server/state.ts';
 import {
   AFFILIATIONS,
   DEFAULT_COLORS,
@@ -13,7 +14,9 @@ import {
 } from '../scenarioGeography.ts';
 
 import { database, regionsReference } from './connection.ts';
+import { readCountry, readPlace, readScenario } from './rows.ts';
 import {
+  existingRow,
   fetchRow,
   mutate,
   now,
@@ -32,7 +35,16 @@ import {
 // cell-owned — every route here is `verb: 'none'`.
 
 /** The current `regions.json` FeatureCollection, or null if it hasn't been built. */
-function currentRegionsData() {
+type CountryColumns = {
+  name: string;
+  affiliation: string;
+  color: string;
+  regions: Json;
+  geometry: Json;
+};
+type PlaceColumns = { real_name: string; kind: string; lon: number; lat: number; name: string };
+
+function currentRegionsData(): Json {
   if (!regionsReference) return null;
   try {
     return regionsReference.get()?.data ?? null;
@@ -52,11 +64,11 @@ export function getRegions() {
   return data;
 }
 
-function readScenarioMeta() {
+function readScenarioMeta(): Row {
   const row = fetchRow('scenario_meta', 1);
   if (row) return row;
   database.prepare('INSERT INTO scenario_meta (id, example_seeded) VALUES (1, 0)').run();
-  return fetchRow('scenario_meta', 1);
+  return existingRow('scenario_meta', 1);
 }
 
 function markExampleSeeded() {
@@ -64,20 +76,24 @@ function markExampleSeeded() {
   database.prepare('UPDATE scenario_meta SET example_seeded = 1 WHERE id = 1').run();
 }
 
-function shapeCountry(row) {
+function shapeCountry(raw: Row) {
+  const row = readCountry(raw);
+  const regions: Json = JSON.parse(row.regions);
+  const geometry: Json = row.geometry ? JSON.parse(row.geometry) : null;
   return {
     id: row.id,
     scenario_id: row.scenario_id,
     name: row.name,
     affiliation: row.affiliation,
     color: row.color,
-    regions: JSON.parse(row.regions),
-    geometry: row.geometry ? JSON.parse(row.geometry) : null,
+    regions,
+    geometry,
     position: row.position,
   };
 }
 
-function shapePlace(row) {
+function shapePlace(raw: Row) {
+  const row = readPlace(raw);
   return {
     id: row.id,
     scenario_id: row.scenario_id,
@@ -89,21 +105,22 @@ function shapePlace(row) {
   };
 }
 
-function listCountries(scenarioId) {
+function listCountries(scenarioId: number) {
   return database
     .prepare('SELECT * FROM scenario_countries WHERE scenario_id = ? ORDER BY position, id')
     .all(scenarioId)
     .map(shapeCountry);
 }
 
-function listPlaces(scenarioId) {
+function listPlaces(scenarioId: number) {
   return database
     .prepare('SELECT * FROM scenario_places WHERE scenario_id = ? ORDER BY id')
     .all(scenarioId)
     .map(shapePlace);
 }
 
-function shapeScenario(row) {
+function shapeScenario(raw: Row) {
+  const row = readScenario(raw);
   return {
     id: row.id,
     name: row.name,
@@ -116,13 +133,18 @@ function shapeScenario(row) {
   };
 }
 
-function shapeScenarioSummary(row) {
-  const countryCount = database
-    .prepare('SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?')
-    .get(row.id).n;
-  const placeCount = database
-    .prepare('SELECT COUNT(*) AS n FROM scenario_places WHERE scenario_id = ?')
-    .get(row.id).n;
+function shapeScenarioSummary(raw: Row) {
+  const row = readScenario(raw);
+  const countryCount = countRows(
+    database,
+    'SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?',
+    row.id,
+  );
+  const placeCount = countRows(
+    database,
+    'SELECT COUNT(*) AS n FROM scenario_places WHERE scenario_id = ?',
+    row.id,
+  );
   return {
     id: row.id,
     name: row.name,
@@ -134,11 +156,11 @@ function shapeScenarioSummary(row) {
   };
 }
 
-function touchScenario(id, timestamp = now()) {
+function touchScenario(id: number, timestamp = now()) {
   database.prepare('UPDATE scenarios SET updated_at = ? WHERE id = ?').run(timestamp, id);
 }
 
-function insertScenarioRow({ name, example }) {
+function insertScenarioRow({ name, example }: { name: string; example: boolean }) {
   const timestamp = now();
   const { lastInsertRowid } = database
     .prepare(
@@ -148,7 +170,11 @@ function insertScenarioRow({ name, example }) {
   return Number(lastInsertRowid);
 }
 
-function insertCountryRow(scenarioId, position, { name, affiliation, color, regions, geometry }) {
+function insertCountryRow(
+  scenarioId: number,
+  position: number,
+  { name, affiliation, color, regions, geometry }: CountryColumns,
+) {
   const timestamp = now();
   const { lastInsertRowid } = database
     .prepare(
@@ -170,7 +196,10 @@ function insertCountryRow(scenarioId, position, { name, affiliation, color, regi
   return Number(lastInsertRowid);
 }
 
-function insertPlaceRow(scenarioId, { real_name: realName, kind, lon, lat, name }) {
+function insertPlaceRow(
+  scenarioId: number,
+  { real_name: realName, kind, lon, lat, name }: PlaceColumns,
+) {
   const timestamp = now();
   const { lastInsertRowid } = database
     .prepare(
@@ -182,14 +211,14 @@ function insertPlaceRow(scenarioId, { real_name: realName, kind, lon, lat, name 
 }
 
 /** Inserts the EXAMPLE scenario built from `regionsData` and marks it seeded. */
-function seedExampleScenario(regionsData) {
+function seedExampleScenario(regionsData: Json) {
   return mutate('scenario:example', 'example', null, () => {
     const plan = planExampleScenario(regionsData);
     const scenarioId = insertScenarioRow({ name: plan.name, example: true });
     plan.countries.forEach((country, index) => insertCountryRow(scenarioId, index, country));
     plan.places.forEach((place) => insertPlaceRow(scenarioId, place));
     markExampleSeeded();
-    return shapeScenario(fetchRow('scenarios', scenarioId));
+    return shapeScenario(existingRow('scenarios', scenarioId));
   });
 }
 
@@ -205,7 +234,7 @@ export function createExampleScenario() {
  * next time.
  */
 function maybeSeedExample() {
-  if (readScenarioMeta().example_seeded) return;
+  if (num(readScenarioMeta(), 'example_seeded')) return;
   const regionsData = currentRegionsData();
   if (regionsData) seedExampleScenario(regionsData);
 }
@@ -218,7 +247,8 @@ export function listScenarios() {
     .map(shapeScenarioSummary);
 }
 
-export function createScenario({ name }) {
+export function createScenario(input: Json) {
+  const { name } = fieldsOf(input);
   const cleanName = requireBoundedString(name, 'name', 120);
   return mutate(
     'scenario:create',
@@ -226,21 +256,23 @@ export function createScenario({ name }) {
     null,
     () => {
       const id = insertScenarioRow({ name: cleanName, example: false });
-      return shapeScenario(fetchRow('scenarios', id));
+      return shapeScenario(existingRow('scenarios', id));
     },
   );
 }
 
-export function getScenario(id) {
+export function getScenario(id: number) {
   const row = fetchRow('scenarios', id);
   if (!row) throw new HttpError(404, `Scenario ${id} not found.`);
   return shapeScenario(row);
 }
 
-export function updateScenario(id, patch) {
+export function updateScenario(id: number, input: Json) {
+  const patch = fieldsOf(input);
   const existing = fetchRow('scenarios', id);
   if (!existing) throw new HttpError(404, `Scenario ${id} not found.`);
-  if (patch.active !== undefined && typeof patch.active !== 'boolean') {
+  const { active } = patch;
+  if (active !== undefined && typeof active !== 'boolean') {
     throw new HttpError(400, 'active must be a boolean.');
   }
   const cleanName = 'name' in patch ? requireBoundedString(patch.name, 'name', 120) : undefined;
@@ -248,7 +280,7 @@ export function updateScenario(id, patch) {
     const timestamp = now();
     // Deactivate every other scenario first, inside this transaction, so the
     // partial unique index on scenarios(active) never sees two active rows.
-    if (patch.active === true) {
+    if (active === true) {
       database
         .prepare('UPDATE scenarios SET active = 0, updated_at = ? WHERE active = 1 AND id <> ?')
         .run(timestamp, id);
@@ -259,20 +291,20 @@ export function updateScenario(id, patch) {
       fields.push('name = ?');
       params.push(cleanName);
     }
-    if (patch.active !== undefined) {
+    if (active !== undefined) {
       fields.push('active = ?');
-      params.push(patch.active ? 1 : 0);
+      params.push(active ? 1 : 0);
     }
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(timestamp);
       database.prepare(`UPDATE scenarios SET ${fields.join(', ')} WHERE id = ?`).run(...params, id);
     }
-    return shapeScenario(fetchRow('scenarios', id));
+    return shapeScenario(existingRow('scenarios', id));
   });
 }
 
-export function deleteScenario(id) {
+export function deleteScenario(id: number) {
   const existing = fetchRow('scenarios', id);
   if (!existing) throw new HttpError(404, `Scenario ${id} not found.`);
   mutate('scenario:delete', String(id), null, () => {
@@ -280,14 +312,15 @@ export function deleteScenario(id) {
   });
 }
 
-export function duplicateScenario(id) {
-  const row = fetchRow('scenarios', id);
-  if (!row) throw new HttpError(404, `Scenario ${id} not found.`);
+export function duplicateScenario(id: number) {
+  const raw = fetchRow('scenarios', id);
+  if (!raw) throw new HttpError(404, `Scenario ${id} not found.`);
+  const row = readScenario(raw);
   return mutate('scenario:duplicate', String(id), null, () => {
     const newId = insertScenarioRow({ name: `${row.name} (copy)`, example: false });
     for (const country of listCountries(id)) insertCountryRow(newId, country.position, country);
     for (const place of listPlaces(id)) insertPlaceRow(newId, place);
-    return shapeScenario(fetchRow('scenarios', newId));
+    return shapeScenario(existingRow('scenarios', newId));
   });
 }
 
@@ -296,13 +329,16 @@ export function getActiveScenario() {
   return { scenario: row ? shapeScenario(row) : null };
 }
 
-export function createCountry(scenarioId, { name, affiliation, color, regions, geometry }) {
+export function createCountry(scenarioId: number, input: Json) {
+  const { name, affiliation, color, regions, geometry } = fieldsOf(input);
   const scenario = fetchRow('scenarios', scenarioId);
   if (!scenario) throw new HttpError(404, `Scenario ${scenarioId} not found.`);
   const cleanName = requireBoundedString(name, 'name', 120);
   const cleanAffiliation = requireEnum(affiliation, 'affiliation', AFFILIATIONS);
   const cleanColor =
-    color === undefined || color === null ? DEFAULT_COLORS[cleanAffiliation] : requireColor(color);
+    color === undefined || color === null
+      ? (DEFAULT_COLORS[cleanAffiliation] ?? '')
+      : requireColor(color);
   const cleanRegions = normalizeRegionIds(regions);
   const cleanGeometry = normalizeGeometry(geometry);
   return mutate(
@@ -310,9 +346,11 @@ export function createCountry(scenarioId, { name, affiliation, color, regions, g
     () => cleanName,
     null,
     () => {
-      const position = database
-        .prepare('SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?')
-        .get(scenarioId).n;
+      const position = countRows(
+        database,
+        'SELECT COUNT(*) AS n FROM scenario_countries WHERE scenario_id = ?',
+        scenarioId,
+      );
       const id = insertCountryRow(scenarioId, position, {
         name: cleanName,
         affiliation: cleanAffiliation,
@@ -321,14 +359,16 @@ export function createCountry(scenarioId, { name, affiliation, color, regions, g
         geometry: cleanGeometry,
       });
       touchScenario(scenarioId);
-      return shapeCountry(fetchRow('scenario_countries', id));
+      return shapeCountry(existingRow('scenario_countries', id));
     },
   );
 }
 
-export function updateCountry(id, patch) {
-  const row = fetchRow('scenario_countries', id);
-  if (!row) throw new HttpError(404, `Country ${id} not found.`);
+export function updateCountry(id: number, input: Json) {
+  const patch = fieldsOf(input);
+  const raw = fetchRow('scenario_countries', id);
+  if (!raw) throw new HttpError(404, `Country ${id} not found.`);
+  const row = readCountry(raw);
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('name' in patch) {
@@ -353,9 +393,12 @@ export function updateCountry(id, patch) {
     params.push(geometry ? JSON.stringify(geometry) : null);
   }
   if ('position' in patch) {
-    if (!Number.isInteger(patch.position)) throw new HttpError(400, 'position must be an integer.');
+    const { position } = patch;
+    if (typeof position !== 'number' || !Number.isInteger(position)) {
+      throw new HttpError(400, 'position must be an integer.');
+    }
     fields.push('position = ?');
-    params.push(patch.position);
+    params.push(position);
   }
   return mutate('scenario-country:update', String(id), null, () => {
     if (fields.length) {
@@ -366,20 +409,22 @@ export function updateCountry(id, patch) {
         .run(...params, id);
     }
     touchScenario(row.scenario_id);
-    return shapeCountry(fetchRow('scenario_countries', id));
+    return shapeCountry(existingRow('scenario_countries', id));
   });
 }
 
-export function deleteCountry(id) {
-  const row = fetchRow('scenario_countries', id);
-  if (!row) throw new HttpError(404, `Country ${id} not found.`);
+export function deleteCountry(id: number) {
+  const raw = fetchRow('scenario_countries', id);
+  if (!raw) throw new HttpError(404, `Country ${id} not found.`);
+  const row = readCountry(raw);
   mutate('scenario-country:delete', String(id), null, () => {
     database.prepare('DELETE FROM scenario_countries WHERE id = ?').run(id);
     touchScenario(row.scenario_id);
   });
 }
 
-export function createPlace(scenarioId, { real_name: realName, kind, lon, lat, name }) {
+export function createPlace(scenarioId: number, input: Json) {
+  const { real_name: realName, kind, lon, lat, name } = fieldsOf(input);
   const scenario = fetchRow('scenarios', scenarioId);
   if (!scenario) throw new HttpError(404, `Scenario ${scenarioId} not found.`);
   const cleanRealName = requireBoundedString(realName, 'real_name', 120);
@@ -400,14 +445,16 @@ export function createPlace(scenarioId, { real_name: realName, kind, lon, lat, n
         name: cleanName,
       });
       touchScenario(scenarioId);
-      return shapePlace(fetchRow('scenario_places', id));
+      return shapePlace(existingRow('scenario_places', id));
     },
   );
 }
 
-export function updatePlace(id, patch) {
-  const row = fetchRow('scenario_places', id);
-  if (!row) throw new HttpError(404, `Place ${id} not found.`);
+export function updatePlace(id: number, input: Json) {
+  const patch = fieldsOf(input);
+  const raw = fetchRow('scenario_places', id);
+  if (!raw) throw new HttpError(404, `Place ${id} not found.`);
+  const row = readPlace(raw);
   const cleanName = 'name' in patch ? requireBoundedString(patch.name, 'name', 120) : undefined;
   return mutate('scenario-place:update', String(id), null, () => {
     if (cleanName !== undefined) {
@@ -417,13 +464,14 @@ export function updatePlace(id, patch) {
         .run(cleanName, timestamp, id);
       touchScenario(row.scenario_id, timestamp);
     }
-    return shapePlace(fetchRow('scenario_places', id));
+    return shapePlace(existingRow('scenario_places', id));
   });
 }
 
-export function deletePlace(id) {
-  const row = fetchRow('scenario_places', id);
-  if (!row) throw new HttpError(404, `Place ${id} not found.`);
+export function deletePlace(id: number) {
+  const raw = fetchRow('scenario_places', id);
+  if (!raw) throw new HttpError(404, `Place ${id} not found.`);
+  const row = readPlace(raw);
   mutate('scenario-place:delete', String(id), null, () => {
     database.prepare('DELETE FROM scenario_places WHERE id = ?').run(id);
     touchScenario(row.scenario_id);

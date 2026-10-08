@@ -1,6 +1,12 @@
-import polygonClipping from 'polygon-clipping';
+import polygonClipping, { type MultiPolygon, type Pair } from 'polygon-clipping';
 
-import { HttpError } from '../../../server/http.ts';
+import { readGeometry } from '../../../server/geometry.ts';
+import { HttpError, isJsonObject, type Json } from '../../../server/http.ts';
+
+/** Every country is stored as one MultiPolygon. */
+export type CountryGeometry = { type: 'MultiPolygon'; coordinates: MultiPolygon };
+/** A kraj from regions.json, as the example scenario needs it. */
+type Kraj = { id: string; name: string; polygons: MultiPolygon };
 
 /**
  * Pure helpers for the exercise scenario's geography: colour/region/geometry
@@ -11,7 +17,7 @@ import { HttpError } from '../../../server/http.ts';
 
 export const AFFILIATIONS = ['friendly', 'hostile', 'neutral', 'unknown'];
 
-export const DEFAULT_COLORS = {
+export const DEFAULT_COLORS: Record<string, string> = {
   friendly: '#3d8bff',
   hostile: '#ff4d4d',
   neutral: '#3fbf5f',
@@ -24,7 +30,7 @@ const REGION_ID_PATTERN = /^(kraj|okres):\w+$/;
 const KIND_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
 const MAX_GEOMETRY_BYTES = 2 * 1024 * 1024;
 
-export function requireColor(value) {
+export function requireColor(value: Json | undefined): string {
   if (typeof value !== 'string' || !COLOR_PATTERN.test(value)) {
     throw new HttpError(400, 'color must be a "#rrggbb" hex value.');
   }
@@ -32,13 +38,13 @@ export function requireColor(value) {
 }
 
 /** `regions`: unique strings shaped like `kraj:<KOD>` or `okres:<KOD>`. Absent → none. */
-export function normalizeRegionIds(value) {
+export function normalizeRegionIds(value: Json | undefined): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new HttpError(400, 'regions must be an array of region ids.');
-  const seen = new Set();
+  const seen = new Set<string>();
   for (const id of value) {
     if (typeof id !== 'string' || !REGION_ID_PATTERN.test(id)) {
-      throw new HttpError(400, `"${id}" is not a valid region id.`);
+      throw new HttpError(400, `${JSON.stringify(id)} is not a valid region id.`);
     }
     if (seen.has(id)) throw new HttpError(400, `region "${id}" is listed more than once.`);
     seen.add(id);
@@ -46,7 +52,7 @@ export function normalizeRegionIds(value) {
   return [...seen];
 }
 
-export function requirePlaceKind(value) {
+export function requirePlaceKind(value: Json | undefined): string {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   if (!KIND_PATTERN.test(trimmed)) {
     throw new HttpError(400, 'kind must be a short lowercase token.');
@@ -54,17 +60,20 @@ export function requirePlaceKind(value) {
   return trimmed;
 }
 
-function finiteCoordinate(point) {
-  return (
-    Array.isArray(point) &&
-    point.length >= 2 &&
-    Number.isFinite(point[0]) &&
-    Number.isFinite(point[1]) &&
-    point[0] >= -180 &&
-    point[0] <= 180 &&
-    point[1] >= -90 &&
-    point[1] <= 90
-  );
+/** A point on the globe as a [lon, lat] pair, or null when it isn't one. */
+function finiteCoordinate(point: Json): Pair | null {
+  if (!Array.isArray(point) || point.length < 2) return null;
+  const [lon, lat] = point;
+  return typeof lon === 'number' &&
+    typeof lat === 'number' &&
+    Number.isFinite(lon) &&
+    Number.isFinite(lat) &&
+    lon >= -180 &&
+    lon <= 180 &&
+    lat >= -90 &&
+    lat <= 90
+    ? [lon, lat]
+    : null;
 }
 
 /**
@@ -72,9 +81,9 @@ function finiteCoordinate(point) {
  * `null`/`undefined` clear the geometry. Rejects anything serializing over
  * 2 MB with a 413, per contract.
  */
-export function normalizeGeometry(value) {
+export function normalizeGeometry(value: Json | undefined): CountryGeometry | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== 'object' || Array.isArray(value)) {
+  if (!isJsonObject(value)) {
     throw new HttpError(400, 'geometry must be a GeoJSON Polygon or MultiPolygon.');
   }
   const { type, coordinates } = value;
@@ -84,18 +93,20 @@ export function normalizeGeometry(value) {
   if (!Array.isArray(coordinates) || !coordinates.length) {
     throw new HttpError(400, 'geometry.coordinates must be a non-empty array.');
   }
-  const polygons = type === 'Polygon' ? [coordinates] : coordinates;
-  for (const polygon of polygons) {
+  const polygons: Json[] = type === 'Polygon' ? [coordinates] : coordinates;
+  const checked: MultiPolygon = polygons.map((polygon) => {
     if (!Array.isArray(polygon) || !polygon.length) {
       throw new HttpError(400, 'geometry has an empty polygon.');
     }
-    for (const ring of polygon) {
-      if (!Array.isArray(ring) || ring.length < 4 || !ring.every(finiteCoordinate)) {
+    return polygon.map((ring) => {
+      const pairs = Array.isArray(ring) ? ring.map(finiteCoordinate) : [];
+      if (!Array.isArray(ring) || ring.length < 4 || pairs.some((p) => p === null)) {
         throw new HttpError(400, 'geometry has a degenerate ring or an off-globe coordinate.');
       }
-    }
-  }
-  const normalized = { type: 'MultiPolygon', coordinates: polygons };
+      return pairs.filter((p) => p !== null);
+    });
+  });
+  const normalized: CountryGeometry = { type: 'MultiPolygon', coordinates: checked };
   if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > MAX_GEOMETRY_BYTES) {
     throw new HttpError(413, 'geometry is larger than the 2 MB limit.');
   }
@@ -150,13 +161,35 @@ const EXAMPLE_PLACES = [
   { real_name: 'Zlín', name: 'Zlinsk', lon: 17.6683, lat: 49.2265 },
 ];
 
-function normalizeKrajName(name) {
+function normalizeKrajName(name: string) {
   return name.trim().toLowerCase();
 }
 
-function krajGeometryCoordinates(feature) {
-  const { type, coordinates } = feature.geometry;
-  return type === 'Polygon' ? [coordinates] : coordinates;
+/** A position as polygon-clipping's [x, y] pair. */
+function pair(position: number[]): Pair {
+  return [position[0], position[1]];
+}
+
+/** The kraje of a regions.json FeatureCollection (other levels and malformed features skipped). */
+function readKraje(regionsCollection: Json): Kraj[] {
+  const features =
+    isJsonObject(regionsCollection) && Array.isArray(regionsCollection.features)
+      ? regionsCollection.features
+      : [];
+  return features.flatMap((feature): Kraj[] => {
+    if (!isJsonObject(feature) || !isJsonObject(feature.properties)) return [];
+    const { level, name, id } = feature.properties;
+    const geometry = readGeometry(feature.geometry);
+    if (level !== 'kraj' || typeof name !== 'string' || typeof id !== 'string') return [];
+    if (geometry?.type === 'Polygon') {
+      return [{ id, name, polygons: [geometry.coordinates.map((ring) => ring.map(pair))] }];
+    }
+    if (geometry?.type === 'MultiPolygon') {
+      const polygons = geometry.coordinates.map((p) => p.map((ring) => ring.map(pair)));
+      return [{ id, name, polygons }];
+    }
+    return [];
+  });
 }
 
 /**
@@ -165,11 +198,9 @@ function krajGeometryCoordinates(feature) {
  * plan for `store.js` to insert, throws a plain `Error` (a data problem, not
  * a client error) if a named kraj is missing.
  */
-export function planExampleScenario(regionsCollection) {
-  const byName = new Map<string, any>(
-    (regionsCollection.features || [])
-      .filter((feature) => feature.properties?.level === 'kraj')
-      .map((feature) => [normalizeKrajName(feature.properties.name), feature]),
+export function planExampleScenario(regionsCollection: Json) {
+  const byName = new Map(
+    readKraje(regionsCollection).map((kraj) => [normalizeKrajName(kraj.name), kraj]),
   );
   const countries = EXAMPLE_COUNTRIES.map((spec) => {
     const features = spec.kraje.map((name) => {
@@ -179,16 +210,17 @@ export function planExampleScenario(regionsCollection) {
       }
       return feature;
     });
-    const [first, ...rest] = features.map(krajGeometryCoordinates);
+    const [first, ...rest] = features.map((kraj) => kraj.polygons);
     const unionCoordinates = polygonClipping.union(first, ...rest);
+    const geometry: CountryGeometry | null = unionCoordinates.length
+      ? { type: 'MultiPolygon', coordinates: unionCoordinates }
+      : null;
     return {
       name: spec.name,
       affiliation: spec.affiliation,
       color: DEFAULT_COLORS[spec.affiliation],
-      regions: features.map((feature) => feature.properties.id),
-      geometry: unionCoordinates.length
-        ? { type: 'MultiPolygon', coordinates: unionCoordinates }
-        : null,
+      regions: features.map((kraj) => kraj.id),
+      geometry,
     };
   });
   const places = EXAMPLE_PLACES.map((place) => ({

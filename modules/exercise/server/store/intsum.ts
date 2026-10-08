@@ -3,13 +3,23 @@ import type { SQLInputValue } from 'node:sqlite';
 
 import { formatDtg } from '../../../../src/dtg.js';
 import { formatMgrs } from '../../../../src/geo.js';
-import { HttpError } from '../../../../server/http.ts';
+import type { Access, Owner } from '../../../../server/dispatch.ts';
+import {
+  fieldsOf,
+  HttpError,
+  isJsonObject,
+  type Json,
+  type JsonObject,
+} from '../../../../server/http.ts';
+import { releasableArray } from '../../../../server/policy.ts';
+import { num, type Row } from '../../../../server/state.ts';
 
 import { database } from './connection.ts';
+import { readIntsum, readReport, readRequirement, readTrack } from './rows.ts';
 import { requirementFulfillment } from './requirements.ts';
 import {
   cellsOf,
-  fetchRow,
+  existingRow,
   mutate,
   now,
   optionalString,
@@ -26,50 +36,53 @@ const INTSUM_SECTIONS = [
   'outlook',
 ];
 
-export function shapeIntsum(row) {
-  return {
-    ...row,
-    sections: JSON.parse(row.sections),
-    releasable_to: JSON.parse(row.releasable_to),
-  };
+export function shapeIntsum(raw: Row) {
+  const intsum = readIntsum(raw);
+  const sections: Json = JSON.parse(intsum.sections);
+  return { ...intsum, sections, releasable_to: releasableArray(intsum.releasable_to) };
 }
 
-export function listIntsums(access) {
+export function listIntsums(access: Access) {
   return visibleRows(access, 'intsum', 'intsums', 'period_start DESC, id DESC').map(shapeIntsum);
 }
 
-function validateSectionKeys(sections) {
-  if (typeof sections !== 'object' || sections === null || Array.isArray(sections)) {
+function validateSectionKeys(sections: Json | undefined): JsonObject {
+  if (!isJsonObject(sections)) {
     throw new HttpError(400, 'sections must be a JSON object.');
   }
   for (const key of Object.keys(sections)) {
     if (!INTSUM_SECTIONS.includes(key)) throw new HttpError(400, `Unknown INTSUM section ${key}.`);
   }
+  return sections;
 }
 
 /** A full `sections` object for create: unspecified keys default to an empty string. */
-function validateSections(sections) {
-  const result = Object.fromEntries(INTSUM_SECTIONS.map((key) => [key, '']));
+function validateSections(sections: Json | undefined): JsonObject {
+  const result: JsonObject = Object.fromEntries(INTSUM_SECTIONS.map((key) => [key, '']));
   if (sections === undefined || sections === null) return result;
-  validateSectionKeys(sections);
+  const given = validateSectionKeys(sections);
   for (const key of INTSUM_SECTIONS) {
-    if (key in sections) result[key] = sections[key];
+    if (key in given) result[key] = given[key];
   }
   return result;
 }
 
 /** A patch of `sections` for update: only the given keys change. */
-function mergeSections(existing, patchSections) {
-  validateSectionKeys(patchSections);
-  const merged = { ...existing };
-  for (const key of Object.keys(patchSections)) merged[key] = patchSections[key];
+function mergeSections(existing: Json, patchSections: Json | undefined): JsonObject {
+  const patch = validateSectionKeys(patchSections);
+  const merged: JsonObject = isJsonObject(existing) ? { ...existing } : {};
+  for (const key of Object.keys(patch)) merged[key] = patch[key];
   return merged;
 }
 
-export function createIntsum(
-  owner,
-  { period_start: periodStart, period_end: periodEnd, dtg, author, sections },
-) {
+export function createIntsum(owner: Owner, input: Json) {
+  const {
+    period_start: periodStart,
+    period_end: periodEnd,
+    dtg,
+    author,
+    sections,
+  } = fieldsOf(input);
   const start = requireTimestamp(periodStart, 'period_start');
   const end = requireTimestamp(periodEnd, 'period_end');
   const validDtg = optionalString(dtg, 'dtg') ?? formatDtg(Date.now());
@@ -97,12 +110,14 @@ export function createIntsum(
           timestamp,
           timestamp,
         );
-      return shapeIntsum(fetchRow('intsums', Number(lastInsertRowid)));
+      return shapeIntsum(existingRow('intsums', Number(lastInsertRowid)));
     },
   );
 }
 
-export function updateIntsum(item, patch) {
+export function updateIntsum(item: Row, input: Json) {
+  const patch = fieldsOf(input);
+  const intsum = readIntsum(item);
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('period_start' in patch) {
@@ -123,23 +138,25 @@ export function updateIntsum(item, patch) {
   }
   if ('sections' in patch) {
     fields.push('sections = ?');
-    params.push(JSON.stringify(mergeSections(JSON.parse(item.sections), patch.sections)));
+    const existing: Json = JSON.parse(intsum.sections);
+    params.push(JSON.stringify(mergeSections(existing, patch.sections)));
   }
-  return mutate('intsum:update', String(item.id), cellsOf(item), () => {
+  return mutate('intsum:update', String(intsum.id), cellsOf(item), () => {
     if (fields.length) {
       fields.push('updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE intsums SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, item.id);
+        .run(...params, intsum.id);
     }
-    return shapeIntsum(fetchRow('intsums', item.id));
+    return shapeIntsum(existingRow('intsums', intsum.id));
   });
 }
 
-export function deleteIntsum(item) {
-  return mutate('intsum:delete', String(item.id), cellsOf(item), () => {
-    database.prepare('DELETE FROM intsums WHERE id = ?').run(item.id);
+export function deleteIntsum(item: Row) {
+  const itemId = num(item, 'id');
+  return mutate('intsum:delete', String(itemId), cellsOf(item), () => {
+    database.prepare('DELETE FROM intsums WHERE id = ?').run(itemId);
     return { deleted: true };
   });
 }
@@ -151,7 +168,7 @@ export function deleteIntsum(item) {
  * so no activity entry — nothing is saved until `createIntsum`. Draws only
  * on what the requester can currently see (docs/adr/0002: per-viewer reads).
  */
-export function draftIntsum(access, fromIso, toIso) {
+export function draftIntsum(access: Access, fromIso: string | null, toIso: string | null) {
   if (typeof fromIso !== 'string' || !fromIso) throw new HttpError(400, 'from is required.');
   if (typeof toIso !== 'string' || !toIso) throw new HttpError(400, 'to is required.');
   const fromMs = new Date(fromIso).getTime();
@@ -162,7 +179,8 @@ export function draftIntsum(access, fromIso, toIso) {
   const from = new Date(fromMs).toISOString();
   const to = new Date(toMs).toISOString();
 
-  const situation = visibleRows(access, 'track', 'tracks', 'designation, id').map((track) => {
+  const situation = visibleRows(access, 'track', 'tracks', 'designation, id').map((raw) => {
+    const track = readTrack(raw);
     const mgrs = formatMgrs(track.lon, track.lat);
     const dtg = formatDtg(new Date(track.observed_at).getTime());
     const label = track.designation || track.sidc;
@@ -175,18 +193,20 @@ export function draftIntsum(access, fromIso, toIso) {
       `SELECT * FROM reports WHERE occurred_at IS NOT NULL AND occurred_at >= ? AND occurred_at <= ? AND ${reportVisSql} ORDER BY occurred_at, id`,
     )
     .all(from, to, ...reportVisParams)
+    .map(readReport)
     .map((report) => {
-      const dtg = formatDtg(new Date(report.occurred_at).getTime());
+      const dtg = formatDtg(new Date(report.occurred_at ?? '').getTime());
       const mgrs = formatMgrs(report.lon, report.lat);
       return `${dtg} \u2013 ${report.report_type.toUpperCase()} \u2013 ${mgrs} \u2013 ${report.text} (Admiralty ${report.reliability}${report.credibility})`;
     });
 
   const pirStatus = visibleRows(access, 'requirement', 'requirements', 'priority DESC, id').map(
-    (requirement) => {
+    (raw) => {
+      const requirement = readRequirement(raw);
       const sirIds = database
         .prepare('SELECT id FROM sirs WHERE requirement_id = ?')
         .all(requirement.id)
-        .map((sir) => sir.id);
+        .map((sir) => num(sir, 'id'));
       const fulfillment = requirementFulfillment(requirement.id, sirIds, access);
       return { requirement_id: requirement.id, text: requirement.text, ...fulfillment };
     },

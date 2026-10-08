@@ -1,12 +1,17 @@
 import type { SQLInputValue } from 'node:sqlite';
 // Reports: type, structured fields, SIDC, location, evidence.
 
+import type { Access, Owner } from '../../../../server/dispatch.ts';
+import { fieldsOf, type Json, type JsonObject } from '../../../../server/http.ts';
+import { releasableArray } from '../../../../server/policy.ts';
+import { num, numOrNull, text as textColumn, type Row } from '../../../../server/state.ts';
 import { database } from './connection.ts';
+import { readReport } from './rows.ts';
 import { shapeEvidenceLinkBase } from './requirements.ts';
 import {
   assertRevision,
   cellsOf,
-  fetchRow,
+  existingRow,
   findMatchingNaiId,
   mutate,
   now,
@@ -26,7 +31,12 @@ const RELIABILITY = ['A', 'B', 'C', 'D', 'E', 'F'];
 const CREDIBILITY = [1, 2, 3, 4, 5, 6];
 const REPORT_TYPES = ['free', 'spotrep', 'salute'];
 
-export function shapeReport(row) {
+/** A validated report, ready to insert (`prepareReportFields`). */
+export type ReportFields = ReturnType<typeof prepareReportFields>;
+
+export function shapeReport(raw: Row) {
+  const row = readReport(raw);
+  const fields: Json = JSON.parse(row.fields);
   const links = database
     .prepare('SELECT * FROM evidence_links WHERE report_id = ? ORDER BY created_at, id')
     .all(row.id)
@@ -42,20 +52,20 @@ export function shapeReport(row) {
     lon: row.lon,
     lat: row.lat,
     report_type: row.report_type,
-    fields: JSON.parse(row.fields),
+    fields,
     sidc: row.sidc,
     nai_id: row.nai_id,
     track_id: row.track_id,
     links,
     owner_cell: row.owner_cell,
-    releasable_to: JSON.parse(row.releasable_to),
+    releasable_to: releasableArray(row.releasable_to),
     revision: row.revision,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-export function listReports(access) {
+export function listReports(access: Access) {
   return visibleRows(access, 'report', 'reports', 'created_at DESC, id DESC').map(shapeReport);
 }
 
@@ -78,7 +88,7 @@ export function validateReportInput({
   report_type: reportType = 'free',
   fields,
   sidc,
-}: Record<string, any>) {
+}: JsonObject) {
   const type = requireEnum(reportType, 'report_type', REPORT_TYPES);
   const location = validateLocation(lon, lat);
   return {
@@ -103,7 +113,7 @@ export function validateReportInput({
  * both `createReport` and `fireOne`, so a report created by a scenario
  * inject gets the same auto-NAI treatment as one entered by hand.
  */
-export function prepareReportFields(input, access) {
+export function prepareReportFields(input: JsonObject, access: Access) {
   const fields = validateReportInput(input);
   return {
     ...fields,
@@ -118,7 +128,7 @@ export function prepareReportFields(input, access) {
  * support nesting), while `createReport` wraps it in `mutate` for the normal
  * write path. `fields` is the output of `prepareReportFields`.
  */
-export function insertReportRow(fields, ownerCell, releasableTo) {
+export function insertReportRow(fields: ReportFields, ownerCell: string, releasableTo: string[]) {
   const timestamp = now();
   const { lastInsertRowid } = database
     .prepare(
@@ -146,11 +156,11 @@ export function insertReportRow(fields, ownerCell, releasableTo) {
       timestamp,
       timestamp,
     );
-  return shapeReport(fetchRow('reports', Number(lastInsertRowid)));
+  return shapeReport(existingRow('reports', Number(lastInsertRowid)));
 }
 
-export function createReport(owner, input, access) {
-  const fields = prepareReportFields(input, access);
+export function createReport(owner: Owner, input: Json, access: Access) {
+  const fields = prepareReportFields(fieldsOf(input), access);
   return mutate(
     'report:create',
     () => fields.text,
@@ -159,8 +169,10 @@ export function createReport(owner, input, access) {
   );
 }
 
-export function updateReport(item, patch, access) {
-  assertRevision('Report', item, patch);
+export function updateReport(item: Row, input: Json, access: Access) {
+  assertRevision('Report', item, input);
+  const patch = fieldsOf(input);
+  const itemId = num(item, 'id');
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if ('text' in patch) {
@@ -188,7 +200,7 @@ export function updateReport(item, patch, access) {
     params.push(optionalString(patch.occurred_at, 'occurred_at'));
   }
 
-  let reportType = item.report_type;
+  let reportType = textColumn(item, 'report_type');
   if ('report_type' in patch) {
     reportType = requireEnum(patch.report_type, 'report_type', REPORT_TYPES);
     fields.push('report_type = ?');
@@ -204,12 +216,12 @@ export function updateReport(item, patch, access) {
   }
 
   const locationChanged = 'lon' in patch || 'lat' in patch;
-  let lon = item.lon;
-  let lat = item.lat;
+  let lon = numOrNull(item, 'lon');
+  let lat = numOrNull(item, 'lat');
   if (locationChanged) {
     const location = validateLocation(
-      'lon' in patch ? patch.lon : item.lon,
-      'lat' in patch ? patch.lat : item.lat,
+      'lon' in patch ? patch.lon : lon,
+      'lat' in patch ? patch.lat : lat,
     );
     lon = location.lon;
     lat = location.lat;
@@ -232,16 +244,16 @@ export function updateReport(item, patch, access) {
     params.push(resolveTrackId(patch.track_id, access));
   }
 
-  return mutate('report:update', String(item.id), cellsOf(item), () => {
+  return mutate('report:update', String(itemId), cellsOf(item), () => {
     if (fields.length) {
       fields.push('revision = revision + 1', 'updated_at = ?');
       params.push(now());
       database
         .prepare(`UPDATE reports SET ${fields.join(', ')} WHERE id = ?`)
-        .run(...params, item.id);
-      touchRequirementsForReport(item.id);
+        .run(...params, itemId);
+      touchRequirementsForReport(itemId);
     }
-    return shapeReport(fetchRow('reports', item.id));
+    return shapeReport(existingRow('reports', itemId));
   });
 }
 
@@ -249,11 +261,12 @@ export function updateReport(item, patch, access) {
  * cascading FK on `report_id`, docs/adr/0002 + schema.js): they simply
  * point at a `report_id` that no longer resolves, and read back
  * `withdrawn: true` wherever they're shown. */
-export function deleteReport(item, input) {
+export function deleteReport(item: Row, input: Json) {
   assertRevision('Report', item, input);
-  return mutate('report:delete', String(item.id), cellsOf(item), () => {
-    touchRequirementsForReport(item.id);
-    database.prepare('DELETE FROM reports WHERE id = ?').run(item.id);
+  const itemId = num(item, 'id');
+  return mutate('report:delete', String(itemId), cellsOf(item), () => {
+    touchRequirementsForReport(itemId);
+    database.prepare('DELETE FROM reports WHERE id = ?').run(itemId);
     return { deleted: true };
   });
 }

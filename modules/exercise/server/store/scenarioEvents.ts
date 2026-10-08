@@ -2,27 +2,55 @@ import type { SQLInputValue } from 'node:sqlite';
 // The scenario clock, scheduled injects (scenario events) and the messages
 // they fire.
 
-import { HttpError } from '../../../../server/http.ts';
-import { normalizeRelease } from '../../../../server/policy.ts';
+import type { Access } from '../../../../server/dispatch.ts';
+import {
+  fieldsOf,
+  HttpError,
+  isJsonObject,
+  type Json,
+  type JsonObject,
+} from '../../../../server/http.ts';
+import { normalizeRelease, releasableArray } from '../../../../server/policy.ts';
+import type { Row } from '../../../../server/state.ts';
 import { dueEvents, reanchor, scenarioNowMs } from '../scenarioClock.ts';
 
 import { database } from './connection.ts';
 import { insertReportRow, prepareReportFields, validateReportInput } from './reports.ts';
-import { fetchRow, mutate, now, requireEnum, visibleRows } from './shared.ts';
+import {
+  readClock as readClockColumns,
+  readMessage,
+  readScenarioEvent,
+  type ClockRow,
+} from './rows.ts';
+import {
+  existingRow,
+  fetchRow,
+  mutate,
+  now,
+  requireEnum,
+  requireInteger,
+  requireString,
+  visibleRows,
+} from './shared.ts';
 
 const SCENARIO_EVENT_KINDS = ['message', 'report'];
 const DELIVERY_MODES = ['draft', 'scheduled'];
 
-function readClockRow() {
+/** Milliseconds of a timestamp from the body; NaN for anything that isn't one. */
+function timestampMs(value: Json | undefined) {
+  return typeof value === 'string' || typeof value === 'number' ? new Date(value).getTime() : NaN;
+}
+
+function readClockRow(): ClockRow {
   const row = fetchRow('scenario_clock', 1);
-  if (row) return row;
+  if (row) return readClockColumns(row);
   const timestamp = now();
   database
     .prepare(
       'INSERT INTO scenario_clock (id, base_real_ts, base_scenario_ts, rate, paused) VALUES (1, ?, ?, 1, 1)',
     )
     .run(timestamp, timestamp);
-  return fetchRow('scenario_clock', 1);
+  return readClockColumns(existingRow('scenario_clock', 1));
 }
 
 export function readClock() {
@@ -30,16 +58,23 @@ export function readClock() {
   return { ...row, paused: Boolean(row.paused), now: new Date(scenarioNowMs(row)).toISOString() };
 }
 
-export function patchClock({ rate, paused, jump_to: jumpTo }) {
-  if (rate !== undefined && !(typeof rate === 'number' && rate > 0)) {
-    throw new HttpError(400, 'rate must be a positive number.');
+export function patchClock(input: Json) {
+  const { rate: rateInput, paused: pausedInput, jump_to: jumpTo } = fieldsOf(input);
+  let rate: number | undefined;
+  if (rateInput !== undefined) {
+    if (!(typeof rateInput === 'number' && rateInput > 0)) {
+      throw new HttpError(400, 'rate must be a positive number.');
+    }
+    rate = rateInput;
   }
-  if (paused !== undefined && typeof paused !== 'boolean') {
-    throw new HttpError(400, 'paused must be a boolean.');
+  let paused: boolean | undefined;
+  if (pausedInput !== undefined) {
+    if (typeof pausedInput !== 'boolean') throw new HttpError(400, 'paused must be a boolean.');
+    paused = pausedInput;
   }
-  let jumpToMs;
+  let jumpToMs: number | undefined;
   if (jumpTo !== undefined) {
-    jumpToMs = new Date(jumpTo).getTime();
+    jumpToMs = timestampMs(jumpTo);
     if (Number.isNaN(jumpToMs)) throw new HttpError(400, 'jump_to must be a valid timestamp.');
   }
   return mutate('scenario:clock', 'clock', null, () => {
@@ -54,8 +89,10 @@ export function patchClock({ rate, paused, jump_to: jumpTo }) {
   });
 }
 
-export function shapeScenarioEvent(row) {
-  return { ...row, payload: JSON.parse(row.payload) };
+export function shapeScenarioEvent(raw: Row) {
+  const event = readScenarioEvent(raw);
+  const payload: Json = JSON.parse(event.payload);
+  return { ...event, payload };
 }
 
 export function listScenarioEvents() {
@@ -66,25 +103,25 @@ export function listScenarioEvents() {
 }
 
 /** An inject's `release_to` (default Blue): the cells its report or message goes to besides White. */
-function injectReleaseTo(cells) {
+function injectReleaseTo(cells: Json | undefined) {
   return normalizeRelease(cells ?? ['blue'], 'white');
 }
 
 /** A situation id from the body: null (no linked situation), or an existing
  * situation's id — 404 if it doesn't name a live row (situations are
  * White-only and never cell-owned, so there's no `access.see` for this). */
-function resolveSituationId(value) {
+function resolveSituationId(value: Json | undefined): number | null {
   if (value === undefined || value === null) return null;
-  const row = fetchRow('situations', value);
-  if (!row) throw new HttpError(404, `Situation ${value} not found.`);
-  return row.id;
+  const id = requireInteger(value, 'situation_id');
+  if (!fetchRow('situations', id)) throw new HttpError(404, `Situation ${id} not found.`);
+  return id;
 }
 
 /** Validates a report/message inject payload against its `kind` — shared by
  * create and update, since an edited pending event must stay just as valid
  * as a freshly created one. */
-function validateEventPayload(kind, payload) {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+function validateEventPayload(kind: string, payload: Json | undefined): JsonObject {
+  if (!isJsonObject(payload)) {
     throw new HttpError(400, 'payload must be a JSON object.');
   }
   if (kind === 'message' && typeof payload.text !== 'string') {
@@ -106,19 +143,21 @@ function validateEventPayload(kind, payload) {
       sidc: payload.sidc,
     });
   }
+  return payload;
 }
 
-export function createScenarioEvent({
-  trigger_at: triggerAt,
-  kind,
-  payload,
-  situation_id: situationId,
-  delivery_mode: deliveryMode,
-}) {
-  const triggerMs = new Date(triggerAt).getTime();
+export function createScenarioEvent(input: Json) {
+  const {
+    trigger_at: triggerAt,
+    kind: kindInput,
+    payload: payloadInput,
+    situation_id: situationId,
+    delivery_mode: deliveryMode,
+  } = fieldsOf(input);
+  const triggerMs = timestampMs(triggerAt);
   if (Number.isNaN(triggerMs)) throw new HttpError(400, 'trigger_at must be a valid timestamp.');
-  requireEnum(kind, 'kind', SCENARIO_EVENT_KINDS);
-  validateEventPayload(kind, payload);
+  const kind = requireEnum(kindInput, 'kind', SCENARIO_EVENT_KINDS);
+  const payload = validateEventPayload(kind, payloadInput);
   const cleanDeliveryMode =
     deliveryMode !== undefined
       ? requireEnum(deliveryMode, 'delivery_mode', DELIVERY_MODES)
@@ -150,15 +189,16 @@ export function createScenarioEvent({
           timestamp,
           timestamp,
         );
-      return shapeScenarioEvent(fetchRow('scenario_events', Number(lastInsertRowid)));
+      return shapeScenarioEvent(existingRow('scenario_events', Number(lastInsertRowid)));
     },
   );
 }
 
-function assertPendingEvent(id) {
+function assertPendingEvent(id: number): Row {
   const row = fetchRow('scenario_events', id);
   if (!row) throw new HttpError(404, `Scenario event ${id} not found.`);
-  if (row.state !== 'pending') throw new HttpError(409, `Event ${id} is already ${row.state}.`);
+  const { state } = readScenarioEvent(row);
+  if (state !== 'pending') throw new HttpError(409, `Event ${id} is already ${state}.`);
   return row;
 }
 
@@ -169,21 +209,22 @@ function assertPendingEvent(id) {
  * `payload` replaced wholesale (like create) rather than merged, since a
  * partial payload could silently keep a stale `release_to` or field the
  * instructor meant to drop. */
-export function updateScenarioEvent(id, patch) {
+export function updateScenarioEvent(id: number, input: Json) {
+  const patch = fieldsOf(input);
   const row = assertPendingEvent(id);
   const fields: string[] = [];
   const params: SQLInputValue[] = [];
   if (patch.trigger_at !== undefined) {
-    const triggerMs = new Date(patch.trigger_at).getTime();
+    const triggerMs = timestampMs(patch.trigger_at);
     if (Number.isNaN(triggerMs)) throw new HttpError(400, 'trigger_at must be a valid timestamp.');
     fields.push('trigger_at = ?');
     params.push(new Date(triggerMs).toISOString());
   }
   if (patch.payload !== undefined) {
-    validateEventPayload(row.kind, patch.payload);
-    const releaseTo = injectReleaseTo(patch.payload.release_to);
+    const payload = validateEventPayload(readScenarioEvent(row).kind, patch.payload);
+    const releaseTo = injectReleaseTo(payload.release_to);
     fields.push('payload = ?');
-    params.push(JSON.stringify({ ...patch.payload, release_to: releaseTo }));
+    params.push(JSON.stringify({ ...payload, release_to: releaseTo }));
   }
   if (patch.situation_id !== undefined) {
     fields.push('situation_id = ?');
@@ -200,11 +241,11 @@ export function updateScenarioEvent(id, patch) {
     database
       .prepare(`UPDATE scenario_events SET ${fields.join(', ')} WHERE id = ?`)
       .run(...params, id);
-    return shapeScenarioEvent(fetchRow('scenario_events', id));
+    return shapeScenarioEvent(existingRow('scenario_events', id));
   });
 }
 
-export function cancelScenarioEvent(id) {
+export function cancelScenarioEvent(id: number) {
   assertPendingEvent(id);
   mutate('scenario:cancel', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
     database
@@ -213,15 +254,16 @@ export function cancelScenarioEvent(id) {
   });
 }
 
-export function shapeMessage(row) {
-  return { ...row, releasable_to: JSON.parse(row.releasable_to) };
+export function shapeMessage(raw: Row) {
+  const message = readMessage(raw);
+  return { ...message, releasable_to: releasableArray(message.releasable_to) };
 }
 
-export function listMessages(access) {
+export function listMessages(access: Access) {
   return visibleRows(access, 'message', 'messages', 'fired_at DESC, id DESC').map(shapeMessage);
 }
 
-function insertMessageRow(text, firedAt, releasableTo) {
+function insertMessageRow(text: string, firedAt: string, releasableTo: string[]) {
   const { lastInsertRowid } = database
     .prepare(
       "INSERT INTO messages (text, fired_at, owner_cell, releasable_to, created_at) VALUES (?, ?, 'white', ?, ?)",
@@ -239,12 +281,13 @@ function insertMessageRow(text, firedAt, releasableTo) {
  * to open a second, nested transaction. Returns the ids created and the
  * cells the fired item reaches, for the caller to announce.
  */
-function fireOne(row, access) {
+function fireOne(raw: Row, access: Access) {
+  const row = readScenarioEvent(raw);
   const timestamp = now();
-  const payload = JSON.parse(row.payload);
+  const payload = fieldsOf(JSON.parse(row.payload));
   const releaseTo = injectReleaseTo(payload.release_to);
-  let createdReportId: number | bigint | null = null;
-  let createdMessageId: number | bigint | null = null;
+  let createdReportId: number | null = null;
+  let createdMessageId: number | null = null;
   if (row.kind === 'report') {
     const fields = prepareReportFields(
       {
@@ -266,7 +309,7 @@ function fireOne(row, access) {
     );
     createdReportId = insertReportRow(fields, 'white', releaseTo).id;
   } else {
-    createdMessageId = insertMessageRow(payload.text, timestamp, releaseTo);
+    createdMessageId = insertMessageRow(requireString(payload.text, 'text'), timestamp, releaseTo);
   }
   database
     .prepare(
@@ -280,11 +323,11 @@ function fireOne(row, access) {
  * human game-master clicked "Fire now" or the module's own `connect`d
  * ticker called this through `runAs` — and announces it to exactly the
  * cells the inject reaches (docs/adr/0002: `reach: 'handler'`). */
-export function fireScenarioEvent(id, access) {
+export function fireScenarioEvent(id: number, access: Access) {
   const row = assertPendingEvent(id);
   return mutate('scenario:fire', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
     const { cells } = fireOne(row, access);
-    return { event: shapeScenarioEvent(fetchRow('scenario_events', id)), cells };
+    return { event: shapeScenarioEvent(existingRow('scenario_events', id)), cells };
   });
 }
 
@@ -300,6 +343,7 @@ export function dueScenarioEventIds() {
     .prepare(
       "SELECT * FROM scenario_events WHERE state = 'pending' AND delivery_mode = 'scheduled'",
     )
-    .all();
+    .all()
+    .map(readScenarioEvent);
   return dueEvents(pending, nowMs).map((row) => row.id);
 }

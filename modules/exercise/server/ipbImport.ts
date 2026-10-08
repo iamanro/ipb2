@@ -1,4 +1,27 @@
-import { HttpError } from '../../../server/http.ts';
+import { fieldsOf, HttpError, isJsonObject, type Json } from '../../../server/http.ts';
+
+export type PlannedNai = {
+  source: string;
+  feature_id: number;
+  study_id: number;
+  kind: string;
+  label: string;
+  geometry: Json;
+};
+export type PlannedRequirement = { source: string; text: string };
+export type PlannedSir = {
+  source: string;
+  requirementSource: string;
+  text: string;
+  naiSource: string | null;
+};
+export type PlannedIndicator = {
+  source: string;
+  sirSource: string;
+  description: string;
+  observed: boolean;
+};
+export type IpbImportPlan = ReturnType<typeof planIpbImport>;
 
 /**
  * Turns an IPB study's event matrix into the collection requirements it
@@ -28,81 +51,82 @@ import { HttpError } from '../../../server/http.ts';
  * Pure: no database, no clock.
  */
 
-const COA_KIND_LABELS = { 'most-likely': 'most likely', 'most-dangerous': 'most dangerous' };
+const COA_KIND_LABELS: Record<string, string> = {
+  'most-likely': 'most likely',
+  'most-dangerous': 'most dangerous',
+};
 const NAI_KINDS = new Set(['nai', 'tai']);
 
-export function ipbSourcePrefix(studyId) {
+export function ipbSourcePrefix(studyId: number) {
   return `ipb:${studyId}:`;
 }
 
-function requireArray(value, name) {
+function requireArray(value: Json | undefined, name: string): Json[] {
   if (!Array.isArray(value)) throw new HttpError(400, `${name} must be an array.`);
   return value;
 }
 
-function requireId(value, name) {
-  if (!Number.isInteger(value)) throw new HttpError(400, `${name} must be an integer id.`);
+function requireId(value: Json | undefined, name: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value))
+    throw new HttpError(400, `${name} must be an integer id.`);
   return value;
 }
 
-function requireText(value, name) {
+function requireText(value: Json | undefined, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, `${name} is required.`);
   return value.trim();
 }
 
-function isGeometryLike(value) {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof value.type === 'string' &&
-    Array.isArray(value.coordinates)
-  );
+function isGeometryLike(value: Json): boolean {
+  return isJsonObject(value) && typeof value.type === 'string' && Array.isArray(value.coordinates);
 }
 
 /**
  * How an imported area reads in SIR and SOR text: "NAI 1" stays "NAI 1",
  * a bare "Bridge" becomes "NAI Bridge" (or "TAI …" for a TAI).
  */
-export function areaName(kind, label) {
+export function areaName(kind: string | undefined, label: string) {
   const prefix = kind === 'tai' ? 'TAI' : 'NAI';
   return new RegExp(`^${prefix}\\b`, 'i').test(label) ? label : `${prefix} ${label}`;
 }
 
-export function planIpbImport(input) {
-  if (typeof input !== 'object' || input === null)
-    throw new HttpError(400, 'Body must be an object.');
-  const studyId = requireId(input.study?.id, 'study.id');
-  const studyName = requireText(input.study?.name, 'study.name');
+export function planIpbImport(input: Json) {
+  if (!isJsonObject(input)) throw new HttpError(400, 'Body must be an object.');
+  const study = fieldsOf(input.study);
+  const studyId = requireId(study.id, 'study.id');
+  const studyName = requireText(study.name, 'study.name');
   const prefix = ipbSourcePrefix(studyId);
 
-  const naiInputs = requireArray(input.nais, 'nais');
+  const naiInputs = requireArray(input.nais, 'nais').map((nai) => fieldsOf(nai));
   const naiLabels = new Map(
-    naiInputs.map((nai) => [
-      requireId(nai.id, 'nais[].id'),
-      typeof nai.label === 'string' && nai.label.trim() ? nai.label.trim() : `#${nai.id}`,
-    ]),
+    naiInputs.map((nai) => {
+      const id = requireId(nai.id, 'nais[].id');
+      const label = typeof nai.label === 'string' && nai.label.trim() ? nai.label.trim() : `#${id}`;
+      return [id, label];
+    }),
   );
-  const nais = naiInputs.map((nai) => {
+  const nais = naiInputs.map((nai): PlannedNai => {
     const id = requireId(nai.id, 'nais[].id');
-    if (nai.geometry !== undefined && nai.geometry !== null && !isGeometryLike(nai.geometry)) {
+    const geometry = nai.geometry ?? null;
+    if (geometry !== null && !isGeometryLike(geometry)) {
       throw new HttpError(400, `nais[${id}].geometry must be a GeoJSON geometry or null.`);
     }
     return {
       source: `${prefix}nai:${id}`,
       feature_id: id,
       study_id: studyId,
-      kind: NAI_KINDS.has(nai.kind) ? nai.kind : 'nai',
-      label: naiLabels.get(id),
-      geometry: nai.geometry ?? null,
+      kind: typeof nai.kind === 'string' && NAI_KINDS.has(nai.kind) ? nai.kind : 'nai',
+      label: naiLabels.get(id) ?? `#${id}`,
+      geometry,
     };
   });
 
-  const requirements: any[] = [];
-  const coaById = new Map();
-  for (const coa of requireArray(input.coas, 'coas')) {
+  const requirements: PlannedRequirement[] = [];
+  const coaById = new Map<number, { name: string; source: string }>();
+  for (const coa of requireArray(input.coas, 'coas').map((value) => fieldsOf(value))) {
     const id = requireId(coa.id, 'coas[].id');
     const name = requireText(coa.name, 'coas[].name');
-    const kind = COA_KIND_LABELS[coa.kind];
+    const kind = typeof coa.kind === 'string' ? COA_KIND_LABELS[coa.kind] : undefined;
     const source = `${prefix}coa:${id}`;
     coaById.set(id, { name, source });
     requirements.push({
@@ -111,13 +135,17 @@ export function planIpbImport(input) {
     });
   }
 
-  const sirs = new Map();
-  const indicators: any[] = [];
-  for (const event of requireArray(input.events, 'events')) {
+  const sirs = new Map<string, PlannedSir>();
+  const indicators: PlannedIndicator[] = [];
+  for (const event of requireArray(input.events, 'events').map((value) => fieldsOf(value))) {
     const id = requireId(event.id, 'events[].id');
-    const coa = coaById.get(event.coa_id);
-    if (!coa) throw new HttpError(400, `Event ${id} references unknown COA ${event.coa_id}.`);
-    const naiId = Number.isInteger(event.nai_feature_id) ? event.nai_feature_id : null;
+    const coaId = event.coa_id;
+    const coa = typeof coaId === 'number' ? coaById.get(coaId) : undefined;
+    if (!coa)
+      throw new HttpError(400, `Event ${id} references unknown COA ${JSON.stringify(coaId)}.`);
+    const naiFeatureId = event.nai_feature_id;
+    const naiId =
+      typeof naiFeatureId === 'number' && Number.isInteger(naiFeatureId) ? naiFeatureId : null;
     const sirSource = `${coa.source}:nai:${naiId ?? 'none'}`;
     if (!sirs.has(sirSource)) {
       const area = nais.find((nai) => nai.feature_id === naiId);

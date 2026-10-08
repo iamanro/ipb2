@@ -1,8 +1,15 @@
 // NAIs/TAIs imported from an IPB study, and the NAI list.
 
+import type { SQLInputValue } from 'node:sqlite';
+
+import type { Access, Owner } from '../../../../server/dispatch.ts';
+import type { Json } from '../../../../server/http.ts';
+import { releasableArray } from '../../../../server/policy.ts';
+import { num, numOrNull, text, type Row } from '../../../../server/state.ts';
 import { planIpbImport } from '../ipbImport.ts';
 
 import { database } from './connection.ts';
+import { readNai } from './rows.ts';
 import { cellsOf, mutate, now, touchRequirementRevision, visibleRows } from './shared.ts';
 
 /**
@@ -11,7 +18,16 @@ import { cellsOf, mutate, now, touchRequirementRevision, visibleRows } from './s
  * because the exercise owns them afterwards (e.g. an indicator's `observed`).
  * Returns the row id and whether it was created, changed, or left alone.
  */
-function upsertBySource(table, source, derived, initial: Record<string, any> = {}) {
+type Columns = Record<string, SQLInputValue>;
+type Outcome = 'created' | 'updated' | 'unchanged';
+type ImportTable = 'requirements' | 'sirs' | 'indicators' | 'nais';
+
+function upsertBySource(
+  table: ImportTable,
+  source: string,
+  derived: Columns,
+  initial: Columns = {},
+): { id: number; outcome: Outcome } {
   const row = database.prepare(`SELECT * FROM ${table} WHERE source = ?`).get(source);
   const timestamp = now();
   if (!row) {
@@ -31,14 +47,15 @@ function upsertBySource(table, source, derived, initial: Record<string, any> = {
     return { id: Number(lastInsertRowid), outcome: 'created' };
   }
   const changed = Object.keys(derived).filter((name) => row[name] !== derived[name]);
-  if (!changed.length) return { id: row.id, outcome: 'unchanged' };
+  const rowId = num(row, 'id');
+  if (!changed.length) return { id: rowId, outcome: 'unchanged' };
   const bumpRevision = table === 'requirements' ? ', revision = revision + 1' : '';
   database
     .prepare(
       `UPDATE ${table} SET ${changed.map((name) => `${name} = ?`).join(', ')}, updated_at = ?${bumpRevision} WHERE id = ?`,
     )
-    .run(...changed.map((name) => derived[name]), timestamp, row.id);
-  return { id: row.id, outcome: 'updated' };
+    .run(...changed.map((name) => derived[name] ?? null), timestamp, rowId);
+  return { id: rowId, outcome: 'updated' };
 }
 
 /**
@@ -49,19 +66,20 @@ function upsertBySource(table, source, derived, initial: Record<string, any> = {
  * `stale` and left for the collection manager to remove, since they may
  * already carry evidence links and observations.
  */
-export function importIpbStudy(owner, input) {
+export function importIpbStudy(owner: Owner, input: Json) {
   const plan = planIpbImport(input);
-  const summary = Object.fromEntries(
-    ['requirements', 'sirs', 'indicators', 'nais'].map((table) => [
-      table,
-      { created: 0, updated: 0, unchanged: 0, stale: [] },
-    ]),
-  );
-  const tally = (table, outcome) => {
+  const tallyOf = () => ({ created: 0, updated: 0, unchanged: 0, stale: [] as string[] });
+  const summary: Record<ImportTable, ReturnType<typeof tallyOf>> = {
+    requirements: tallyOf(),
+    sirs: tallyOf(),
+    indicators: tallyOf(),
+    nais: tallyOf(),
+  };
+  const tally = (table: ImportTable, outcome: Outcome) => {
     summary[table][outcome] += 1;
   };
   return mutate('ipb:import', plan.studyName, cellsOf(owner), () => {
-    const naiIds = new Map();
+    const naiIds = new Map<string, number>();
     for (const nai of plan.nais) {
       const { id, outcome } = upsertBySource(
         'nais',
@@ -78,7 +96,7 @@ export function importIpbStudy(owner, input) {
       naiIds.set(nai.source, id);
       tally('nais', outcome);
     }
-    const requirementIds = new Map();
+    const requirementIds = new Map<string, number>();
     for (const requirement of plan.requirements) {
       const { id, outcome } = upsertBySource(
         'requirements',
@@ -94,23 +112,24 @@ export function importIpbStudy(owner, input) {
       requirementIds.set(requirement.source, id);
       tally('requirements', outcome);
     }
-    const sirIds = new Map();
+    const sirIds = new Map<string, number>();
     for (const sir of plan.sirs) {
+      const requirementId = requirementIds.get(sir.requirementSource);
+      // The plan only emits SIRs under requirements it also emits.
+      if (requirementId === undefined) throw new Error(`No requirement for ${sir.source}.`);
       const { id, outcome } = upsertBySource('sirs', sir.source, {
-        requirement_id: requirementIds.get(sir.requirementSource),
+        requirement_id: requirementId,
         text: sir.text,
         nai_id: sir.naiSource ? (naiIds.get(sir.naiSource) ?? null) : null,
       });
       sirIds.set(sir.source, id);
-      if (outcome !== 'unchanged')
-        touchRequirementRevision(requirementIds.get(sir.requirementSource));
+      if (outcome !== 'unchanged') touchRequirementRevision(requirementId);
       tally('sirs', outcome);
     }
     for (const indicator of plan.indicators) {
-      const sirId = sirIds.get(indicator.sirSource);
-      const requirementId =
-        database.prepare('SELECT requirement_id FROM sirs WHERE id = ?').get(sirId)
-          ?.requirement_id ?? null;
+      const sirId = sirIds.get(indicator.sirSource) ?? null;
+      const sir = database.prepare('SELECT requirement_id FROM sirs WHERE id = ?').get(sirId);
+      const requirementId = sir ? numOrNull(sir, 'requirement_id') : null;
       const { outcome } = upsertBySource(
         'indicators',
         indicator.source,
@@ -121,10 +140,11 @@ export function importIpbStudy(owner, input) {
         },
         { observed: indicator.observed ? 1 : 0 },
       );
-      if (outcome !== 'unchanged') touchRequirementRevision(requirementId);
+      if (outcome !== 'unchanged' && requirementId !== null)
+        touchRequirementRevision(requirementId);
       tally('indicators', outcome);
     }
-    const imported: [string, string, any[]][] = [
+    const imported: [ImportTable, string, { source: string }[]][] = [
       ['requirements', 'text', plan.requirements],
       ['sirs', 'text', plan.sirs],
       ['indicators', 'description', plan.indicators],
@@ -137,14 +157,16 @@ export function importIpbStudy(owner, input) {
           `SELECT source, ${textColumn} AS text FROM ${table} WHERE substr(source, 1, ?) = ? ORDER BY id`,
         )
         .all(plan.prefix.length, plan.prefix)
-        .filter((row) => !live.has(row.source))
-        .map((row) => row.text);
+        .filter((row) => !live.has(text(row, 'source')))
+        .map((row) => text(row, 'text'));
     }
     return summary;
   });
 }
 
-export function shapeNai(row) {
+export function shapeNai(raw: Row) {
+  const row = readNai(raw);
+  const geometry: Json = row.geometry ? JSON.parse(row.geometry) : null;
   return {
     id: row.id,
     source: row.source,
@@ -152,14 +174,14 @@ export function shapeNai(row) {
     feature_id: row.feature_id,
     kind: row.kind,
     label: row.label,
-    geometry: row.geometry ? JSON.parse(row.geometry) : null,
+    geometry,
     owner_cell: row.owner_cell,
-    releasable_to: JSON.parse(row.releasable_to),
+    releasable_to: releasableArray(row.releasable_to),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
 }
 
-export function listNais(access) {
+export function listNais(access: Access) {
   return visibleRows(access, 'nai', 'nais', 'id').map(shapeNai);
 }

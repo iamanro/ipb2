@@ -1,7 +1,15 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { announce, EXERCISE_CONTROL } from '../../../server/dispatch.ts';
+import {
+  announce,
+  EXERCISE_CONTROL,
+  requireItem,
+  requireOwner,
+  requirePart,
+  type ModuleSpec,
+  type OwnershipChange,
+} from '../../../server/dispatch.ts';
 import { HttpError } from '../../../server/http.ts';
 import { dataDirectory } from '../../../server/state.ts';
 import state from './state.ts';
@@ -28,7 +36,7 @@ const COUNTRY_BODY_LIMIT = 3 << 20;
  */
 const TICK_MS = 5000;
 let ticker: ReturnType<typeof setInterval> | null = null;
-let store;
+let store: ReturnType<typeof openStore> | undefined;
 state.onClose(() => {
   store?.close();
   store = undefined;
@@ -39,15 +47,15 @@ function ensureStore() {
   return store;
 }
 
-function parseId(text) {
-  return Number.parseInt(text, 10);
+function parseId(text: string | undefined) {
+  return Number.parseInt(text ?? '', 10);
 }
 
 /** `onOwnership` for every releasable/reassignable item kind: the same
  * activity-log row `store.js`'s own `mutate()` writes for any other
  * mutation, written directly (no `transact` — this already runs inside the
  * dispatcher's own transaction for the release/reassign, per contract). */
-function onOwnership({ kind, action, after }) {
+function onOwnership({ kind, action, after }: OwnershipChange) {
   const currentStore = ensureStore();
   if (kind === 'report') currentStore.touchRequirementsForReport(after.id);
   currentStore.database
@@ -166,28 +174,30 @@ export default {
       path: 'requirements',
       verb: 'create',
       item: 'requirement',
-      handler: ({ body, owner, access }) => ensureStore().createRequirement(owner, body, access),
+      handler: ({ body, owner, access }) =>
+        ensureStore().createRequirement(requireOwner(owner), body, access),
     },
     {
       method: 'GET',
       path: 'requirements/:item',
       verb: 'see',
       item: 'requirement',
-      handler: ({ item, access }) => ensureStore().shapeRequirement(item, { access }),
+      handler: ({ item, access }) => ensureStore().shapeRequirement(requireItem(item), { access }),
     },
     {
       method: 'PATCH',
       path: 'requirements/:item',
       verb: 'change',
       item: 'requirement',
-      handler: ({ item, body, access }) => ensureStore().updateRequirement(item, body, access),
+      handler: ({ item, body, access }) =>
+        ensureStore().updateRequirement(requireItem(item), body, access),
     },
     {
       method: 'DELETE',
       path: 'requirements/:item',
       verb: 'change',
       item: 'requirement',
-      handler: ({ item, body }) => ensureStore().deleteRequirement(item, body),
+      handler: ({ item, body }) => ensureStore().deleteRequirement(requireItem(item), body),
     },
 
     {
@@ -195,7 +205,7 @@ export default {
       path: 'requirements/:item/sirs',
       verb: 'change',
       item: 'requirement',
-      handler: ({ item, body, access }) => ensureStore().createSir(item, body, access),
+      handler: ({ item, body, access }) => ensureStore().createSir(requireItem(item), body, access),
     },
     {
       method: 'PATCH',
@@ -203,7 +213,8 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'sir',
-      handler: ({ item, part, body, access }) => ensureStore().updateSir(item, part, body, access),
+      handler: ({ item, part, body, access }) =>
+        ensureStore().updateSir(requireItem(item), requirePart(part), body, access),
     },
     {
       method: 'DELETE',
@@ -211,7 +222,8 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'sir',
-      handler: ({ item, part, body }) => ensureStore().deleteSir(item, part, body),
+      handler: ({ item, part, body }) =>
+        ensureStore().deleteSir(requireItem(item), requirePart(part), body),
     },
 
     {
@@ -219,7 +231,7 @@ export default {
       path: 'requirements/:item/indicators',
       verb: 'change',
       item: 'requirement',
-      handler: ({ item, body }) => ensureStore().createIndicator(item, body),
+      handler: ({ item, body }) => ensureStore().createIndicator(requireItem(item), body),
     },
     {
       method: 'PATCH',
@@ -227,7 +239,8 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'indicator',
-      handler: ({ item, part, body }) => ensureStore().updateIndicator(item, part, body),
+      handler: ({ item, part, body }) =>
+        ensureStore().updateIndicator(requireItem(item), requirePart(part), body),
     },
     {
       method: 'DELETE',
@@ -235,7 +248,8 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'indicator',
-      handler: ({ item, part, body }) => ensureStore().deleteIndicator(item, part, body),
+      handler: ({ item, part, body }) =>
+        ensureStore().deleteIndicator(requireItem(item), requirePart(part), body),
     },
 
     {
@@ -243,7 +257,8 @@ export default {
       path: 'requirements/:item/evidence',
       verb: 'change',
       item: 'requirement',
-      handler: ({ item, body, access }) => ensureStore().createEvidenceLink(item, body, access),
+      handler: ({ item, body, access }) =>
+        ensureStore().createEvidenceLink(requireItem(item), body, access),
     },
     {
       method: 'DELETE',
@@ -251,7 +266,8 @@ export default {
       verb: 'change',
       item: 'requirement',
       part: 'evidence',
-      handler: ({ item, part, body }) => ensureStore().deleteEvidenceLink(item, part, body),
+      handler: ({ item, part, body }) =>
+        ensureStore().deleteEvidenceLink(requireItem(item), requirePart(part), body),
     },
 
     {
@@ -259,7 +275,7 @@ export default {
       path: 'import/ipb',
       verb: 'create',
       item: 'requirement',
-      handler: ({ body, owner }) => ensureStore().importIpbStudy(owner, body),
+      handler: ({ body, owner }) => ensureStore().importIpbStudy(requireOwner(owner), body),
     },
 
     {
@@ -281,28 +297,30 @@ export default {
       path: 'reports',
       verb: 'create',
       item: 'report',
-      handler: ({ body, owner, access }) => ensureStore().createReport(owner, body, access),
+      handler: ({ body, owner, access }) =>
+        ensureStore().createReport(requireOwner(owner), body, access),
     },
     {
       method: 'GET',
       path: 'reports/:item',
       verb: 'see',
       item: 'report',
-      handler: ({ item }) => ensureStore().shapeReport(item),
+      handler: ({ item }) => ensureStore().shapeReport(requireItem(item)),
     },
     {
       method: 'PATCH',
       path: 'reports/:item',
       verb: 'change',
       item: 'report',
-      handler: ({ item, body, access }) => ensureStore().updateReport(item, body, access),
+      handler: ({ item, body, access }) =>
+        ensureStore().updateReport(requireItem(item), body, access),
     },
     {
       method: 'DELETE',
       path: 'reports/:item',
       verb: 'change',
       item: 'report',
-      handler: ({ item, body }) => ensureStore().deleteReport(item, body),
+      handler: ({ item, body }) => ensureStore().deleteReport(requireItem(item), body),
     },
 
     // -- current situation: tracks ----------------------------------------------
@@ -317,35 +335,36 @@ export default {
       path: 'tracks',
       verb: 'create',
       item: 'track',
-      handler: ({ body, owner }) => ensureStore().createTrack(owner, body),
+      handler: ({ body, owner }) => ensureStore().createTrack(requireOwner(owner), body),
     },
     {
       method: 'GET',
       path: 'tracks/:item',
       verb: 'see',
       item: 'track',
-      handler: ({ item }) => ensureStore().shapeTrack(item),
+      handler: ({ item }) => ensureStore().shapeTrack(requireItem(item)),
     },
     {
       method: 'PATCH',
       path: 'tracks/:item',
       verb: 'change',
       item: 'track',
-      handler: ({ item, body }) => ensureStore().updateTrack(item, body),
+      handler: ({ item, body }) => ensureStore().updateTrack(requireItem(item), body),
     },
     {
       method: 'DELETE',
       path: 'tracks/:item',
       verb: 'change',
       item: 'track',
-      handler: ({ item }) => ensureStore().deleteTrack(item),
+      handler: ({ item }) => ensureStore().deleteTrack(requireItem(item)),
     },
     {
       method: 'POST',
       path: 'tracks/:item/positions',
       verb: 'change',
       item: 'track',
-      handler: ({ item, body, access }) => ensureStore().addTrackPosition(item, body, access),
+      handler: ({ item, body, access }) =>
+        ensureStore().addTrackPosition(requireItem(item), body, access),
     },
 
     // -- collection plan: collectors + taskings ---------------------------------
@@ -361,14 +380,14 @@ export default {
       verb: 'create',
       item: 'collector',
       role: 'collection-manager',
-      handler: ({ body, owner }) => ensureStore().createCollector(owner, body),
+      handler: ({ body, owner }) => ensureStore().createCollector(requireOwner(owner), body),
     },
     {
       method: 'GET',
       path: 'collectors/:item',
       verb: 'see',
       item: 'collector',
-      handler: ({ item }) => ensureStore().shapeCollector(item),
+      handler: ({ item }) => ensureStore().shapeCollector(requireItem(item)),
     },
     {
       method: 'PATCH',
@@ -376,7 +395,7 @@ export default {
       verb: 'change',
       item: 'collector',
       role: 'collection-manager',
-      handler: ({ item, body }) => ensureStore().updateCollector(item, body),
+      handler: ({ item, body }) => ensureStore().updateCollector(requireItem(item), body),
     },
     {
       method: 'DELETE',
@@ -384,7 +403,7 @@ export default {
       verb: 'change',
       item: 'collector',
       role: 'collection-manager',
-      handler: ({ item }) => ensureStore().deleteCollector(item),
+      handler: ({ item }) => ensureStore().deleteCollector(requireItem(item)),
     },
 
     {
@@ -399,14 +418,15 @@ export default {
       verb: 'create',
       item: 'tasking',
       role: 'collection-manager',
-      handler: ({ body, owner, access }) => ensureStore().createTasking(owner, body, access),
+      handler: ({ body, owner, access }) =>
+        ensureStore().createTasking(requireOwner(owner), body, access),
     },
     {
       method: 'GET',
       path: 'taskings/:item',
       verb: 'see',
       item: 'tasking',
-      handler: ({ item }) => ensureStore().shapeTasking(item),
+      handler: ({ item }) => ensureStore().shapeTasking(requireItem(item)),
     },
     {
       method: 'PATCH',
@@ -414,7 +434,8 @@ export default {
       verb: 'change',
       item: 'tasking',
       role: 'collection-manager',
-      handler: ({ item, body, access }) => ensureStore().updateTasking(item, body, access),
+      handler: ({ item, body, access }) =>
+        ensureStore().updateTasking(requireItem(item), body, access),
     },
     {
       method: 'DELETE',
@@ -422,7 +443,7 @@ export default {
       verb: 'change',
       item: 'tasking',
       role: 'collection-manager',
-      handler: ({ item }) => ensureStore().deleteTasking(item),
+      handler: ({ item }) => ensureStore().deleteTasking(requireItem(item)),
     },
     {
       method: 'GET',
@@ -443,28 +464,28 @@ export default {
       path: 'intsums',
       verb: 'create',
       item: 'intsum',
-      handler: ({ body, owner }) => ensureStore().createIntsum(owner, body),
+      handler: ({ body, owner }) => ensureStore().createIntsum(requireOwner(owner), body),
     },
     {
       method: 'GET',
       path: 'intsums/:item',
       verb: 'see',
       item: 'intsum',
-      handler: ({ item }) => ensureStore().shapeIntsum(item),
+      handler: ({ item }) => ensureStore().shapeIntsum(requireItem(item)),
     },
     {
       method: 'PATCH',
       path: 'intsums/:item',
       verb: 'change',
       item: 'intsum',
-      handler: ({ item, body }) => ensureStore().updateIntsum(item, body),
+      handler: ({ item, body }) => ensureStore().updateIntsum(requireItem(item), body),
     },
     {
       method: 'DELETE',
       path: 'intsums/:item',
       verb: 'change',
       item: 'intsum',
-      handler: ({ item }) => ensureStore().deleteIntsum(item),
+      handler: ({ item }) => ensureStore().deleteIntsum(requireItem(item)),
     },
     {
       method: 'GET',
@@ -486,35 +507,37 @@ export default {
       path: 'rfis',
       verb: 'create',
       item: 'rfi',
-      handler: ({ body, owner, access }) => ensureStore().createRfi(owner, body, access),
+      handler: ({ body, owner, access }) =>
+        ensureStore().createRfi(requireOwner(owner), body, access),
     },
     {
       method: 'GET',
       path: 'rfis/:item',
       verb: 'see',
       item: 'rfi',
-      handler: ({ item }) => ensureStore().shapeRfi(item),
+      handler: ({ item }) => ensureStore().shapeRfi(requireItem(item)),
     },
     {
       method: 'PATCH',
       path: 'rfis/:item',
       verb: 'change',
       item: 'rfi',
-      handler: ({ item, body }) => ensureStore().updateRfi(item, body),
+      handler: ({ item, body }) => ensureStore().updateRfi(requireItem(item), body),
     },
     {
       method: 'DELETE',
       path: 'rfis/:item',
       verb: 'change',
       item: 'rfi',
-      handler: ({ item }) => ensureStore().deleteRfi(item),
+      handler: ({ item }) => ensureStore().deleteRfi(requireItem(item)),
     },
     {
       method: 'POST',
       path: 'rfis/:item/transition',
       verb: 'change',
       item: 'rfi',
-      handler: ({ item, body, access }) => ensureStore().transitionRfi(item, body, access),
+      handler: ({ item, body, access }) =>
+        ensureStore().transitionRfi(requireItem(item), body, access),
     },
 
     {
@@ -807,4 +830,4 @@ export default {
     ticker = setInterval(tick, TICK_MS);
     ticker.unref();
   },
-};
+} satisfies ModuleSpec;

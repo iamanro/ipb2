@@ -5,7 +5,7 @@
  * returns to `assigned` rather than back to `submitted` — the assignee is
  * already known.
  */
-const TRANSITIONS = {
+const TRANSITIONS: Record<string, string[]> = {
   draft: ['submitted'],
   submitted: ['assigned', 'rejected'],
   assigned: ['in_collection', 'rejected'],
@@ -18,6 +18,6 @@ const TRANSITIONS = {
 
 export const RFI_STATES = Object.keys(TRANSITIONS);
 
-export function canTransition(from, to) {
-  return Boolean(TRANSITIONS[from]?.includes(to));
+export function canTransition(from: string, to: string) {
+  return TRANSITIONS[from]?.includes(to) ?? false;
 }
