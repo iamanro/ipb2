@@ -1,8 +1,7 @@
-// @ts-check
 // Accounts, sessions, memberships and the exercise record: outlive any one exercise.
 import path from 'node:path';
 
-import { declareStateDatabase } from './stateDatabase.js';
+import { declareStateDatabase } from './stateDatabase.ts';
 
 export default declareStateDatabase({
   id: 'auth',

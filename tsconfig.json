@@ -7,6 +7,11 @@
     "allowJs": true,
     "checkJs": false,
     "noEmit": true,
+    // .ts files run as-is under Node's type stripping: import them by their
+    // .ts name, use only erasable syntax, and mark type-only imports.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
     "target": "es2024",
     "lib": ["es2024", "dom", "dom.iterable"],
     "module": "nodenext",
@@ -16,6 +21,14 @@
     "noImplicitAny": false,
     "skipLibCheck": true
   },
-  "include": ["server/**/*.js", "src/**/*.js", "modules/**/*.js", "e2e/**/*.js", "deploy/**/*.mjs"],
+  "include": [
+    "server/**/*.ts",
+    "server/**/*.js",
+    "server/**/*.mjs",
+    "src/**/*.js",
+    "modules/**/*.js",
+    "e2e/**/*.js",
+    "deploy/**/*.mjs"
+  ],
   "exclude": ["node_modules", "dist", "modules/*/data", "modules/*/state"]
 }

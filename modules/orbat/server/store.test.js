@@ -25,7 +25,7 @@ let file;
 let store;
 
 // Cell access (visibility, edit gating, release/reassign) is decided by
-// `server/dispatch.js` before these functions ever run — covered by
+// `server/dispatch.ts` before these functions ever run — covered by
 // `dispatch.test.js` and this module's `routes.sweep.test.js`. These tests
 // stay purely domain-level, so a fixed owner and an "everyone visible"
 // access capability stand in for the dispatcher's decisions.

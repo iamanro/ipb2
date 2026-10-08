@@ -1,6 +1,6 @@
 /**
  * The client's view of who is signed in (C1/C5). `loadSession()` calls `GET
- * /api/auth/me` once at startup; `server/policy.js`/`server/api.js` are
+ * /api/auth/me` once at startup; `server/policy.ts`/`server/api.ts` are
  * still the only real gate — `can()`/`isWhite()` here only hide or disable
  * controls a role or cell can't use, the server enforces regardless of
  * what the client shows.
@@ -9,7 +9,7 @@
  * in `off` mode, the fixed local operator (`admin: true, cell: 'white',
  * role: 'game-master'`).
  *
- * Mirrors `server/policy.js`'s `ROLES`/`roleAtLeast`: duplicated, not
+ * Mirrors `server/policy.ts`'s `ROLES`/`roleAtLeast`: duplicated, not
  * imported, because that file pulls in `node:sqlite` and has no business
  * in a browser bundle.
  */
@@ -45,7 +45,7 @@ export function currentUser() {
  * admin without one already carries the effective `game-master` C1 gives
  * them) may act at `role`. `off` mode's implicit operator always may;
  * an `on`-mode admin always may too, whatever their membership role, the
- * same way `server/policy.js`'s cell rules always let an admin through. */
+ * same way `server/policy.ts`'s cell rules always let an admin through. */
 export function can(role) {
   if (mode === 'off') return true;
   if (!user) return false;
@@ -54,7 +54,7 @@ export function can(role) {
 }
 
 /** True for White (or an admin, cell-blind by definition) — mirrors
- * `server/policy.js`'s `isWhite`. */
+ * `server/policy.ts`'s `isWhite`. */
 export function isWhite() {
   if (mode === 'off') return true;
   if (!user) return false;

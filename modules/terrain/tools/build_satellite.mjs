@@ -31,7 +31,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
-import { dataDirectory, stateDirectory } from '../../../server/state.js';
+import { dataDirectory, stateDirectory } from '../../../server/state.ts';
 import { tileRange, tmsRow } from '../server/tiles.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

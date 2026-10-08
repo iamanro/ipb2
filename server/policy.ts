@@ -1,12 +1,11 @@
-// @ts-check
 /**
  * The cell and role rules (docs/phase1-access.md). Pure, no I/O: plain data
- * in, plain data out or an `HttpError`. `server/dispatch.js` is their one
+ * in, plain data out or an `HttpError`. `server/dispatch.ts` is their one
  * caller on the server (docs/adr/0002-item-scoped-requests.md); stores use
  * only `normalizeRelease` to validate a release list they build themselves
  * (an inject's cells, an RFI answer).
  */
-import { HttpError } from './http.js';
+import { HttpError } from './http.ts';
 
 /** The three cells an exercise splits into. Order matters nowhere except
  * display; `normalizeRelease` sorts alphabetically regardless. */
@@ -17,8 +16,13 @@ export const ROLES = ['observer', 'analyst', 'collection-manager', 'game-master'
 /**
  * The C1 shape a request runs as: name, exercise cell and role, and the
  * global admin flag. Every field may be absent (signed out, no membership).
- * @typedef {{ name?: string, cell?: string | null, role?: string | null, admin?: boolean }} Actor
  */
+export type Actor = {
+  name?: string;
+  cell?: string | null;
+  role?: string | null;
+  admin?: boolean;
+};
 
 function rank(role) {
   const index = ROLES.indexOf(role);
@@ -35,8 +39,7 @@ export function roleAtLeast(role, required) {
  * whether or not they hold a membership of their own (their `admin` flag
  * always wins here; only their *role*, gating actions, follows a real
  * membership when they have one). */
-/** @param {Actor | null | undefined} user */
-export function isWhite(user) {
+export function isWhite(user: Actor | null | undefined) {
   return Boolean(user?.admin) || user?.cell === 'white';
 }
 
@@ -77,11 +80,7 @@ export function canSee(user, item) {
  * owner-or-released check; a user with no cell gets an unconditional
  * `0=1` (matches `canSee`'s "sees nothing" for the same case).
  */
-/**
- * @param {Actor | null | undefined} user
- * @param {{ alias?: string }} [options]
- */
-export function visibilitySql(user, { alias } = {}) {
+export function visibilitySql(user: Actor | null | undefined, { alias }: { alias?: string } = {}) {
   if (isWhite(user)) return { sql: '1=1', params: [] };
   if (!user?.cell) return { sql: '0=1', params: [] };
   const prefix = alias ? `${alias}.` : '';
@@ -113,7 +112,7 @@ export function ownerCellForCreate(user, requested) {
 /**
  * Release grants READ access only. Changing a cell-owned item (or any child
  * row under it) takes White (incl. admin) or membership of the owning cell;
- * the route's declared role applies on top (server/dispatch.js). A visible
+ * the route's declared role applies on top (server/dispatch.ts). A visible
  * but not editable item answers 403 (it's already visible, so no 404).
  */
 export function canEdit(user, item) {
@@ -132,7 +131,7 @@ export function canRelease(user, item) {
  * duplicates, sorts, 400s on anything not a real cell. */
 export function normalizeRelease(cells, owner) {
   if (!Array.isArray(cells)) throw new HttpError(400, 'cells must be an array.');
-  const set = new Set();
+  const set = new Set<string>();
   for (const cell of cells) {
     if (!CELLS.includes(cell)) throw new HttpError(400, `Unknown cell: ${cell}`);
     if (cell === owner) continue;
@@ -142,7 +141,7 @@ export function normalizeRelease(cells, owner) {
 }
 
 /** The cells a live event about `item` should reach: its owner plus
- * whoever it's released to (server/live.js also always delivers to White). */
+ * whoever it's released to (server/live.ts also always delivers to White). */
 export function liveCellsFor(item) {
   return [item.owner_cell, ...releasableArray(item.releasable_to)];
 }

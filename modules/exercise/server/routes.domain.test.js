@@ -4,11 +4,11 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
-import { createDispatcher, EXERCISE_CONTROL } from '../../../server/dispatch.js';
+import { createDispatcher, EXERCISE_CONTROL } from '../../../server/dispatch.ts';
 
 /**
  * Route-level domain consequences docs/adr/0002-item-scoped-requests.md
- * asks for beyond the generated sweep (server/routeSweep.js, exercised in
+ * asks for beyond the generated sweep (server/routeSweep.ts, exercised in
  * routes.sweep.test.js): evidence links as parts of the requirement they
  * support, withdrawn reports, per-viewer fulfillment, an inject reaching
  * exactly its cells, and White-only RFI answers.

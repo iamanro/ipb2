@@ -23,8 +23,8 @@ beforeAll(async () => {
   );
   process.env.IPB_STATE_ROOT = stateRoot;
   ({ default: routes } = await import('./routes.js'));
-  ({ createDispatcher } = await import('../../../server/dispatch.js'));
-  ({ sweepRoutes } = await import('../../../server/routeSweep.js'));
+  ({ createDispatcher } = await import('../../../server/dispatch.ts'));
+  ({ sweepRoutes } = await import('../../../server/routeSweep.ts'));
   dispatcher = createDispatcher([routes]);
 });
 

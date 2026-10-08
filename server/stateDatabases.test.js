@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 
 import { expect, test } from 'vitest';
 
-import { STATE_DATABASES } from './stateDatabases.js';
+import { STATE_DATABASES } from './stateDatabases.ts';
 
 const ROOT = path.join(import.meta.dirname, '..');
 

@@ -33,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
-import { HttpError } from '../../../server/http.js';
+import { HttpError } from '../../../server/http.ts';
 
 const WORKER_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'worker.js');
 

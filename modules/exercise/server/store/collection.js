@@ -1,7 +1,7 @@
 // The collection plan: collectors, taskings and their conflicts.
 
 import { formatDtg } from '../../../../src/dtg.js';
-import { HttpError } from '../../../../server/http.js';
+import { HttpError } from '../../../../server/http.ts';
 import { areaName } from '../ipbImport.js';
 
 import { database } from './connection.js';

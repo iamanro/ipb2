@@ -1,13 +1,12 @@
-// @ts-check
 /**
  * The exercise lifecycle (C6, docs/phase1-access.md): archive, reset and
  * restore the current exercise's ipb/exercise/orbat state, and the
- * current-exercise record itself (name, `/api/auth/members`). `server/api.js`
+ * current-exercise record itself (name, `/api/auth/members`). `server/api.ts`
  * instantiates one of these per middleware and routes `/api/auth/exercise*`
  * and `/api/auth/members*` into it.
  *
  * Archiving copies the three module databases (`VACUUM INTO`, via
- * `server/dbArchive.js` — the same approach `server/tools/backup.mjs` uses
+ * `server/dbArchive.ts` — the same approach `server/tools/backup.mjs` uses
  * for its dated backups) plus a `meta.json` (the exercise's name and its
  * membership roster at archive time) into one dated, slugged folder under
  * `$IPB_STATE_ROOT/archives` (or `modules/archives` alongside the module
@@ -17,10 +16,10 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { archiveRoot, integrityCheck } from './dbArchive.js';
-import { errorMessage, HttpError } from './http.js';
-import { publish } from './live.js';
-import { EXERCISE_DATABASES } from './stateDatabases.js';
+import { archiveRoot, integrityCheck } from './dbArchive.ts';
+import { errorMessage, HttpError } from './http.ts';
+import { publish } from './live.ts';
+import { EXERCISE_DATABASES } from './stateDatabases.ts';
 
 const EXERCISE_NAME_MAX_LENGTH = 80;
 
@@ -73,7 +72,7 @@ function assertExerciseName(name) {
 }
 
 /**
- * `{ getAuthStore }`: a `server/api.js`-owned accessor for the (lazily
+ * `{ getAuthStore }`: a `server/api.ts`-owned accessor for the (lazily
  * opened, middleware-lifetime) auth store — not opened here, so archiving,
  * resetting or restoring shares the exact same connection every other
  * `/api/auth/*` route uses.
@@ -82,7 +81,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
   let lockMessage = null;
 
   /** Truthy (the in-progress message) while a reset or restore is running;
-   * `server/api.js`'s `dispatch` 503s every other `/api/*` request while
+   * `server/api.ts`'s `dispatch` 503s every other `/api/*` request while
    * this holds, so nothing reads or writes a module mid-swap. */
   function isLocked() {
     return lockMessage;
@@ -97,8 +96,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
     lockMessage = null;
   }
 
-  /** @param {{ note?: string | null }} [options] */
-  async function performArchive({ note = null } = {}) {
+  async function performArchive({ note = null }: { note?: string | null } = {}) {
     const store = getAuthStore();
     const exercise = store.getExercise();
     const members = store
@@ -134,10 +132,9 @@ export function createExerciseLifecycle({ getAuthStore }) {
 
     /** `VACUUM INTO` is itself safe against a live writer (a brief read
      * lock at the WAL checkpoint, never a long one — see
-     * `server/dbArchive.js`), so an on-demand archive never needs the
+     * `server/dbArchive.ts`), so an on-demand archive never needs the
      * reset/restore lock: it never mutates anything this app reads. */
-    /** @param {{ note?: string | null }} [options] */
-    async archive({ note } = {}) {
+    async archive({ note }: { note?: string | null } = {}) {
       return performArchive({ note: note ?? null });
     },
 
@@ -149,7 +146,13 @@ export function createExerciseLifecycle({ getAuthStore }) {
       } catch {
         return [];
       }
-      const archives = [];
+      const archives: {
+        id: string;
+        name: unknown;
+        archived_at: unknown;
+        note: unknown;
+        sizes: Record<string, number>;
+      }[] = [];
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         const dir = path.join(root, entry.name);
@@ -159,7 +162,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
         } catch {
           continue; // a malformed/partial archive folder: skip it, don't fail the whole list
         }
-        const sizes = {};
+        const sizes: Record<string, number> = {};
         for (const db of EXERCISE_DATABASES) {
           try {
             sizes[db.id] = (await fsp.stat(path.join(dir, db.file))).size;

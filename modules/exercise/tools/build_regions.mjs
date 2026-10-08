@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 
 import mapshaper from 'mapshaper';
 
-import { dataDirectory } from '../../../server/state.js';
+import { dataDirectory } from '../../../server/state.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MODULE_ROOT = path.join(HERE, '..');

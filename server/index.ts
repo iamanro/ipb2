@@ -1,21 +1,20 @@
 #!/usr/bin/env node
-// @ts-check
 /**
  * Standalone production server: the connect-style `/api/*` middleware from
- * `./api.js` in front of the static `dist/` build, as one plain
+ * `./api.ts` in front of the static `dist/` build, as one plain
  * `node:http` server — no Vite at runtime. Built by `npm run build`, run by
  * `npm start` (or the Docker image's `CMD`).
  *
  * Config is env-only (no flags), so the same image works from `compose.yaml`
- * or a bare `node server/index.js`:
+ * or a bare `node server/index.ts`:
  *
  *   IPB_HOST              bind address, default 127.0.0.1
  *   IPB_PORT              bind port, default 8000
  *   IPB_DATA_ROOT         read-only reference data root (see state.js)
  *   IPB_STATE_ROOT        writable state root (see state.js)
  *   IPB_AUTH              'on' | 'off', overrides the loopback default
- *   IPB_TRUST_PROXY       '1' behind a reverse proxy (see ./api.js)
- *   IPB_ADMIN_NAME             first-admin bootstrap (see ./api.js)
+ *   IPB_TRUST_PROXY       '1' behind a reverse proxy (see ./api.ts)
+ *   IPB_ADMIN_NAME             first-admin bootstrap (see ./api.ts)
  *   IPB_ADMIN_PASSWORD_FILE
  *   IPB_ADMIN_PASSWORD
  *
@@ -32,9 +31,9 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
-import { createApiMiddleware, isBlockedStaticPath, resolveAuthMode } from './api.js';
-import { errorMessage } from './http.js';
-import { dataDirectory, stateDirectory } from './state.js';
+import { createApiMiddleware, isBlockedStaticPath, resolveAuthMode } from './api.ts';
+import { errorMessage } from './http.ts';
+import { dataDirectory, stateDirectory } from './state.ts';
 
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.join(SERVER_DIR, '..');
@@ -132,7 +131,17 @@ export function createStaticHandler(distDir) {
  */
 export function createHealthzHandler({ projectRoot }) {
   return async function handleHealthz(response) {
-    const checks = { state: false, data: {} };
+    const checks: {
+      state: boolean;
+      stateError?: string;
+      data: {
+        terrain?: Record<string, boolean>;
+        terrainMetaOk?: boolean;
+        terrainMetaError?: string;
+        equipment?: Record<string, boolean>;
+        exercise?: Record<string, boolean>;
+      };
+    } = { state: false, data: {} };
     try {
       const root = stateDirectory('healthz', path.join(projectRoot, 'server', 'state'));
       await mkdir(root, { recursive: true });

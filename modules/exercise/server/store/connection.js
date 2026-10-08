@@ -3,8 +3,8 @@
 // bindings: `openStore()` connects, each file reads `database` as it runs.
 import { readFileSync } from 'node:fs';
 
-import { referenceFile } from '../../../../server/reference.js';
-import { openState } from '../../../../server/state.js';
+import { referenceFile } from '../../../../server/reference.ts';
+import { openState } from '../../../../server/state.ts';
 import { MIGRATIONS } from '../schema.js';
 
 /** @type {import('node:sqlite').DatabaseSync} */

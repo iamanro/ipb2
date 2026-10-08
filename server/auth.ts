@@ -1,11 +1,9 @@
-// @ts-check
 import crypto from 'node:crypto';
-import { promisify } from 'node:util';
 
-import authState from './authState.js';
-import { HttpError } from './http.js';
-import { CELLS, ROLES } from './policy.js';
-import { countRows, openState, transact } from './state.js';
+import authState from './authState.ts';
+import { HttpError } from './http.ts';
+import { CELLS, ROLES } from './policy.ts';
+import { countRows, openState, transact, type Migration } from './state.ts';
 
 /** A session cookie is valid for this long since it was last used (sliding). */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -31,10 +29,13 @@ const DEFAULT_EXERCISE_NAME = 'Exercise 1';
  * which is the separate global flag on `users` (C2/C1). */
 const MEMBERSHIP_ROLES = ROLES.filter((role) => role !== 'admin');
 
-const scrypt = promisify(crypto.scrypt);
+function scrypt(password: crypto.BinaryLike, salt: crypto.BinaryLike, keylen: number) {
+  return new Promise<Buffer>((resolve, reject) =>
+    crypto.scrypt(password, salt, keylen, (error, key) => (error ? reject(error) : resolve(key))),
+  );
+}
 
-/** @type {import('./state.js').Migration[]} */
-const MIGRATIONS = [
+const MIGRATIONS: Migration[] = [
   `
   CREATE TABLE users (
     id INTEGER PRIMARY KEY,
@@ -110,7 +111,7 @@ const MIGRATIONS = [
   },
   // `role` is fully replaced by `admin` + `memberships.role` above: a clean
   // cutover, not a second source of truth left dangling. SQLite's rebuild
-  // procedure (server/state.js) preserves every id, so `sessions.user_id`
+  // procedure (server/state.ts) preserves every id, so `sessions.user_id`
   // and the new `memberships.user_id` both survive untouched.
   {
     rebuild: true,
@@ -371,7 +372,14 @@ export function openAuthStore(file = authState.path) {
       role = 'game-master';
       effective = true;
     }
-    const shaped = {
+    const shaped: {
+      name: unknown;
+      admin: boolean;
+      cell: unknown;
+      role: unknown;
+      must_change_password: boolean;
+      effective?: true;
+    } = {
       name: row.name,
       admin,
       cell,
@@ -511,7 +519,7 @@ export function openAuthStore(file = authState.path) {
 
     /** Disabling blocks login and revokes every session of theirs
      * immediately (the same-process live streams still open are the
-     * caller's job — `server/live.js`'s `closeStreamsForUser`, since this
+     * caller's job — `server/live.ts`'s `closeStreamsForUser`, since this
      * store has no reference to them). Re-enabling only flips the flag: it
      * doesn't restore the sessions disabling deleted. */
     setDisabled(name, disabled) {

@@ -1,7 +1,7 @@
 // PIRs/FFIRs with their SIRs, indicators and evidence links, and how far each
 // is answered.
 
-import { HttpError } from '../../../../server/http.js';
+import { HttpError } from '../../../../server/http.ts';
 import { computePirFulfillment } from '../fulfillment.js';
 
 import { database } from './connection.js';
@@ -19,7 +19,7 @@ import {
   visibleRows,
 } from './shared.js';
 
-// Duplicated from `server/policy.js`, not imported (docs/adr/0002 rule 4: a
+// Duplicated from `server/policy.ts`, not imported (docs/adr/0002 rule 4: a
 // store takes no user and imports nothing from policy.js) — the same reason
 // `src/release.js` keeps its own copy for the browser bundle. This is the
 // only place the store still needs the literal cell list, to validate an

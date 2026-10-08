@@ -4,8 +4,8 @@
 // job at a time — see pool.js for why (cheap, safe cancellation-by-termination).
 import { parentPort } from 'node:worker_threads';
 
-import { HttpError } from '../../../server/http.js';
-import { encodePng } from '../../../server/png.js';
+import { HttpError } from '../../../server/http.ts';
+import { encodePng } from '../../../server/png.ts';
 import { contourTile } from './contours.js';
 import { suggestAvenues } from './corridors.js';
 import { currentElevationModel, openElevationSource } from './elevationSource.js';

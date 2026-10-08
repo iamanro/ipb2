@@ -1,7 +1,7 @@
 // Requests for information and their state machine.
 
-import { HttpError } from '../../../../server/http.js';
-import { normalizeRelease } from '../../../../server/policy.js';
+import { HttpError } from '../../../../server/http.ts';
+import { normalizeRelease } from '../../../../server/policy.ts';
 import { canTransition } from '../rfiMachine.js';
 
 import { database } from './connection.js';

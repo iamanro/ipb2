@@ -3,8 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { announce, createDispatcher, EXERCISE_CONTROL } from './dispatch.js';
-import { sweepRoutes } from './routeSweep.js';
+import { announce, createDispatcher, EXERCISE_CONTROL } from './dispatch.ts';
+import { sweepRoutes } from './routeSweep.ts';
 
 const WHITE = { name: 'w', admin: false, cell: 'white', role: 'game-master' };
 const ADMIN = { name: 'a', admin: true, cell: 'white', role: 'game-master', effective: true };

@@ -1,6 +1,6 @@
 // Instructor authoring: the private story and its situations.
 
-import { HttpError } from '../../../../server/http.js';
+import { HttpError } from '../../../../server/http.ts';
 
 import { database } from './connection.js';
 import { listScenarioEvents } from './scenarioEvents.js';

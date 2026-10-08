@@ -52,10 +52,10 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 
 | Agent           | Owns                                                                                                                                                                  | May touch surgically                                           |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Access          | `server/auth.js`, `server/access.js`, `server/live.js`, `server/tools/users.mjs`, `src/session.js`, `src/live.js`, login UI in `src/` + `index.html`, `server/api.js` | `package.json` scripts, `src/main.js`, `src/shell.css`, README |
+| Access          | `server/auth.ts`, `server/access.js`, `server/live.ts`, `server/tools/users.mjs`, `src/session.js`, `src/live.js`, login UI in `src/` + `index.html`, `server/api.ts` | `package.json` scripts, `src/main.js`, `src/shell.css`, README |
 | MapKit          | `src/map.js`, new `src/tactical.js`, new `src/measure.js`                                                                                                             | README                                                         |
 | Symbols         | new `src/symbols/*` (moved from `modules/orbat/client/sidc.js`, `symbology.js`, `symbol.js`), `modules/orbat/client/*` imports                                        | README                                                         |
-| IpbServer       | `modules/ipb/server/*`, `server/state.js` (rebuild-migration support)                                                                                                 | README                                                         |
+| IpbServer       | `modules/ipb/server/*`, `server/state.ts` (rebuild-migration support)                                                                                                 | README                                                         |
 | ExerciseServer  | `modules/exercise/server/*`                                                                                                                                           | README                                                         |
 | EquipmentRanges | `modules/equipment/server/*` (new `ranges.js`)                                                                                                                        | README                                                         |
 
@@ -67,7 +67,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 
 ### C2 Live updates
 
-- Server `server/live.js`: `publish(event)`; `GET /api/live` is an SSE stream, handled in `api.js` before module dispatch.
+- Server `server/live.ts`: `publish(event)`; `GET /api/live` is an SSE stream, handled in `api.js` before module dispatch.
 - After every successful (status < 400) non-GET `/api/<module>/…` request, `api.js` publishes `{ module, method, route, client, user, at }`. `client` is the `X-Client-Id` request header. Modules need no changes.
 - Client `src/live.js` exports:
   - `clientId`: a random id per tab; every module's fetch helper MUST send it as the `X-Client-Id` header;
@@ -125,7 +125,7 @@ Doctrine anchors: ATP 2-01.3 (IPB), ATP 2-01 (collection management / ISR synchr
 
 ### C6 IPB server (`/api/ipb`)
 
-- **`server/state.js`:** a migration may be `{ sql, rebuild: true }`. It runs outside the transaction with `PRAGMA foreign_keys=OFF`, then `PRAGMA foreign_key_check` (throw on violations), then foreign keys back ON, per SQLite's 12-step ALTER procedure. Plain strings behave as today.
+- **`server/state.ts`:** a migration may be `{ sql, rebuild: true }`. It runs outside the transaction with `PRAGMA foreign_keys=OFF`, then `PRAGMA foreign_key_check` (throw on violations), then foreign keys back ON, per SQLite's 12-step ALTER procedure. Plain strings behave as today.
 - **features:**
   - `layer` adds `unit`, `graphic`, `range-ring`; `kind` adds `graphic`, `range-ring`.
   - A table rebuild keeps ids, so `events.nai_feature_id` survives.

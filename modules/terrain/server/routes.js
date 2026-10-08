@@ -1,4 +1,4 @@
-import { HttpError, numberParameter, sendBytes, serveFile } from '../../../server/http.js';
+import { HttpError, numberParameter, sendBytes, serveFile } from '../../../server/http.ts';
 import { currentElevationModel, openElevationSource } from './elevationSource.js';
 import { BASEMAP, ID, IMAGERY_DATABASE, ORTHO_DATABASE } from './paths.js';
 import { SLOPE_LEGEND } from './rasterTiles.js';
@@ -7,7 +7,7 @@ import { namedPeaks, vectorLayerNames } from './landcover.js';
 import { metresBetween } from './lattice.js';
 import { LEGEND } from './mobility.js';
 import { createTerrainPool } from './pool.js';
-import { referenceFile } from '../../../server/reference.js';
+import { referenceFile } from '../../../server/reference.ts';
 
 const BASEMAP_URL = `/api/${ID}/tiles/vector.pmtiles`;
 

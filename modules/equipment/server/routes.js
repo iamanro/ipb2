@@ -3,9 +3,9 @@ import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { HttpError, integerParameter, sendJson } from '../../../server/http.js';
-import { referenceFile } from '../../../server/reference.js';
-import { dataDirectory } from '../../../server/state.js';
+import { HttpError, integerParameter, sendJson } from '../../../server/http.ts';
+import { referenceFile } from '../../../server/reference.ts';
+import { dataDirectory } from '../../../server/state.ts';
 import { openBookmarks } from './bookmarks.js';
 import {
   KINDS,

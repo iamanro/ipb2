@@ -1110,7 +1110,7 @@ describe('openStore: listStudies uses the access capability', () => {
   });
 
   /** Asserts the store calls `access.visible('study', { alias: 's' })` (the
-   * exact contract `server/dispatch.js` relies on) and threads its SQL
+   * exact contract `server/dispatch.ts` relies on) and threads its SQL
    * fragment into the query untouched. */
   function access(sql, params = [], options = { white: true, cell: 'white' }) {
     return {

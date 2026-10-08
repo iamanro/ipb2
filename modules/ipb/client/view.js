@@ -463,7 +463,7 @@ function createElement(tag, className, text) {
  * released to your cell (or you're merely an observer of your own cell's
  * study) still locks every mutating control the same way a below-analyst
  * role does. True with nothing open (a create-new action, ungated by any
- * study's cell). Mirrors `server/policy.js`'s `canEdit`. */
+ * study's cell). Mirrors `server/policy.ts`'s `canEdit`. */
 function canEditStudy() {
   return !state.study || canEditClient(state.study.study);
 }

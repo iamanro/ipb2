@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { announce, EXERCISE_CONTROL } from '../../../server/dispatch.js';
-import { HttpError } from '../../../server/http.js';
-import { dataDirectory } from '../../../server/state.js';
+import { announce, EXERCISE_CONTROL } from '../../../server/dispatch.ts';
+import { HttpError } from '../../../server/http.ts';
+import { dataDirectory } from '../../../server/state.ts';
 import state from './state.js';
 import { openStore } from './store.js';
 

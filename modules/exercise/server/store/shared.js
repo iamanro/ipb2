@@ -2,8 +2,8 @@
 // row fetch, cell-scoped mutation logging, revision checks.
 
 import { formatSidc, parseSidc } from '../../../../src/symbols/sidc.js';
-import { HttpError } from '../../../../server/http.js';
-import { transact } from '../../../../server/state.js';
+import { HttpError } from '../../../../server/http.ts';
+import { transact } from '../../../../server/state.ts';
 import { geometryContains } from '../geoMatch.js';
 
 import { database } from './connection.js';

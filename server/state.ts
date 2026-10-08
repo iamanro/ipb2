@@ -1,7 +1,11 @@
-// @ts-check
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+
+export type Migration =
+  | string
+  | { sql: string; rebuild: true }
+  | { run(database: DatabaseSync): void };
 
 /**
  * A module's state directory: `modules/<id>/state` normally, or
@@ -44,15 +48,8 @@ export function dataDirectory(moduleId, defaultDirectory) {
  *   (leaving `user_version` unchanged), then foreign keys go back on;
  * - `{ run(database) }`, a JS-driven migration (e.g. reparsing a column's text
  *   into new columns before dropping it), executed inside one transaction.
- *
- * @typedef {string
- *   | { sql: string, rebuild: true }
- *   | { run(database: DatabaseSync): void }} Migration
- * @param {string} file
- * @param {Migration[]} migrations
- * @returns {DatabaseSync}
  */
-export function openState(file, migrations) {
+export function openState(file: string, migrations: Migration[]): DatabaseSync {
   mkdirSync(path.dirname(file), { recursive: true });
   const database = new DatabaseSync(file);
   database.exec('PRAGMA journal_mode = WAL');
@@ -108,13 +105,8 @@ function runRebuildMigration(database, migration, index) {
   }
 }
 
-/**
- * The `n` of a `SELECT COUNT(*) AS n …` query, as a number.
- * @param {DatabaseSync} database
- * @param {string} sql
- * @param {...import('node:sqlite').SQLInputValue} params
- */
-export function countRows(database, sql, ...params) {
+/** The `n` of a `SELECT COUNT(*) AS n …` query, as a number. */
+export function countRows(database: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
   return Number(database.prepare(sql).get(...params)?.n ?? 0);
 }
 

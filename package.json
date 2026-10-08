@@ -7,8 +7,8 @@
     "dev": "vp dev --host 127.0.0.1 --port 5180 --strictPort",
     "dev:lan": "IPB_AUTH=on vp dev --host :: --port 5180 --strictPort",
     "build": "vp build",
-    "start": "node server/index.js",
-    "start:lan": "IPB_AUTH=on IPB_HOST=:: node server/index.js",
+    "start": "node server/index.ts",
+    "start:lan": "IPB_AUTH=on IPB_HOST=:: node server/index.ts",
     "test": "vp test run",
     "test:e2e": "playwright test",
     "check": "vp check",
@@ -36,6 +36,6 @@
     "vite-plus": "0.3.0"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.18.0"
   }
 }

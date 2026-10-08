@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { HttpError } from '../../../server/http.js';
+import { HttpError } from '../../../server/http.ts';
 import { createTerrainPool } from './pool.js';
 
 const FIXTURE_WORKER = path.join(

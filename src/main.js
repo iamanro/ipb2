@@ -64,7 +64,7 @@ function requestedModule() {
 /** Modules with a `visible(user, mode)` predicate (currently just `admin`)
  * are omitted from the nav when it returns false — the server enforces the
  * actual gate regardless (`/api/auth/users/*` needs the admin role, checked
- * in `server/api.js`), this only avoids advertising a link a role can't use. */
+ * in `server/api.ts`), this only avoids advertising a link a role can't use. */
 function visibleModules() {
   return modules.filter(
     (module) => !module.visible || module.visible(currentUser(), sessionMode()),

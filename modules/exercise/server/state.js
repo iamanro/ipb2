@@ -2,7 +2,7 @@
 // Imports nothing else of the module: backup and restore load this without route code.
 import path from 'node:path';
 
-import { declareStateDatabase } from '../../../server/stateDatabase.js';
+import { declareStateDatabase } from '../../../server/stateDatabase.ts';
 
 export default declareStateDatabase({
   id: 'exercise',

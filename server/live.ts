@@ -1,5 +1,6 @@
-// @ts-check
-import { HttpError } from './http.js';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+import { HttpError } from './http.ts';
 
 /** How often an idle connection gets a comment line, so proxies and browsers
  * never time it out as dead — and, in `on` mode, how often its session is
@@ -13,20 +14,17 @@ const MAX_CLIENTS = 64;
  * else's live updates by opening every global slot (IPB-AUTH-005). */
 const MAX_CLIENTS_PER_USER = 8;
 
-/**
- * @typedef {{ cell: string | null, role: string | null, admin?: boolean | number }} LiveAccess
- * @typedef {{
- *   keepAlive: ReturnType<typeof setInterval>,
- *   user: string | undefined,
- *   cell: string | null,
- *   role: string | null,
- *   admin: boolean,
- *   tokenHash: string | null,
- * }} LiveClient
- */
+type LiveAccess = { cell: string | null; role: string | null; admin?: boolean | number };
+type LiveClient = {
+  keepAlive: ReturnType<typeof setInterval>;
+  user: string | undefined;
+  cell: string | null;
+  role: string | null;
+  admin: boolean;
+  tokenHash: string | null;
+};
 
-/** @type {Map<import('node:http').ServerResponse, LiveClient>} */
-const clients = new Map();
+const clients = new Map<ServerResponse, LiveClient>();
 
 /** C4: a stream receives `event` when it carries no `cells` (a global
  * change), or the stream's user is White/admin, or the stream's cell is
@@ -87,22 +85,24 @@ function forget(response) {
  * - the default (`off` mode, or no token to re-check) returns `true`: no
  *   membership to track, never closes on its own.
  */
-/**
- * @param {import('node:http').IncomingMessage} request
- * @param {import('node:http').ServerResponse} response
- * @param {{
- *   user?: string,
- *   cell?: string | null,
- *   role?: string | null,
- *   admin?: boolean | number,
- *   tokenHash?: string | null,
- *   revalidate?: () => LiveAccess | boolean | null | undefined,
- * }} [options]
- */
 export function handleLive(
-  request,
-  response,
-  { user, cell = null, role = null, admin = false, tokenHash = null, revalidate = () => true } = {},
+  request: IncomingMessage,
+  response: ServerResponse,
+  {
+    user,
+    cell = null,
+    role = null,
+    admin = false,
+    tokenHash = null,
+    revalidate = () => true,
+  }: {
+    user?: string;
+    cell?: string | null;
+    role?: string | null;
+    admin?: boolean | number;
+    tokenHash?: string | null;
+    revalidate?: () => LiveAccess | boolean | null | undefined;
+  } = {},
 ) {
   if (clients.size >= MAX_CLIENTS) {
     throw new HttpError(503, 'Too many live subscribers; close an idle tab and retry.');
