@@ -1,5 +1,14 @@
-import type { RouteSpec } from '../../../server/dispatch.ts';
-import { errorMessage, HttpError } from '../../../server/http.ts';
+import type { ServerResponse } from 'node:http';
+
+import {
+  requireItem,
+  requireOwner,
+  requirePart,
+  type ModuleSpec,
+  type RouteSpec,
+} from '../../../server/dispatch.ts';
+import { errorMessage, fieldsOf, HttpError } from '../../../server/http.ts';
+import { num, type Row } from '../../../server/state.ts';
 import state from './state.ts';
 import { MAX_DISTANCE_KM, nearestMeasurements } from './chmi.ts';
 import { nearestStation } from './station.ts';
@@ -11,7 +20,12 @@ const EXPORT_CONTENT_TYPE = {
 };
 
 /** A text export with a download filename, distinct from the dispatcher's own JSON responses. */
-function sendExport(response, { body, filename }, contentType) {
+function sendExport(
+  response: ServerResponse | null,
+  { body, filename }: { body: string; filename: string },
+  contentType: string,
+) {
+  if (!response) throw new Error('An export streams to a response.');
   const bytes = Buffer.from(body, 'utf8');
   response.writeHead(200, {
     'Content-Type': contentType,
@@ -22,11 +36,16 @@ function sendExport(response, { body, filename }, contentType) {
   response.end(bytes);
 }
 
-let store;
+let store: ReturnType<typeof openStore> | undefined;
 state.onClose(() => {
   store?.close();
   store = undefined;
 });
+
+/** The id of the part a part route resolved. */
+function partId(part: Row | undefined) {
+  return num(requirePart(part), 'id');
+}
 
 /** Lazy-opens the state file on first use (dispatch-contract.md's `database`). */
 function getStore() {
@@ -49,7 +68,7 @@ const partRoutes = Object.keys(CHILDREN).flatMap((kind) => {
       path: `studies/:item/${kind}`,
       verb: 'change',
       item: 'study',
-      handler: ({ item, body }) => getStore().createChild(kind, item.id, body),
+      handler: ({ item, body }) => getStore().createChild(kind, requireItem(item).id, body),
     },
   ];
   if (kind !== 'analyses') {
@@ -59,7 +78,7 @@ const partRoutes = Object.keys(CHILDREN).flatMap((kind) => {
       verb: 'change',
       item: 'study',
       part: kind,
-      handler: ({ part, body }) => getStore().updateChild(kind, part.id, body),
+      handler: ({ part, body }) => getStore().updateChild(kind, partId(part), body),
     });
   }
   routes.push({
@@ -68,7 +87,7 @@ const partRoutes = Object.keys(CHILDREN).flatMap((kind) => {
     verb: 'change',
     item: 'study',
     part: kind,
-    handler: ({ part }) => getStore().deleteChild(kind, part.id),
+    handler: ({ part }) => getStore().deleteChild(kind, partId(part)),
   });
   if (ORDINAL_KINDS.has(kind)) {
     routes.push({
@@ -77,7 +96,8 @@ const partRoutes = Object.keys(CHILDREN).flatMap((kind) => {
       verb: 'change',
       item: 'study',
       part: kind,
-      handler: ({ part, body }) => getStore().reorderChild(kind, part.id, body?.direction),
+      handler: ({ part, body }) =>
+        getStore().reorderChild(kind, partId(part), fieldsOf(body).direction),
     });
   }
   return routes;
@@ -116,7 +136,7 @@ export default {
       item: 'study',
       handler: ({ body, owner, access }) => {
         if (!access.white) throw new HttpError(403, 'Only White may create extra studies.');
-        return getStore().createStudy(body, owner);
+        return getStore().createStudy(body, requireOwner(owner));
       },
     },
     {
@@ -134,14 +154,14 @@ export default {
       path: 'studies/:item',
       verb: 'see',
       item: 'study',
-      handler: ({ item }) => getStore().readStudy(item.id),
+      handler: ({ item }) => getStore().readStudy(requireItem(item).id),
     },
     {
       method: 'PATCH',
       path: 'studies/:item',
       verb: 'change',
       item: 'study',
-      handler: ({ item, body }) => getStore().updateStudy(item.id, body),
+      handler: ({ item, body }) => getStore().updateStudy(requireItem(item).id, body),
     },
     {
       method: 'DELETE',
@@ -150,7 +170,7 @@ export default {
       item: 'study',
       handler: ({ item, access }) => {
         if (!access.white) throw new HttpError(403, 'Only White may delete studies.');
-        return getStore().deleteStudy(item.id);
+        return getStore().deleteStudy(requireItem(item).id);
       },
     },
     {
@@ -159,7 +179,12 @@ export default {
       verb: 'see',
       item: 'study',
       handler: ({ item, response }) => {
-        sendExport(response, getStore().exportGeoJson(item.id), EXPORT_CONTENT_TYPE.geojson);
+        sendExport(
+          response,
+          getStore().exportGeoJson(requireItem(item).id),
+          EXPORT_CONTENT_TYPE.geojson,
+        );
+        return undefined;
       },
     },
     {
@@ -168,7 +193,8 @@ export default {
       verb: 'see',
       item: 'study',
       handler: ({ item, response }) => {
-        sendExport(response, getStore().exportKml(item.id), EXPORT_CONTENT_TYPE.kml);
+        sendExport(response, getStore().exportKml(requireItem(item).id), EXPORT_CONTENT_TYPE.kml);
+        return undefined;
       },
     },
     {
@@ -176,7 +202,8 @@ export default {
       path: 'studies/:item/features/bulk',
       verb: 'change',
       item: 'study',
-      handler: ({ item, body }) => getStore().bulkCreateFeatures(item.id, body?.features),
+      handler: ({ item, body }) =>
+        getStore().bulkCreateFeatures(requireItem(item).id, fieldsOf(body).features),
     },
     ...partRoutes,
     {
@@ -220,4 +247,4 @@ export default {
       },
     },
   ],
-};
+} satisfies ModuleSpec;

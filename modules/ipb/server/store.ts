@@ -1,4 +1,4 @@
-import type { SQLInputValue } from 'node:sqlite';
+import type { DatabaseSync, SQLInputValue, SQLOutputValue } from 'node:sqlite';
 /**
  * IPB state store. Item-scoped requests (docs/adr/0002-item-scoped-requests.md):
  * `server/dispatch.ts` resolves the study (and, for a part route, the part)
@@ -24,8 +24,20 @@ import {
 } from '../../../src/symbols/sidc.js';
 import { unitPropertiesProblem } from '../../../src/symbols/unitProperties.js';
 import { areaPolygonProblem } from '../../../src/areaPolygon.js';
-import { HttpError } from '../../../server/http.ts';
-import { openState, transact } from '../../../server/state.ts';
+import type { Access, OwnershipChange, Owner } from '../../../server/dispatch.ts';
+import { HttpError, isJsonObject, type Json, type JsonObject } from '../../../server/http.ts';
+import { releasableArray } from '../../../server/policy.ts';
+import {
+  json,
+  jsonOrNull,
+  num,
+  openState,
+  scalarJson,
+  text,
+  textOrNull,
+  transact,
+  type Row,
+} from '../../../server/state.ts';
 import { sanitizeFilename, toGeoJson, toKml } from './export.ts';
 import { MIGRATIONS } from './schema.ts';
 
@@ -71,7 +83,7 @@ const STUDY_CREATE_FIELDS = new Set(['name', 'bounds', 'owner_cell', 'releasable
 /** `properties.graphic` → the geometry GeoJSON must have (C5's TACTICAL_GRAPHICS,
  * duplicated here as a server-side constant so this module never imports
  * `src/tactical.js`, which pulls in OpenLayers). */
-const GRAPHIC_GEOMETRY = {
+const GRAPHIC_GEOMETRY: Record<string, 'line' | 'polygon'> = {
   'phase-line': 'line',
   boundary: 'line',
   'axis-of-advance': 'line',
@@ -101,7 +113,7 @@ const PMESII_VALUES = [
   'time',
 ];
 const CELLS = ['white', 'blue', 'red'];
-const CELL_STUDY_NAMES = {
+const CELL_STUDY_NAMES: Record<string, string> = {
   white: 'White Cell IPB',
   blue: 'Blue Cell IPB',
   red: 'Red Cell IPB',
@@ -118,8 +130,46 @@ const MAX_RANGE_RING_METRES = 100_000;
  * (create, patch/delete by `:part`, reorder when `ordinal` is true), and
  * `analyses`' one exception (immutable: no PATCH route).
  */
-// ponytail: column specs stay loosely typed (any) until each gets a shared spec type.
-export const CHILDREN: Record<string, { columns: Record<string, any>; [key: string]: any }> = {
+/** A child row's validated column values, keyed by column. */
+type ChildValues = Record<string, Json>;
+type BaseColumn = {
+  required: boolean;
+  nullable?: boolean;
+  default?: Json;
+  computeDefault?: (values: ChildValues) => Json;
+  /** How the value is kept in SQLite: JSON text, a 0/1 flag, or as-is. */
+  storage?: 'json' | 'bool';
+};
+export type ColumnSpec = BaseColumn &
+  (
+    | { type: 'string'; nonEmpty?: boolean; pattern?: RegExp }
+    | { type: 'number'; min: number; max: number }
+    | { type: 'integer'; min?: number; max?: number }
+    | { type: 'enum'; values: string[] }
+    | { type: 'reference'; table: string }
+    | { type: 'boolean' | 'json' | 'json-value' | 'geometry' | 'sidc' | 'loose-ref' | 'datetime' }
+  );
+export type ChildConfig = {
+  table: string;
+  label: string;
+  ordinal: boolean;
+  hasUpdatedAt?: boolean;
+  columns: Record<string, ColumnSpec>;
+};
+type StudyPatch = {
+  name?: string;
+  bounds?: number[] | null;
+  ao?: Json;
+  aoi?: Json;
+  notes?: Record<string, string>;
+  weather_point?: { lon: number; lat: number } | null;
+  h_hour?: string | null;
+  classification?: string;
+  checked?: string[];
+  weather_thresholds?: JsonObject | null;
+};
+
+export const CHILDREN: Record<string, ChildConfig> = {
   features: {
     table: 'features',
     label: 'Feature',
@@ -266,11 +316,11 @@ export const CHILDREN: Record<string, { columns: Record<string, any>; [key: stri
   },
 };
 
-let database;
+let database: DatabaseSync;
 
 // -- lifecycle --------------------------------------------------------------
 
-export function openStore(file) {
+export function openStore(file: string) {
   database = openState(file, MIGRATIONS);
   ensureCellStudies();
   return {
@@ -295,12 +345,11 @@ export function openStore(file) {
 
 function close() {
   database?.close();
-  database = undefined;
 }
 
 // -- shared validation helpers ------------------------------------------------
 
-function isGeometry(value) {
+function isGeometry(value: Json | undefined): value is JsonObject {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -310,74 +359,79 @@ function isGeometry(value) {
   );
 }
 
-function validateBounds(value) {
+function validateBounds(value: Json | undefined): number[] | null {
   if (value === null || value === undefined) return null;
-  const isNumberArray =
-    Array.isArray(value) && value.length === 4 && value.every((n) => Number.isFinite(n));
-  if (!isNumberArray) {
+  const numbers = Array.isArray(value)
+    ? value.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+    : [];
+  if (!Array.isArray(value) || value.length !== 4 || numbers.length !== 4) {
     throw new HttpError(400, 'bounds must be four finite numbers [west, south, east, north].');
   }
-  const [west, south, east, north] = value;
+  const [west, south, east, north] = numbers;
   if (!(west < east) || !(south < north)) {
     throw new HttpError(400, 'bounds must satisfy west < east and south < north.');
   }
-  return value;
+  return numbers;
 }
 
 const MAX_CHECKED_TASKS = 60;
 const TASK_ID = /^[a-z0-9-]{1,40}$/;
 
 /** The guide's hand-checked task ids: distinct short slugs, sorted. */
-function validateChecked(value) {
-  if (
-    !Array.isArray(value) ||
-    value.length > MAX_CHECKED_TASKS ||
-    !value.every((id) => typeof id === 'string' && TASK_ID.test(id))
-  ) {
+function validateChecked(value: Json | undefined): string[] {
+  const ids = Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === 'string' && TASK_ID.test(id))
+    : [];
+  if (!Array.isArray(value) || value.length > MAX_CHECKED_TASKS || ids.length !== value.length) {
     throw new HttpError(
       400,
       `checked must be an array of at most ${MAX_CHECKED_TASKS} task ids (a-z, 0-9, -).`,
     );
   }
   // Task ids are ASCII slugs: code-unit order, as plain sort() gave.
-  return [...new Set(value)].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...new Set(ids)].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** `{ lon, lat }` in range, or null for "derive from the AOI". */
-function validateWeatherPoint(value) {
+function validateWeatherPoint(value: Json | undefined): { lon: number; lat: number } | null {
   if (value === null) return null;
-  const valid =
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 2 &&
-    Number.isFinite(value.lon) &&
-    Number.isFinite(value.lat) &&
-    Math.abs(value.lon) <= 180 &&
-    Math.abs(value.lat) <= 90;
-  if (!valid) {
+  const lon = isJsonObject(value) ? value.lon : undefined;
+  const lat = isJsonObject(value) ? value.lat : undefined;
+  if (
+    !isJsonObject(value) ||
+    Object.keys(value).length !== 2 ||
+    typeof lon !== 'number' ||
+    typeof lat !== 'number' ||
+    !Number.isFinite(lon) ||
+    !Number.isFinite(lat) ||
+    Math.abs(lon) > 180 ||
+    Math.abs(lat) > 90
+  ) {
     throw new HttpError(400, 'weather_point must be {lon, lat} in degrees, or null.');
   }
-  return { lon: value.lon, lat: value.lat };
+  return { lon, lat };
 }
 
-function validateNotes(value) {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+function validateNotes(value: Json | undefined): Record<string, string> {
+  if (!isJsonObject(value)) {
     throw new HttpError(400, 'notes must be a JSON object.');
   }
-  for (const [key, text] of Object.entries(value)) {
+  const notes: Record<string, string> = {};
+  for (const [key, note] of Object.entries(value)) {
     if (!NOTE_STEPS.has(key)) throw new HttpError(400, `Unknown notes field: ${key}.`);
-    if (typeof text !== 'string') throw new HttpError(400, `notes.${key} must be a string.`);
+    if (typeof note !== 'string') throw new HttpError(400, `notes.${key} must be a string.`);
+    notes[key] = note;
   }
-  return value;
+  return notes;
 }
 
-function childConfig(kind) {
+function childConfig(kind: string): ChildConfig {
   const config = CHILDREN[kind];
   if (!config) throw new HttpError(400, `Unknown resource kind: ${kind}.`);
   return config;
 }
 
-function validateFieldValue(name, value, spec) {
+function validateFieldValue(name: string, value: Json, spec: ColumnSpec): Json {
   if (value === null) {
     if (spec.required && !spec.nullable) throw new HttpError(400, `${name} must not be null.`);
     return null;
@@ -391,7 +445,12 @@ function validateFieldValue(name, value, spec) {
       }
       return value;
     case 'number':
-      if (!Number.isFinite(value) || value < spec.min || value > spec.max) {
+      if (
+        typeof value !== 'number' ||
+        !Number.isFinite(value) ||
+        value < spec.min ||
+        value > spec.max
+      ) {
         throw new HttpError(400, `${name} must be a number from ${spec.min} to ${spec.max}.`);
       }
       return value;
@@ -419,7 +478,8 @@ function validateFieldValue(name, value, spec) {
       }
       return value;
     case 'reference':
-      if (!Number.isInteger(value)) throw new HttpError(400, `${name} must be an integer id.`);
+      if (typeof value !== 'number' || !Number.isInteger(value))
+        throw new HttpError(400, `${name} must be an integer id.`);
       return value;
     case 'sidc': {
       const normalized = normalizeSidc(value);
@@ -437,7 +497,8 @@ function validateFieldValue(name, value, spec) {
       }
       return value;
     case 'integer':
-      if (!Number.isInteger(value)) throw new HttpError(400, `${name} must be an integer.`);
+      if (typeof value !== 'number' || !Number.isInteger(value))
+        throw new HttpError(400, `${name} must be an integer.`);
       if (spec.min !== undefined && value < spec.min) {
         throw new HttpError(400, `${name} must be at least ${spec.min}.`);
       }
@@ -451,13 +512,14 @@ function validateFieldValue(name, value, spec) {
 }
 
 /** `text` (with optional space/dash separators) as a canonical 20-digit SIDC, or null. */
-function normalizeSidc(value) {
+function normalizeSidc(value: Json): string | null {
+  if (typeof value !== 'string') return null;
   const parts = parseSidc(value);
   return parts ? formatSidc(parts) : null;
 }
 
 /** A threat's default SIDC: hostile, at `echelon` when that's a known IPB echelon name. */
-function defaultThreatSidcFor(echelon) {
+function defaultThreatSidcFor(echelon: Json | undefined): string {
   if (typeof echelon === 'string' && echelon) {
     try {
       return defaultThreatSidc(echelon);
@@ -469,67 +531,76 @@ function defaultThreatSidcFor(echelon) {
 }
 
 /** Validate a child body against its kind's column table. `partial` skips required checks. */
-function validateBody(kind, body, partial) {
+function validateBody(kind: string, body: Json, partial: boolean): ChildValues {
   const config = childConfig(kind);
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+  if (!isJsonObject(body)) {
     throw new HttpError(400, 'A JSON object body is required.');
   }
-  const values: Record<string, any> = {};
+  const values: ChildValues = {};
   for (const [name, value] of Object.entries(body)) {
     const spec = config.columns[name];
     if (!spec) throw new HttpError(400, `Unknown field: ${name}.`);
+    if (value === undefined) continue;
     values[name] = validateFieldValue(name, value, spec);
   }
   if (!partial) {
     for (const [name, spec] of Object.entries(config.columns)) {
       if (name in values) continue;
       if (spec.required) throw new HttpError(400, `${name} is required.`);
-      if ('default' in spec) values[name] = spec.default;
+      if (spec.default !== undefined) values[name] = spec.default;
       else if (spec.computeDefault) values[name] = spec.computeDefault(values);
     }
   }
   return values;
 }
 
-function storeValue(spec, value) {
+function storeValue(spec: ColumnSpec, value: Json | undefined): SQLInputValue {
   if (value === null || value === undefined) return null;
   if (spec.storage === 'json') return JSON.stringify(value);
   if (spec.storage === 'bool') return value ? 1 : 0;
-  return value;
+  // Validation leaves only scalars in non-JSON columns; a boolean there is a 0/1 flag.
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  return typeof value === 'object' ? JSON.stringify(value) : value;
 }
 
-function readValue(spec, raw) {
+function readValue(spec: ColumnSpec, raw: SQLOutputValue | undefined): Json {
   if (raw === null || raw === undefined) return spec.storage === 'bool' ? false : null;
-  if (spec.storage === 'json') return JSON.parse(raw);
+  if (spec.storage === 'json' && typeof raw === 'string') {
+    const parsed: Json = JSON.parse(raw);
+    return parsed;
+  }
   if (spec.storage === 'bool') return Boolean(raw);
-  return raw;
+  return scalarJson(raw);
 }
 
-function assertReference(spec, value, studyId) {
-  const row = database.prepare(`SELECT study_id FROM ${spec.table} WHERE id = ?`).get(value);
-  if (!row) throw new HttpError(400, `Unknown ${spec.table} id ${value}.`);
+function assertReference(table: string, value: Json, studyId: number) {
+  if (typeof value !== 'number')
+    throw new HttpError(400, `Unknown ${table} id ${JSON.stringify(value)}.`);
+  const row = database.prepare(`SELECT study_id FROM ${table} WHERE id = ?`).get(value);
+  if (!row) throw new HttpError(400, `Unknown ${table} id ${value}.`);
   if (row.study_id !== studyId) {
-    throw new HttpError(400, `Referenced ${spec.table} id ${value} belongs to a different study.`);
+    throw new HttpError(400, `Referenced ${table} id ${value} belongs to a different study.`);
   }
 }
 
-function nextOrdinal(table, studyId) {
-  return database
+function nextOrdinal(table: string, studyId: number) {
+  const row = database
     .prepare(`SELECT COALESCE(MAX(ordinal), 0) + 1 AS next FROM ${table} WHERE study_id = ?`)
-    .get(studyId).next;
+    .get(studyId);
+  return row ? num(row, 'next') : 1;
 }
 
 /** The study row, or a 404 — the dispatcher already resolved and access-checked
  * the study for any route that names one; this is the plain existence check a
  * direct (test, or cross-study-reference) lookup still needs. */
-function getStudyRow(id) {
+function getStudyRow(id: number): Row {
   const row = database.prepare('SELECT * FROM studies WHERE id = ?').get(id);
   if (!row) throw new HttpError(404, `Study ${id} not found.`);
   return row;
 }
 
 /** A child row, or a 404 — see `getStudyRow`. */
-function getChildRow(kind, id) {
+function getChildRow(kind: string, id: number): Row {
   const config = childConfig(kind);
   const row = database.prepare(`SELECT * FROM ${config.table} WHERE id = ?`).get(id);
   if (!row) throw new HttpError(404, `Unknown ${kind} id ${id}.`);
@@ -549,14 +620,14 @@ function getChildRow(kind, id) {
 // `expected_at`/`expected_offset` directly, and `expected_time` is now an
 // unknown field like any other (rejected by `validateBody`).
 
-function matchesGeometryKind(geometry, expectedKind) {
-  if (!geometry || typeof geometry.type !== 'string') return false;
+function matchesGeometryKind(geometry: Json | undefined, expectedKind: 'line' | 'polygon') {
+  if (!isJsonObject(geometry) || typeof geometry.type !== 'string') return false;
   if (expectedKind === 'line')
     return geometry.type === 'LineString' || geometry.type === 'MultiLineString';
   return geometry.type === 'Polygon' || geometry.type === 'MultiPolygon';
 }
 
-function validateRadii(radii) {
+function validateRadii(radii: Json | undefined) {
   if (!Array.isArray(radii) || radii.length < 1 || radii.length > MAX_RANGE_RING_RADII) {
     throw new HttpError(
       400,
@@ -565,7 +636,12 @@ function validateRadii(radii) {
   }
   let previous = 0;
   for (const radius of radii) {
-    if (!Number.isFinite(radius) || radius <= previous || radius > MAX_RANGE_RING_METRES) {
+    if (
+      typeof radius !== 'number' ||
+      !Number.isFinite(radius) ||
+      radius <= previous ||
+      radius > MAX_RANGE_RING_METRES
+    ) {
       throw new HttpError(
         400,
         `properties.radii must be ascending positive metres, each at most ${MAX_RANGE_RING_METRES}.`,
@@ -580,9 +656,9 @@ function validateRadii(radii) {
  * geometry to match their kind; any feature's `properties.coa_id` (the
  * SITEMP layering) must name a COA in the same study.
  */
-function validateFeatureSemantics(studyId, effective) {
+function validateFeatureSemantics(studyId: number, effective: ChildValues) {
   const { layer, kind, geometry, properties } = effective;
-  const props = properties && typeof properties === 'object' ? properties : {};
+  const props: JsonObject = isJsonObject(properties) ? properties : {};
   if (layer === 'unit') {
     if (kind !== 'symbol') throw new HttpError(400, 'A unit feature must have kind "symbol".');
     const canonicalSidc = typeof props.sidc === 'string' ? normalizeSidc(props.sidc) : null;
@@ -599,39 +675,40 @@ function validateFeatureSemantics(studyId, effective) {
     if (kind !== 'graphic') {
       throw new HttpError(400, 'A graphic feature must have kind "graphic".');
     }
-    const geometryKind = GRAPHIC_GEOMETRY[props.graphic];
+    const graphic = props.graphic;
+    const geometryKind = typeof graphic === 'string' ? GRAPHIC_GEOMETRY[graphic] : undefined;
     if (!geometryKind) {
       throw new HttpError(400, `properties.graphic must be one of: ${GRAPHIC_KEYS.join(', ')}.`);
     }
     if (!matchesGeometryKind(geometry, geometryKind)) {
-      throw new HttpError(400, `A "${props.graphic}" graphic must be a ${geometryKind}.`);
+      throw new HttpError(400, `A ${JSON.stringify(graphic)} graphic must be a ${geometryKind}.`);
     }
   } else if (layer === 'range-ring') {
     if (kind !== 'range-ring') {
       throw new HttpError(400, 'A range-ring feature must have kind "range-ring".');
     }
-    if (!geometry || geometry.type !== 'Point') {
+    if (!isJsonObject(geometry) || geometry.type !== 'Point') {
       throw new HttpError(400, 'A range-ring feature must be a Point.');
     }
     validateRadii(props.radii);
   }
   if (props.coa_id !== undefined && props.coa_id !== null) {
-    if (!Number.isInteger(props.coa_id)) {
+    if (typeof props.coa_id !== 'number' || !Number.isInteger(props.coa_id)) {
       throw new HttpError(400, 'properties.coa_id must be an integer id.');
     }
-    assertReference({ table: 'coas' }, props.coa_id, studyId);
+    assertReference('coas', props.coa_id, studyId);
   }
 }
 
 // A field absent from a create body (no default, unset) and one explicitly
 // patched to null both mean "unset": loose equality treats undefined the same.
-function validateEventTimePair(effective) {
+function validateEventTimePair(effective: ChildValues) {
   if (effective.expected_at != null && effective.expected_offset != null) {
     throw new HttpError(400, 'An event may have expected_at or expected_offset, not both.');
   }
 }
 
-function validateDecisionPointTimes(effective) {
+function validateDecisionPointTimes(effective: ChildValues) {
   if (effective.earliest_at != null && effective.earliest_offset != null) {
     throw new HttpError(400, 'A decision point may have earliest_at or earliest_offset, not both.');
   }
@@ -640,16 +717,16 @@ function validateDecisionPointTimes(effective) {
   }
 }
 
-function runPostValidate(kind, effective, studyId) {
+function runPostValidate(kind: string, effective: ChildValues, studyId: number) {
   if (kind === 'features') validateFeatureSemantics(studyId, effective);
   else if (kind === 'events') validateEventTimePair(effective);
   else if (kind === 'decision-points') validateDecisionPointTimes(effective);
 }
 
 /** The full row a PATCH would produce: `row`'s decoded columns, overwritten by `values`. */
-function mergeEffective(kind, row, values) {
-  const config = CHILDREN[kind];
-  const effective: Record<string, any> = {};
+function mergeEffective(kind: string, row: Row, values: ChildValues): ChildValues {
+  const config = childConfig(kind);
+  const effective: ChildValues = {};
   for (const [name, spec] of Object.entries(config.columns)) {
     effective[name] = name in values ? values[name] : readValue(spec, row[name]);
   }
@@ -665,7 +742,13 @@ function mergeEffective(kind, row, values) {
  * has no parent study to bump yet, or `recordOwnershipChange`, which runs
  * inside the dispatcher's own release/reassign transaction).
  */
-function mutate(studyId, action, target, work, finalize) {
+function mutate<T>(
+  studyId: number,
+  action: string,
+  target: string | (() => string),
+  work: () => void,
+  finalize: () => T,
+): T {
   return transact(database, () => {
     work();
     const timestamp = new Date().toISOString();
@@ -682,12 +765,12 @@ function mutate(studyId, action, target, work, finalize) {
 
 // -- studies ------------------------------------------------------------------
 
-function requireCell(cell) {
+function requireCell(cell: string): string {
   if (!CELLS.includes(cell)) throw new HttpError(400, `Unknown cell: ${cell}`);
   return cell;
 }
 
-function insertCellStudy(cell) {
+function insertCellStudy(cell: string): number {
   const timestamp = new Date().toISOString();
   const info = database
     .prepare(
@@ -697,19 +780,21 @@ function insertCellStudy(cell) {
        VALUES (?, NULL, NULL, '{}', 1, ?, ?, ?, '[]', ?)`,
     )
     .run(CELL_STUDY_NAMES[cell], timestamp, timestamp, cell, cell);
-  const id = info.lastInsertRowid;
+  const id = Number(info.lastInsertRowid);
   database
     .prepare('INSERT INTO activity (study_id, at, action, target, detail) VALUES (?, ?, ?, ?, ?)')
     .run(id, timestamp, 'create', `study:${id}`, JSON.stringify({ automatic: true, cell }));
   return id;
 }
 
-function ensureCellStudyInside(cell) {
+function ensureCellStudyInside(cell: string): number {
   requireCell(cell);
   const current = database.prepare('SELECT * FROM studies WHERE cell_study_cell = ?').get(cell);
-  if (current?.owner_cell === cell) return current.id;
+  if (current?.owner_cell === cell) return num(current, 'id');
   if (current) {
-    database.prepare('UPDATE studies SET cell_study_cell = NULL WHERE id = ?').run(current.id);
+    database
+      .prepare('UPDATE studies SET cell_study_cell = NULL WHERE id = ?')
+      .run(num(current, 'id'));
   }
 
   const candidate = database
@@ -721,8 +806,9 @@ function ensureCellStudyInside(cell) {
     )
     .get(cell);
   if (candidate) {
-    database.prepare('UPDATE studies SET cell_study_cell = ? WHERE id = ?').run(cell, candidate.id);
-    return candidate.id;
+    const id = num(candidate, 'id');
+    database.prepare('UPDATE studies SET cell_study_cell = ? WHERE id = ?').run(cell, id);
+    return id;
   }
   return insertCellStudy(cell);
 }
@@ -736,33 +822,33 @@ function ensureCellStudies() {
 /** A raw studies row, decoded — the study half of `readStudy`'s aggregate,
  * and the shape `routes.js` hands the dispatcher as `items.study.shape` for
  * its generated release/reassign responses. */
-export function shapeStudy(row) {
+export function shapeStudy(row: Row) {
   return {
-    id: row.id,
-    name: row.name,
-    bounds: row.bounds ? JSON.parse(row.bounds) : null,
-    ao: row.ao ? JSON.parse(row.ao) : null,
-    checked: JSON.parse(row.checked ?? '[]'),
-    aoi: row.aoi ? JSON.parse(row.aoi) : null,
-    notes: JSON.parse(row.notes),
-    weather_point: row.weather_point ? JSON.parse(row.weather_point) : null,
-    h_hour: row.h_hour ?? null,
-    classification: row.classification,
-    weather_thresholds: row.weather_thresholds ? JSON.parse(row.weather_thresholds) : null,
-    owner_cell: row.owner_cell,
-    releasable_to: JSON.parse(row.releasable_to),
-    cell_study_cell: row.cell_study_cell ?? null,
-    revision: row.revision,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
+    id: num(row, 'id'),
+    name: text(row, 'name'),
+    bounds: jsonOrNull(row, 'bounds'),
+    ao: jsonOrNull(row, 'ao'),
+    checked: jsonOrNull(row, 'checked') ?? [],
+    aoi: jsonOrNull(row, 'aoi'),
+    notes: json(row, 'notes'),
+    weather_point: jsonOrNull(row, 'weather_point'),
+    h_hour: textOrNull(row, 'h_hour'),
+    classification: text(row, 'classification'),
+    weather_thresholds: jsonOrNull(row, 'weather_thresholds'),
+    owner_cell: text(row, 'owner_cell'),
+    releasable_to: releasableArray(textOrNull(row, 'releasable_to')),
+    cell_study_cell: textOrNull(row, 'cell_study_cell'),
+    revision: num(row, 'revision'),
+    created_at: text(row, 'created_at'),
+    updated_at: text(row, 'updated_at'),
   };
 }
 
-function readStudyRow(id) {
+function readStudyRow(id: number) {
   return shapeStudy(getStudyRow(id));
 }
 
-function readCellStudy(cell) {
+function readCellStudy(cell: string) {
   const id = transact(database, () => ensureCellStudyInside(cell));
   return readStudy(id);
 }
@@ -771,11 +857,11 @@ function readCellStudy(cell) {
  * that don't care about visibility get the "see everything" default — this
  * is a data default, not a policy one: it composes no cell/role decision. */
 function listStudies(
-  access: {
-    white: boolean;
-    cell: string | null;
-    visible: (kind: string, options?: { alias?: string }) => { sql: string; params: any[] };
-  } = { white: true, cell: 'white', visible: () => ({ sql: '1=1', params: [] }) },
+  access: Pick<Access, 'white' | 'cell' | 'visible'> = {
+    white: true,
+    cell: 'white',
+    visible: () => ({ sql: '1=1', params: [] }),
+  },
 ) {
   const { sql, params } = access.visible('study', { alias: 's' });
   const ordinaryCellOnly = !access.white;
@@ -793,15 +879,15 @@ function listStudies(
     .all(...params, ...(ordinaryCellOnly ? [access.cell] : []));
   return {
     items: rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      bounds: row.bounds ? JSON.parse(row.bounds) : null,
-      updated_at: row.updated_at,
-      owner_cell: row.owner_cell,
-      releasable_to: JSON.parse(row.releasable_to),
-      cell_study_cell: row.cell_study_cell ?? null,
-      feature_count: row.feature_count,
-      coa_count: row.coa_count,
+      id: num(row, 'id'),
+      name: text(row, 'name'),
+      bounds: jsonOrNull(row, 'bounds'),
+      updated_at: text(row, 'updated_at'),
+      owner_cell: text(row, 'owner_cell'),
+      releasable_to: releasableArray(textOrNull(row, 'releasable_to')),
+      cell_study_cell: textOrNull(row, 'cell_study_cell'),
+      feature_count: num(row, 'feature_count'),
+      coa_count: num(row, 'coa_count'),
     })),
   };
 }
@@ -810,14 +896,15 @@ function listStudies(
  * by the dispatcher (verb `create`): stored exactly as given. Direct callers
  * (tests) that don't care about ownership get White/unreleased — a data
  * default, not a policy one: it composes no cell/role decision. */
-function createStudy(body, owner = { owner_cell: 'white', releasable_to: [] }) {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+function createStudy(body: Json, owner: Owner = { owner_cell: 'white', releasable_to: [] }) {
+  if (!isJsonObject(body)) {
     throw new HttpError(400, 'A JSON object body is required.');
   }
   for (const key of Object.keys(body)) {
     if (!STUDY_CREATE_FIELDS.has(key)) throw new HttpError(400, `Unknown field: ${key}.`);
   }
-  if (typeof body.name !== 'string' || !body.name.trim()) {
+  const name = body.name;
+  if (typeof name !== 'string' || !name.trim()) {
     throw new HttpError(400, 'name is required.');
   }
   const bounds = validateBounds(body.bounds ?? null);
@@ -830,14 +917,14 @@ function createStudy(body, owner = { owner_cell: 'white', releasable_to: [] }) {
          VALUES (?, ?, NULL, '{}', 1, ?, ?, ?, ?)`,
       )
       .run(
-        body.name,
+        name,
         bounds ? JSON.stringify(bounds) : null,
         timestamp,
         timestamp,
         owner.owner_cell,
         JSON.stringify(owner.releasable_to),
       );
-    const id = info.lastInsertRowid;
+    const id = Number(info.lastInsertRowid);
     database
       .prepare('INSERT INTO activity (study_id, at, action, target, detail) VALUES (?, ?, ?, ?, ?)')
       .run(id, timestamp, 'create', `study:${id}`, null);
@@ -845,12 +932,12 @@ function createStudy(body, owner = { owner_cell: 'white', releasable_to: [] }) {
   });
 }
 
-function validateStudyPatch(patch: any) {
-  if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+function validateStudyPatch(patch: Json): StudyPatch {
+  if (!isJsonObject(patch)) {
     throw new HttpError(400, 'A JSON object body is required.');
   }
-  const fields: Record<string, any> = {};
-  for (const [key, value] of Object.entries<any>(patch)) {
+  const fields: StudyPatch = {};
+  for (const [key, value] of Object.entries(patch)) {
     if (!STUDY_PATCH_FIELDS.has(key)) throw new HttpError(400, `Unknown field: ${key}.`);
     if (key === 'name') {
       if (typeof value !== 'string' || !value.trim()) {
@@ -862,7 +949,11 @@ function validateStudyPatch(patch: any) {
     } else if (key === 'ao' || key === 'aoi') {
       const problem = value === null ? null : areaPolygonProblem(value);
       if (problem) throw new HttpError(400, `${key} ${problem}.`);
-      fields[key] = value === null ? null : { type: 'Polygon', coordinates: value.coordinates };
+      // areaPolygonProblem accepted it: an object with a polygon's coordinates.
+      fields[key] =
+        value === null || !isJsonObject(value)
+          ? null
+          : { type: 'Polygon', coordinates: value.coordinates ?? null };
     } else if (key === 'notes') {
       fields.notes = validateNotes(value);
     } else if (key === 'weather_point') {
@@ -871,26 +962,26 @@ function validateStudyPatch(patch: any) {
       if (value !== null && (typeof value !== 'string' || Number.isNaN(Date.parse(value)))) {
         throw new HttpError(400, 'h_hour must be an ISO 8601 date-time string, or null.');
       }
-      fields.h_hour = value;
+      fields.h_hour = typeof value === 'string' ? value : null;
     } else if (key === 'classification') {
       if (typeof value !== 'string') throw new HttpError(400, 'classification must be a string.');
       fields.classification = value;
     } else if (key === 'checked') {
       fields.checked = validateChecked(value);
     } else if (key === 'weather_thresholds') {
-      if (value !== null && (typeof value !== 'object' || Array.isArray(value))) {
+      if (value !== null && !isJsonObject(value)) {
         throw new HttpError(400, 'weather_thresholds must be a JSON object, or null.');
       }
-      fields.weather_thresholds = value;
+      fields.weather_thresholds = isJsonObject(value) ? value : null;
     }
   }
   return fields;
 }
 
-function applyStudyPatch(id, fields) {
+function applyStudyPatch(id: number, fields: StudyPatch) {
   const assignments: string[] = [];
   const params: SQLInputValue[] = [];
-  if ('name' in fields) {
+  if (fields.name !== undefined) {
     assignments.push('name = ?');
     params.push(fields.name);
   }
@@ -898,7 +989,7 @@ function applyStudyPatch(id, fields) {
     assignments.push('bounds = ?');
     params.push(fields.bounds ? JSON.stringify(fields.bounds) : null);
   }
-  for (const key of ['ao', 'aoi']) {
+  for (const key of ['ao', 'aoi'] as const) {
     if (!(key in fields)) continue;
     assignments.push(`${key} = ?`);
     params.push(fields[key] ? JSON.stringify(fields[key]) : null);
@@ -911,11 +1002,11 @@ function applyStudyPatch(id, fields) {
     assignments.push('weather_point = ?');
     params.push(fields.weather_point ? JSON.stringify(fields.weather_point) : null);
   }
-  if ('h_hour' in fields) {
+  if (fields.h_hour !== undefined) {
     assignments.push('h_hour = ?');
     params.push(fields.h_hour);
   }
-  if ('classification' in fields) {
+  if (fields.classification !== undefined) {
     assignments.push('classification = ?');
     params.push(fields.classification);
   }
@@ -931,7 +1022,7 @@ function applyStudyPatch(id, fields) {
   database.prepare(`UPDATE studies SET ${assignments.join(', ')} WHERE id = ?`).run(...params, id);
 }
 
-function updateStudy(id, patch) {
+function updateStudy(id: number, patch: Json) {
   const fields = validateStudyPatch(patch);
   return mutate(
     id,
@@ -945,16 +1036,15 @@ function updateStudy(id, patch) {
   );
 }
 
-function deleteStudy(id) {
-  let deleted;
+function deleteStudy(id: number) {
   return mutate(
     id,
     'delete',
     `study:${id}`,
     () => {
-      deleted = getStudyRow(id);
+      const cellStudyCell = textOrNull(getStudyRow(id), 'cell_study_cell');
       database.prepare('DELETE FROM studies WHERE id = ?').run(id);
-      if (deleted.cell_study_cell) ensureCellStudyInside(deleted.cell_study_cell);
+      if (cellStudyCell) ensureCellStudyInside(cellStudyCell);
     },
     () => ({ deleted: true }),
   );
@@ -967,17 +1057,18 @@ function deleteStudy(id) {
  * object the dispatcher shapes into its response — and appends one activity
  * row, the same bookkeeping every other mutation gets via `mutate()`.
  */
-function recordOwnershipChange({ action, before, after }) {
+function recordOwnershipChange({ action, before, after }: OwnershipChange) {
   const timestamp = new Date().toISOString();
-  if (action === 'reassign' && before.cell_study_cell) {
+  const previousCellStudy = textOrNull(before, 'cell_study_cell');
+  if (action === 'reassign' && previousCellStudy) {
     database.prepare('UPDATE studies SET cell_study_cell = NULL WHERE id = ?').run(after.id);
     after.cell_study_cell = null;
-    ensureCellStudyInside(before.cell_study_cell);
+    ensureCellStudyInside(previousCellStudy);
   }
   database
     .prepare('UPDATE studies SET revision = revision + 1, updated_at = ? WHERE id = ?')
     .run(timestamp, after.id);
-  after.revision += 1;
+  after.revision = num(after, 'revision') + 1;
   after.updated_at = timestamp;
   database
     .prepare('INSERT INTO activity (study_id, at, action, target, detail) VALUES (?, ?, ?, ?, ?)')
@@ -986,20 +1077,20 @@ function recordOwnershipChange({ action, before, after }) {
 
 // -- study aggregate ------------------------------------------------------------
 
-function shapeChildRow(kind, row) {
-  const config = CHILDREN[kind];
-  const result: Record<string, any> = { id: row.id, study_id: row.study_id };
+function shapeChildRow(kind: string, row: Row): JsonObject {
+  const config = childConfig(kind);
+  const result: JsonObject = { id: num(row, 'id'), study_id: num(row, 'study_id') };
   for (const [name, spec] of Object.entries(config.columns)) {
     result[name] = readValue(spec, row[name]);
   }
-  if (config.ordinal) result.ordinal = row.ordinal;
-  result.created_at = row.created_at;
-  if (config.hasUpdatedAt !== false) result.updated_at = row.updated_at;
+  if (config.ordinal) result.ordinal = num(row, 'ordinal');
+  result.created_at = text(row, 'created_at');
+  if (config.hasUpdatedAt !== false) result.updated_at = text(row, 'updated_at');
   return result;
 }
 
-function listChildren(kind, studyId) {
-  const config = CHILDREN[kind];
+function listChildren(kind: string, studyId: number): JsonObject[] {
+  const config = childConfig(kind);
   const order = config.ordinal ? 'ordinal, id' : 'id';
   const rows = database
     .prepare(`SELECT * FROM ${config.table} WHERE study_id = ? ORDER BY ${order}`)
@@ -1007,7 +1098,7 @@ function listChildren(kind, studyId) {
   return rows.map((row) => shapeChildRow(kind, row));
 }
 
-function readStudy(id) {
+function readStudy(id: number) {
   const study = readStudyRow(id);
   return {
     study,
@@ -1024,8 +1115,8 @@ function readStudy(id) {
   };
 }
 
-function readChildRow(kind, id) {
-  const config = CHILDREN[kind];
+function readChildRow(kind: string, id: number): JsonObject | null {
+  const config = childConfig(kind);
   const row = database.prepare(`SELECT * FROM ${config.table} WHERE id = ?`).get(id);
   return row ? shapeChildRow(kind, row) : null;
 }
@@ -1038,11 +1129,12 @@ function readChildRow(kind, id) {
  * import, so a bulk request validates and inserts each feature exactly the
  * way a single `POST` would.
  */
-function insertChildRow(kind, studyId, values) {
-  const config = CHILDREN[kind];
+function insertChildRow(kind: string, studyId: number, values: ChildValues): number {
+  const config = childConfig(kind);
   for (const [name, spec] of Object.entries(config.columns)) {
-    if (spec.type === 'reference' && values[name] !== null && values[name] !== undefined) {
-      assertReference(spec, values[name], studyId);
+    const value = values[name];
+    if (spec.type === 'reference' && value !== null && value !== undefined) {
+      assertReference(spec.table, value, studyId);
     }
   }
   runPostValidate(kind, values, studyId);
@@ -1055,7 +1147,7 @@ function insertChildRow(kind, studyId, values) {
     'created_at',
     ...(config.hasUpdatedAt !== false ? ['updated_at'] : []),
   ];
-  const params = [
+  const params: SQLInputValue[] = [
     studyId,
     ...columnNames.map((name) => storeValue(config.columns[name], values[name])),
     ...(config.ordinal ? [nextOrdinal(config.table, studyId)] : []),
@@ -1068,36 +1160,46 @@ function insertChildRow(kind, studyId, values) {
        VALUES (${insertColumns.map(() => '?').join(', ')})`,
     )
     .run(...params);
-  return info.lastInsertRowid;
+  return Number(info.lastInsertRowid);
 }
 
 /** civil-considerations has no independent id namespace worth exposing: `POST` upserts the cell. */
-function upsertCivilConsiderationRow(studyId, values) {
-  const config = CHILDREN['civil-considerations'];
+function upsertCivilConsiderationRow(studyId: number, values: ChildValues): number {
+  const config = childConfig('civil-considerations');
+  const textValue = (value: Json | undefined): SQLInputValue =>
+    typeof value === 'string' || value === null ? value : null;
   const existing = database
     .prepare(`SELECT id FROM ${config.table} WHERE study_id = ? AND ascope = ? AND pmesii = ?`)
-    .get(studyId, values.ascope, values.pmesii);
+    .get(studyId, textValue(values.ascope), textValue(values.pmesii));
   const timestamp = new Date().toISOString();
   if (existing) {
+    const id = num(existing, 'id');
     database
       .prepare(`UPDATE ${config.table} SET text = ?, updated_at = ? WHERE id = ?`)
-      .run(values.text, timestamp, existing.id);
-    return existing.id;
+      .run(textValue(values.text), timestamp, id);
+    return id;
   }
   const info = database
     .prepare(
       `INSERT INTO ${config.table} (study_id, ascope, pmesii, text, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(studyId, values.ascope, values.pmesii, values.text, timestamp, timestamp);
-  return info.lastInsertRowid;
+    .run(
+      studyId,
+      textValue(values.ascope),
+      textValue(values.pmesii),
+      textValue(values.text),
+      timestamp,
+      timestamp,
+    );
+  return Number(info.lastInsertRowid);
 }
 
-function createChild(kind, studyId, body) {
+function createChild(kind: string, studyId: number, body: Json) {
   childConfig(kind);
   getStudyRow(studyId);
   const values = validateBody(kind, body, false);
-  let resultId;
+  let resultId = 0;
   return mutate(
     studyId,
     'create',
@@ -1112,18 +1214,20 @@ function createChild(kind, studyId, body) {
   );
 }
 
-function updateChild(kind, id, patch) {
+function updateChild(kind: string, id: number, patch: Json) {
   const config = childConfig(kind);
   const row = getChildRow(kind, id);
+  const studyId = num(row, 'study_id');
   const values = validateBody(kind, patch, true);
   for (const [name, spec] of Object.entries(config.columns)) {
-    if (spec.type === 'reference' && name in values && values[name] !== null) {
-      assertReference(spec, values[name], row.study_id);
+    const value = values[name];
+    if (spec.type === 'reference' && value !== undefined && value !== null) {
+      assertReference(spec.table, value, studyId);
     }
   }
-  runPostValidate(kind, mergeEffective(kind, row, values), row.study_id);
+  runPostValidate(kind, mergeEffective(kind, row, values), studyId);
   return mutate(
-    row.study_id,
+    studyId,
     'update',
     `${kind}:${id}`,
     () => {
@@ -1144,7 +1248,7 @@ function updateChild(kind, id, patch) {
 }
 
 /** `POST studies/:id/features/bulk`: validated like single creates, all or nothing. */
-function bulkCreateFeatures(studyId, items) {
+function bulkCreateFeatures(studyId: number, items: Json | undefined) {
   getStudyRow(studyId);
   if (!Array.isArray(items)) throw new HttpError(400, 'features must be an array.');
   if (!items.length) throw new HttpError(400, 'features must not be empty.');
@@ -1152,7 +1256,7 @@ function bulkCreateFeatures(studyId, items) {
     throw new HttpError(400, `features must not exceed ${MAX_BULK_FEATURES} items.`);
   }
   const prepared = items.map((body) => validateBody('features', body, false));
-  const insertedIds: any[] = [];
+  const insertedIds: number[] = [];
   return mutate(
     studyId,
     'create',
@@ -1166,7 +1270,7 @@ function bulkCreateFeatures(studyId, items) {
   );
 }
 
-function exportGeoJson(studyId) {
+function exportGeoJson(studyId: number) {
   const study = readStudyRow(studyId);
   const features = listChildren('features', studyId);
   return {
@@ -1175,7 +1279,7 @@ function exportGeoJson(studyId) {
   };
 }
 
-function exportKml(studyId) {
+function exportKml(studyId: number) {
   const study = readStudyRow(studyId);
   const features = listChildren('features', studyId);
   return { body: toKml(study, features), filename: `${sanitizeFilename(study.name)}.kml` };
@@ -1186,13 +1290,15 @@ function exportKml(studyId) {
  * constraint on `ordinal`, so a plain two-row swap is safe: nothing else
  * reads ordinals except `ORDER BY ordinal, id`.
  */
-function reorderChild(kind, id, direction) {
+function reorderChild(kind: string, id: number, direction: Json | undefined) {
   const config = childConfig(kind);
   if (!config.ordinal) throw new HttpError(400, `${kind} does not support reordering.`);
   if (direction !== 'up' && direction !== 'down') {
     throw new HttpError(400, 'direction must be "up" or "down".');
   }
   const row = getChildRow(kind, id);
+  const studyId = num(row, 'study_id');
+  const ordinal = num(row, 'ordinal');
 
   const comparator = direction === 'up' ? '<' : '>';
   const order = direction === 'up' ? 'DESC' : 'ASC';
@@ -1202,31 +1308,31 @@ function reorderChild(kind, id, direction) {
        WHERE study_id = ? AND ordinal ${comparator} ?
        ORDER BY ordinal ${order} LIMIT 1`,
     )
-    .get(row.study_id, row.ordinal);
+    .get(studyId, ordinal);
   // Already first or last: a no-op, not an error.
-  if (!neighbor) return { items: listChildren(kind, row.study_id) };
+  if (!neighbor) return { items: listChildren(kind, studyId) };
 
   return mutate(
-    row.study_id,
+    studyId,
     'reorder',
     `${kind}:${id}`,
     () => {
       database
         .prepare(`UPDATE ${config.table} SET ordinal = ? WHERE id = ?`)
-        .run(neighbor.ordinal, row.id);
+        .run(num(neighbor, 'ordinal'), id);
       database
         .prepare(`UPDATE ${config.table} SET ordinal = ? WHERE id = ?`)
-        .run(row.ordinal, neighbor.id);
+        .run(ordinal, num(neighbor, 'id'));
     },
-    () => ({ items: listChildren(kind, row.study_id) }),
+    () => ({ items: listChildren(kind, studyId) }),
   );
 }
 
-function deleteChild(kind, id) {
+function deleteChild(kind: string, id: number) {
   const config = childConfig(kind);
   const row = getChildRow(kind, id);
   return mutate(
-    row.study_id,
+    num(row, 'study_id'),
     'delete',
     `${kind}:${id}`,
     () => {

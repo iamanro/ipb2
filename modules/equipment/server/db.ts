@@ -1,26 +1,89 @@
 import type { SQLInputValue } from 'node:sqlite';
 import { DatabaseSync } from 'node:sqlite';
 
+import type { JsonObject } from '../../../server/http.ts';
+import { num, numOrNull, rowJson, text, textOrNull, type Row } from '../../../server/state.ts';
+
 export const KINDS = ['domain', 'origin', 'proliferation'];
 
-export function openDatabase(path) {
+/** Selected navigation keys per taxonomy kind. */
+export type CardFilters = Record<string, string[]>;
+export type CardsQuery = {
+  text: string | null;
+  filters: CardFilters;
+  limit: number;
+  offset: number;
+};
+/** A search hit: the card's list fields, plus what `apiCards` adds for display. */
+export type CardSummary = {
+  identifier: string;
+  name: string | null;
+  title: string | null;
+  date_of_introduction: string | null;
+  match: string | null;
+  image_url?: string | null;
+  domains?: string[];
+  origins?: string[];
+};
+export type CardImage = {
+  ordinal: number;
+  name: string | null;
+  source_path: string | null;
+  local_path: string | null;
+  url?: string | null;
+};
+/** A card section: its own fields as stored, its properties, its sub-sections. */
+export type CardSection = {
+  ordinal: number;
+  depth: number;
+  name: string | null;
+  name_invalid: number | null;
+  properties: JsonObject[];
+  sections: CardSection[];
+};
+/** A whole card: its columns as stored, plus its images, sections and classifications. */
+export type Card = JsonObject & {
+  images: CardImage[];
+  sections: CardSection[];
+  classifications: JsonObject[];
+};
+/** A taxonomy node, its columns as stored plus the tree fields it is ordered by. */
+type TaxonomyNode = JsonObject & {
+  id: number;
+  parent_id: number | null;
+  key: string;
+  name: string;
+  ordinal: number;
+  card_count?: number;
+};
+
+function readImage(row: Row): CardImage {
+  return {
+    ordinal: num(row, 'ordinal'),
+    name: textOrNull(row, 'name'),
+    source_path: textOrNull(row, 'source_path'),
+    local_path: textOrNull(row, 'local_path'),
+  };
+}
+
+export function openDatabase(path: string) {
   const database = new DatabaseSync(path, { readOnly: true });
   database.exec('PRAGMA foreign_keys = ON');
   return database;
 }
 
-function placeholders(values) {
+function placeholders(values: readonly SQLInputValue[]) {
   return values.map(() => '?').join(', ');
 }
 
-function searchExpression(text) {
-  const tokens = (text || '').match(/[\p{L}\p{N}]+/gu);
+function searchExpression(query: string | null) {
+  const tokens = (query || '').match(/[\p{L}\p{N}]+/gu);
   if (!tokens) return null;
   return tokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(' AND ');
 }
 
 /** Selected navigation keys plus every descendant key. */
-function expandKeys(database, keys) {
+function expandKeys(database: DatabaseSync, keys: string[]): string[] {
   return database
     .prepare(
       `WITH RECURSIVE picked(id, key) AS (
@@ -31,11 +94,11 @@ function expandKeys(database, keys) {
        SELECT key FROM picked`,
     )
     .all(...keys)
-    .map((row) => row.key);
+    .map((row) => text(row, 'key'));
 }
 
-function cardScope(database, text, filters) {
-  const expression = searchExpression(text);
+function cardScope(database: DatabaseSync, query: string | null, filters: CardFilters) {
+  const expression = searchExpression(query);
   const parameters: SQLInputValue[] = [];
   const conditions: string[] = [];
   let joins = '';
@@ -65,8 +128,11 @@ function cardScope(database, text, filters) {
   return { joins, where, parameters, expression };
 }
 
-export function listCards(database, { text, filters, limit, offset }) {
-  const { joins, where, parameters, expression } = cardScope(database, text, filters);
+export function listCards(
+  database: DatabaseSync,
+  { text: query, filters, limit, offset }: CardsQuery,
+): { items: CardSummary[]; total: number } {
+  const { joins, where, parameters, expression } = cardScope(database, query, filters);
   const matchColumn = expression
     ? "snippet(cards_fts, -1, '[', ']', ' … ', 24) AS match"
     : 'NULL AS match';
@@ -78,16 +144,23 @@ export function listCards(database, { text, filters, limit, offset }) {
        ORDER BY ${order}
        LIMIT ? OFFSET ?`,
     )
-    .all(...parameters, limit, offset);
-  const total = database
+    .all(...parameters, limit, offset)
+    .map((row) => ({
+      identifier: text(row, 'identifier'),
+      name: textOrNull(row, 'name'),
+      title: textOrNull(row, 'title'),
+      date_of_introduction: textOrNull(row, 'date_of_introduction'),
+      match: textOrNull(row, 'match'),
+    }));
+  const totalRow = database
     .prepare(`SELECT count(*) AS total FROM cards AS c ${joins} ${where}`)
-    .get(...parameters).total;
-  return { items, total };
+    .get(...parameters);
+  return { items, total: totalRow ? num(totalRow, 'total') : 0 };
 }
 
-export function listCardExtras(database, identifiers) {
-  const images = new Map();
-  const classifications = new Map<unknown, Record<string, unknown[]>>(
+export function listCardExtras(database: DatabaseSync, identifiers: string[]) {
+  const images = new Map<string, CardImage>();
+  const classifications = new Map<string, Record<string, string[]>>(
     identifiers.map((identifier) => [identifier, { domain: [], origin: [] }]),
   );
   if (!identifiers.length) return { images, classifications };
@@ -98,7 +171,7 @@ export function listCardExtras(database, identifiers) {
        FROM images WHERE ordinal = 0 AND card_identifier IN (${marks})`,
     )
     .all(...identifiers)) {
-    images.set(row.card_identifier, row);
+    images.set(text(row, 'card_identifier'), readImage(row));
   }
   for (const row of database
     .prepare(
@@ -110,47 +183,52 @@ export function listCardExtras(database, identifiers) {
     )
     .all(...identifiers)) {
     // Rows are selected for these identifiers only, so the entry exists.
-    classifications.get(row.card_identifier)?.[String(row.kind)].push(row.value);
+    const value = textOrNull(row, 'value');
+    if (value !== null)
+      classifications.get(text(row, 'card_identifier'))?.[text(row, 'kind')]?.push(value);
   }
   return { images, classifications };
 }
 
-export function showCard(database, identifier) {
+export function showCard(database: DatabaseSync, identifier: string): Card | null {
   const card = database.prepare('SELECT * FROM cards WHERE identifier = ?').get(identifier);
   if (!card) return null;
-  const { raw_json: _raw, ...result } = card;
-  result.classifications = database
+  const { raw_json: _raw, ...columns } = rowJson(card);
+  const classifications = database
     .prepare(
       `SELECT kind, ordinal, source_key, value FROM classifications
        WHERE card_identifier = ? ORDER BY kind, ordinal`,
     )
-    .all(identifier);
-  result.images = database
+    .all(identifier)
+    .map(rowJson);
+  const images = database
     .prepare(
       `SELECT ordinal, name, source_path, local_path FROM images
        WHERE card_identifier = ? ORDER BY ordinal`,
     )
-    .all(identifier);
+    .all(identifier)
+    .map(readImage);
 
-  const nodes = new Map();
-  const roots: any[] = [];
+  const nodes = new Map<number, CardSection>();
+  const roots: CardSection[] = [];
   for (const row of database
     .prepare(
       `SELECT id, parent_id, ordinal, depth, name, name_invalid
        FROM sections WHERE card_identifier = ? ORDER BY id`,
     )
     .all(identifier)) {
-    const section = {
-      ordinal: row.ordinal,
-      depth: row.depth,
-      name: row.name,
-      name_invalid: row.name_invalid,
+    const section: CardSection = {
+      ordinal: num(row, 'ordinal'),
+      depth: num(row, 'depth'),
+      name: textOrNull(row, 'name'),
+      name_invalid: numOrNull(row, 'name_invalid'),
       properties: [],
       sections: [],
     };
-    nodes.set(row.id, section);
-    if (row.parent_id === null) roots.push(section);
-    else nodes.get(row.parent_id).sections.push(section);
+    nodes.set(num(row, 'id'), section);
+    const parentId = numOrNull(row, 'parent_id');
+    if (parentId === null) roots.push(section);
+    else nodes.get(parentId)?.sections.push(section);
   }
   for (const row of database
     .prepare(
@@ -160,11 +238,10 @@ export function showCard(database, identifier) {
        WHERE s.card_identifier = ? ORDER BY p.section_id, p.ordinal`,
     )
     .all(identifier)) {
-    const { section_id: sectionId, ...property } = row;
-    nodes.get(sectionId).properties.push(property);
+    const { section_id: _section, ...property } = rowJson(row);
+    nodes.get(num(row, 'section_id'))?.properties.push(property);
   }
-  result.sections = roots;
-  return result;
+  return { ...columns, classifications, images, sections: roots };
 }
 
 /**
@@ -172,22 +249,28 @@ export function showCard(database, identifier) {
  * whole subtree, so a region reports every card filed under any of its
  * countries. Countries sort by name; categories keep source order.
  */
-function orderTree(rows, cardsByKey, usedOnly, alphabetical) {
+function orderTree(
+  rows: TaxonomyNode[],
+  cardsByKey: Map<string, Set<string>>,
+  usedOnly: boolean,
+  alphabetical: boolean,
+): TaxonomyNode[] {
   const ids = new Set(rows.map((row) => row.id));
-  const children = new Map();
+  const children = new Map<number | null, TaxonomyNode[]>();
   for (const row of rows) {
-    const parent = ids.has(row.parent_id) ? row.parent_id : null;
-    if (!children.has(parent)) children.set(parent, []);
-    children.get(parent).push(row);
+    const parent = row.parent_id !== null && ids.has(row.parent_id) ? row.parent_id : null;
+    const siblings = children.get(parent);
+    if (siblings) siblings.push(row);
+    else children.set(parent, [row]);
   }
   const collator = new Intl.Collator('en', { sensitivity: 'base' });
   const compare = alphabetical
-    ? (a, b) => collator.compare(a.name, b.name)
-    : (a, b) => a.ordinal - b.ordinal;
-  const ordered: any[] = [];
+    ? (a: TaxonomyNode, b: TaxonomyNode) => collator.compare(a.name, b.name)
+    : (a: TaxonomyNode, b: TaxonomyNode) => a.ordinal - b.ordinal;
+  const ordered: TaxonomyNode[] = [];
 
-  function walk(parent) {
-    const cards = new Set();
+  function walk(parent: number | null): Set<string> {
+    const cards = new Set<string>();
     for (const row of (children.get(parent) || []).sort(compare)) {
       const position = ordered.length;
       ordered.push(row);
@@ -204,8 +287,8 @@ function orderTree(rows, cardsByKey, usedOnly, alphabetical) {
   return ordered;
 }
 
-export function taxonomy(database, kind, usedOnly) {
-  const load = (selectedKind) => {
+export function taxonomy(database: DatabaseSync, kind: string | null, usedOnly: boolean) {
+  const load = (selectedKind: string): TaxonomyNode[] => {
     const rows = database
       .prepare(
         `WITH RECURSIVE tree AS (
@@ -219,13 +302,23 @@ export function taxonomy(database, kind, usedOnly) {
          )
          SELECT * FROM tree WHERE key <> ? ORDER BY id`,
       )
-      .all(selectedKind, selectedKind);
-    const cardsByKey = new Map();
+      .all(selectedKind, selectedKind)
+      .map((row): TaxonomyNode => ({
+        ...rowJson(row),
+        id: num(row, 'id'),
+        parent_id: numOrNull(row, 'parent_id'),
+        key: text(row, 'key'),
+        name: text(row, 'name'),
+        ordinal: num(row, 'ordinal'),
+      }));
+    const cardsByKey = new Map<string, Set<string>>();
     for (const row of database
       .prepare('SELECT source_key, card_identifier FROM classifications WHERE kind = ?')
       .all(selectedKind)) {
-      if (!cardsByKey.has(row.source_key)) cardsByKey.set(row.source_key, new Set());
-      cardsByKey.get(row.source_key).add(row.card_identifier);
+      const key = text(row, 'source_key');
+      const cards = cardsByKey.get(key) ?? new Set<string>();
+      cards.add(text(row, 'card_identifier'));
+      cardsByKey.set(key, cards);
     }
     return orderTree(rows, cardsByKey, usedOnly, selectedKind !== 'domain');
   };
@@ -233,8 +326,8 @@ export function taxonomy(database, kind, usedOnly) {
   return Object.fromEntries(KINDS.map((selectedKind) => [selectedKind, load(selectedKind)]));
 }
 
-export function stats(database) {
-  const counts: Record<string, any> = {};
+export function stats(database: DatabaseSync) {
+  const counts: Record<string, number> = {};
   for (const table of [
     'source_documents',
     'navigation_nodes',
@@ -244,14 +337,16 @@ export function stats(database) {
     'properties',
     'classifications',
   ]) {
-    counts[table] = database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n;
+    const row = database.prepare(`SELECT count(*) AS n FROM ${table}`).get();
+    counts[table] = row ? num(row, 'n') : 0;
   }
-  return { source: database.prepare('SELECT * FROM source').get(), counts };
+  const source = database.prepare('SELECT * FROM source').get();
+  return { source: source ? rowJson(source) : null, counts };
 }
 
-export function imagePath(database, identifier, ordinal) {
+export function imagePath(database: DatabaseSync, identifier: string, ordinal: number) {
   const row = database
     .prepare('SELECT local_path FROM images WHERE card_identifier = ? AND ordinal = ?')
     .get(identifier, ordinal);
-  return row?.local_path || null;
+  return (row && textOrNull(row, 'local_path')) || null;
 }

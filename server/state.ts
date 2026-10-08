@@ -2,6 +2,8 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from 'node:sqlite';
 
+import type { Json, JsonObject } from './http.ts';
+
 /** A SQLite row as `node:sqlite` returns it; read columns with the readers below. */
 export type Row = Record<string, SQLOutputValue>;
 
@@ -155,6 +157,35 @@ export function blob(row: Row, column: string): Uint8Array {
   const value = row[column];
   if (!(value instanceof Uint8Array)) throw columnError(column, 'a blob', value);
   return value;
+}
+
+/** A TEXT column holding JSON (as the stores write it), parsed. */
+export function json(row: Row, column: string): Json {
+  const parsed: Json = JSON.parse(text(row, column));
+  return parsed;
+}
+
+/** A nullable TEXT column holding JSON: null when NULL. */
+export function jsonOrNull(row: Row, column: string): Json {
+  const raw = textOrNull(row, column);
+  if (raw === null) return null;
+  const parsed: Json = JSON.parse(raw);
+  return parsed;
+}
+
+/** One SQLite value as JSON: integers stay numbers, a blob becomes base64 text. */
+export function scalarJson(value: SQLOutputValue | undefined): Json {
+  if (value === undefined) return null;
+  if (typeof value === 'bigint') return Number(value);
+  if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
+  return value;
+}
+
+/** A row passed through to a response as-is (reference data shown verbatim). */
+export function rowJson(row: Row): JsonObject {
+  const out: JsonObject = {};
+  for (const [key, value] of Object.entries(row)) out[key] = scalarJson(value);
+  return out;
 }
 
 /** The `n` of a `SELECT COUNT(*) AS n …` query, as a number. */

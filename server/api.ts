@@ -23,8 +23,8 @@ import { createDispatcher } from './dispatch.ts';
 import { createExerciseLifecycle } from './exerciseLifecycle.ts';
 import {
   errorMessage,
+  fieldsOf,
   HttpError,
-  isJsonObject,
   readJson,
   sendJson,
   type Json,
@@ -300,11 +300,6 @@ function checkCsrf(request: IncomingMessage) {
  * adapter that resolves `mode` from the dev/preview server's bound host;
  * tests call this directly against a plain `http.createServer`.
  */
-/** A body's fields: a non-object body reads as having none (each route validates its own). */
-function fieldsOf(body: Json): JsonObject {
-  return isJsonObject(body) ? body : {};
-}
-
 export function createApiMiddleware(mode: AuthMode) {
   let authStore: AuthStore | undefined;
   function ensureAuthStore(): AuthStore {

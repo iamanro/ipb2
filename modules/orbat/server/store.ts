@@ -1,7 +1,92 @@
-import type { SQLInputValue } from 'node:sqlite';
-import { HttpError } from '../../../server/http.ts';
-import { openState, transact } from '../../../server/state.ts';
+import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+
+import type { Access, Owner } from '../../../server/dispatch.ts';
+import { fieldsOf, HttpError, isJsonObject, type Json } from '../../../server/http.ts';
+import { releasableArray } from '../../../server/policy.ts';
+import {
+  countRows,
+  num,
+  numOrNull,
+  openState,
+  text,
+  textOrNull,
+  transact,
+  type Row,
+} from '../../../server/state.ts';
 import { MIGRATIONS } from './schema.ts';
+
+type OrbatRow = {
+  id: number;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  owner_cell: string;
+  releasable_to: string | null;
+};
+type UnitRow = {
+  id: number;
+  orbat_id: number;
+  parent_id: number | null;
+  position: number;
+  sidc: string;
+  name: string;
+  designation: string;
+  higher_formation: string;
+  reinforced: string;
+  additional: string;
+  notes: string;
+};
+/** A unit's editable fields, as the API names them. */
+type UnitFields = {
+  sidc: string;
+  name: string;
+  designation: string;
+  higherFormation: string;
+  reinforced: string;
+  additional: string;
+  notes: string;
+};
+/** Each API field of a unit and its column. */
+const UNIT_COLUMNS: [keyof UnitFields, string][] = [
+  ['sidc', 'sidc'],
+  ['name', 'name'],
+  ['designation', 'designation'],
+  ['higherFormation', 'higher_formation'],
+  ['reinforced', 'reinforced'],
+  ['additional', 'additional'],
+  ['notes', 'notes'],
+];
+/** One node of an ORBAT export/import document. */
+type UnitNode = UnitFields & { children: UnitNode[] };
+
+function readOrbat(row: Row): OrbatRow {
+  return {
+    id: num(row, 'id'),
+    name: text(row, 'name'),
+    description: text(row, 'description'),
+    created_at: text(row, 'created_at'),
+    updated_at: text(row, 'updated_at'),
+    owner_cell: text(row, 'owner_cell'),
+    releasable_to: textOrNull(row, 'releasable_to'),
+  };
+}
+
+function readUnit(row: Row): UnitRow {
+  return {
+    id: num(row, 'id'),
+    orbat_id: num(row, 'orbat_id'),
+    parent_id: numOrNull(row, 'parent_id'),
+    position: num(row, 'position'),
+    sidc: text(row, 'sidc'),
+    name: text(row, 'name'),
+    designation: text(row, 'designation'),
+    higher_formation: text(row, 'higher_formation'),
+    reinforced: text(row, 'reinforced'),
+    additional: text(row, 'additional'),
+    notes: text(row, 'notes'),
+  };
+}
 
 /** Mirrors `client/sidc.js`'s DEFAULT_SIDC: a friendly land infantry unit, no echelon. */
 const DEFAULT_SIDC = '10031000001211000000';
@@ -10,7 +95,7 @@ const REINFORCED_VALUES = new Set(['', '(+)', '(-)', '(±)']);
 const MAX_UNITS_PER_IMPORT = 2000;
 const MAX_DEPTH = 24;
 
-let database;
+let database: DatabaseSync;
 
 /**
  * Opens (or reopens) this module's state. Cell access is decided entirely
@@ -18,12 +103,12 @@ let database;
  * already-resolved orbat/unit row (or, for creation, the `owner` the
  * dispatcher computed) and never see the user.
  */
-export function openStore(file) {
+export function openStore(file: string) {
   database = openState(file, MIGRATIONS);
   return {
     database,
-    orbatRow: (id) => fetchRow('orbats', id),
-    unitRow: (id) => fetchRow('units', id),
+    orbatRow: (id: number) => findOrbat(id),
+    unitRow: (id: number) => findUnit(id),
     documentFor,
     listOrbats,
     createOrbat,
@@ -41,7 +126,6 @@ export function openStore(file) {
 
 function close() {
   database?.close();
-  database = undefined;
 }
 
 // -- shared helpers -----------------------------------------------------------
@@ -50,11 +134,17 @@ function now() {
   return new Date().toISOString();
 }
 
-function fetchRow(table, id) {
-  return database.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id) ?? null;
+function findOrbat(id: number): OrbatRow | null {
+  const row = database.prepare('SELECT * FROM orbats WHERE id = ?').get(id);
+  return row ? readOrbat(row) : null;
 }
 
-function requireOrbatName(value) {
+function findUnit(id: number): UnitRow | null {
+  const row = database.prepare('SELECT * FROM units WHERE id = ?').get(id);
+  return row ? readUnit(row) : null;
+}
+
+function requireOrbatName(value: Json | undefined): string {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, 'name is required.');
   const trimmed = value.trim();
   if (trimmed.length > 120) throw new HttpError(400, 'name must be 120 characters or fewer.');
@@ -62,7 +152,7 @@ function requireOrbatName(value) {
 }
 
 /** A free-text field: '' when absent, validated for type and length when present. */
-function limitedString(value, name, maxLength) {
+function limitedString(value: Json | undefined, name: string, maxLength: number): string {
   if (value === undefined || value === null) return '';
   if (typeof value !== 'string') throw new HttpError(400, `${name} must be a string.`);
   if (value.length > maxLength)
@@ -70,54 +160,56 @@ function limitedString(value, name, maxLength) {
   return value;
 }
 
-function validateReinforced(value, name = 'reinforced') {
+function validateReinforced(value: Json | undefined, name = 'reinforced'): string {
   if (value === undefined || value === null) return '';
-  if (!REINFORCED_VALUES.has(value)) {
+  if (typeof value !== 'string' || !REINFORCED_VALUES.has(value)) {
     throw new HttpError(400, `${name} must be one of: '', '(+)', '(-)', '(±)'.`);
   }
   return value;
 }
 
-function validateSidcValue(value, name = 'sidc') {
+function validateSidcValue(value: Json | undefined, name = 'sidc'): string {
   if (typeof value !== 'string' || !SIDC_PATTERN.test(value)) {
     throw new HttpError(400, `${name} must be a 20-digit code.`);
   }
   return value;
 }
 
-function clampInt(value, name, min, max) {
-  if (!Number.isInteger(value)) throw new HttpError(400, `${name} must be an integer.`);
+function clampInt(value: Json | undefined, name: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value))
+    throw new HttpError(400, `${name} must be an integer.`);
   return Math.min(Math.max(value, min), max);
 }
 
-function normalizeParentId(value, name = 'parentId') {
+function normalizeParentId(value: Json | undefined, name = 'parentId'): number | null {
   if (value === null) return null;
-  if (Number.isInteger(value)) return value;
+  if (typeof value === 'number' && Number.isInteger(value)) return value;
   throw new HttpError(400, `${name} must be an integer id or null.`);
 }
 
 // -- shaping ----------------------------------------------------------------
 
-function countUnits(orbatId) {
-  return database.prepare('SELECT COUNT(*) AS c FROM units WHERE orbat_id = ?').get(orbatId).c;
+function countUnits(orbatId: number) {
+  return countRows(database, 'SELECT COUNT(*) AS n FROM units WHERE orbat_id = ?', orbatId);
 }
 
 /** Shapes an `orbats` row for API responses (list, document, and the
  * generated release/reassign endpoints). */
-export function shapeOrbat(row) {
+export function shapeOrbat(row: Row) {
+  const orbat = readOrbat(row);
   return {
-    id: row.id,
-    name: row.name,
-    description: row.description,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    unitCount: countUnits(row.id),
-    owner_cell: row.owner_cell,
-    releasable_to: JSON.parse(row.releasable_to),
+    id: orbat.id,
+    name: orbat.name,
+    description: orbat.description,
+    createdAt: orbat.created_at,
+    updatedAt: orbat.updated_at,
+    unitCount: countUnits(orbat.id),
+    owner_cell: orbat.owner_cell,
+    releasable_to: releasableArray(orbat.releasable_to),
   };
 }
 
-function shapeUnit(row) {
+function shapeUnit(row: UnitRow) {
   return {
     id: row.id,
     orbatId: row.orbat_id,
@@ -134,18 +226,19 @@ function shapeUnit(row) {
 }
 
 /** All units of an ORBAT, flattened depth-first (parent before children, siblings by position). */
-function orderedUnits(orbatId) {
+function orderedUnits(orbatId: number): UnitRow[] {
   const rows = database
     .prepare('SELECT * FROM units WHERE orbat_id = ? ORDER BY position, id')
-    .all(orbatId);
-  const byParent = new Map();
+    .all(orbatId)
+    .map(readUnit);
+  const byParent = new Map<number | null, UnitRow[]>();
   for (const row of rows) {
-    const key = row.parent_id;
-    if (!byParent.has(key)) byParent.set(key, []);
-    byParent.get(key).push(row);
+    const siblings = byParent.get(row.parent_id);
+    if (siblings) siblings.push(row);
+    else byParent.set(row.parent_id, [row]);
   }
-  const ordered: any[] = [];
-  const walk = (parentKey) => {
+  const ordered: UnitRow[] = [];
+  const walk = (parentKey: number | null) => {
     for (const row of byParent.get(parentKey) ?? []) {
       ordered.push(row);
       walk(row.id);
@@ -156,11 +249,18 @@ function orderedUnits(orbatId) {
 }
 
 /** `{ orbat, units }`, the shape `GET orbats/:item` and every unit mutation answers with. */
-function documentFor(orbatRow) {
-  return { orbat: shapeOrbat(orbatRow), units: orderedUnits(orbatRow.id).map(shapeUnit) };
+function documentFor(orbatRow: Row) {
+  return { orbat: shapeOrbat(orbatRow), units: orderedUnits(num(orbatRow, 'id')).map(shapeUnit) };
 }
 
-function touchOrbat(orbatId) {
+/** The document of an ORBAT by id (after a write). */
+function documentById(orbatId: number) {
+  const row = database.prepare('SELECT * FROM orbats WHERE id = ?').get(orbatId);
+  if (!row) throw new Error(`ORBAT ${orbatId} does not exist.`);
+  return documentFor(row);
+}
+
+function touchOrbat(orbatId: number) {
   database.prepare('UPDATE orbats SET updated_at = ? WHERE id = ?').run(now(), orbatId);
 }
 
@@ -170,21 +270,29 @@ function touchOrbat(orbatId) {
 // every operation below is a local shift around the index it touches rather
 // than a full renumbering pass.
 
-function parentClause(parentId) {
+function parentClause(parentId: number | null) {
   return parentId === null ? 'parent_id IS NULL' : 'parent_id = ?';
 }
 
-function parentParams(parentId) {
+function parentParams(parentId: number | null): number[] {
   return parentId === null ? [] : [parentId];
 }
 
-function siblingCount(orbatId, parentId) {
-  return database
-    .prepare(`SELECT COUNT(*) AS c FROM units WHERE orbat_id = ? AND ${parentClause(parentId)}`)
-    .get(orbatId, ...parentParams(parentId)).c;
+function siblingCount(orbatId: number, parentId: number | null) {
+  return countRows(
+    database,
+    `SELECT COUNT(*) AS n FROM units WHERE orbat_id = ? AND ${parentClause(parentId)}`,
+    orbatId,
+    ...parentParams(parentId),
+  );
 }
 
-function shiftPositions(orbatId, parentId, fromInclusive, delta) {
+function shiftPositions(
+  orbatId: number,
+  parentId: number | null,
+  fromInclusive: number,
+  delta: number,
+) {
   database
     .prepare(
       `UPDATE units SET position = position + ? WHERE orbat_id = ? AND ${parentClause(parentId)} AND position >= ?`,
@@ -196,7 +304,7 @@ function shiftPositions(orbatId, parentId, fromInclusive, delta) {
 
 /** `access.visible('orbat')` limits the list to what the requester can see;
  * `list.orbats` in `server/routes.js` supplies `access`. */
-function listOrbats(access) {
+function listOrbats(access: Access) {
   const { sql, params } = access.visible('orbat');
   return database
     .prepare(`SELECT * FROM orbats WHERE ${sql} ORDER BY updated_at DESC, id DESC`)
@@ -206,9 +314,10 @@ function listOrbats(access) {
 
 /** `owner` is `{ owner_cell, releasable_to }`, computed by the dispatcher
  * (`ownerCellForCreate`/`normalizeRelease`) and stored exactly as given. */
-function createOrbat(owner, body) {
-  const name = requireOrbatName(body?.name);
-  const description = limitedString(body?.description, 'description', 2000);
+function createOrbat(owner: Owner, body: Json) {
+  const fields = fieldsOf(body);
+  const name = requireOrbatName(fields.name);
+  const description = limitedString(fields.description, 'description', 2000);
   return transact(database, () => {
     const timestamp = now();
     const { lastInsertRowid } = database
@@ -224,11 +333,13 @@ function createOrbat(owner, body) {
         owner.owner_cell,
         JSON.stringify(owner.releasable_to),
       );
-    return documentFor(fetchRow('orbats', Number(lastInsertRowid)));
+    return documentById(Number(lastInsertRowid));
   });
 }
 
-function updateOrbat(orbat, patch) {
+function updateOrbat(orbat: Row, body: Json) {
+  const patch = fieldsOf(body);
+  const orbatId = num(orbat, 'id');
   const sets: string[] = [];
   const params: SQLInputValue[] = [];
   if ('name' in patch) {
@@ -243,28 +354,29 @@ function updateOrbat(orbat, patch) {
     if (sets.length) {
       sets.push('updated_at = ?');
       params.push(now());
-      database
-        .prepare(`UPDATE orbats SET ${sets.join(', ')} WHERE id = ?`)
-        .run(...params, orbat.id);
+      database.prepare(`UPDATE orbats SET ${sets.join(', ')} WHERE id = ?`).run(...params, orbatId);
     }
-    return documentFor(fetchRow('orbats', orbat.id));
+    return documentById(orbatId);
   });
 }
 
-function deleteOrbat(orbat) {
+function deleteOrbat(orbat: Row) {
   return transact(database, () => {
-    database.prepare('DELETE FROM orbats WHERE id = ?').run(orbat.id);
+    database.prepare('DELETE FROM orbats WHERE id = ?').run(num(orbat, 'id'));
     return { deleted: true };
   });
 }
 
 // -- units ----------------------------------------------------------------
 
-function addUnit(orbat, body) {
-  if (!body || !('parentId' in body)) throw new HttpError(400, 'parentId is required.');
+function addUnit(orbatRow: Row, input: Json) {
+  if (!isJsonObject(input) || !('parentId' in input))
+    throw new HttpError(400, 'parentId is required.');
+  const body = input;
+  const orbat = { id: num(orbatRow, 'id') };
   const parentId = normalizeParentId(body.parentId);
   if (parentId !== null) {
-    const parentRow = fetchRow('units', parentId);
+    const parentRow = findUnit(parentId);
     if (!parentRow || parentRow.orbat_id !== orbat.id) {
       throw new HttpError(400, 'parentId must reference a unit in this ORBAT.');
     }
@@ -301,7 +413,7 @@ function addUnit(orbat, body) {
       );
     touchOrbat(orbat.id);
     return {
-      ...documentFor(fetchRow('orbats', orbat.id)),
+      ...documentById(orbat.id),
       unitId: Number(lastInsertRowid),
     };
   });
@@ -316,23 +428,27 @@ function addUnit(orbat, body) {
  * cases the contract specifies explicitly (including a target unit that
  * simply doesn't exist, or belongs to another ORBAT).
  */
-function validateMoveTarget(unit, newParentId) {
+function validateMoveTarget(unit: UnitRow, newParentId: number | null) {
   if (newParentId === null) return;
   if (newParentId === unit.id) throw new HttpError(409, 'A unit cannot become its own parent.');
-  const parentRow = fetchRow('units', newParentId);
+  const parentRow = findUnit(newParentId);
   if (!parentRow || parentRow.orbat_id !== unit.orbat_id) {
     throw new HttpError(409, 'parentId must reference a unit in the same ORBAT.');
   }
-  let cursor = parentRow;
-  while (cursor.parent_id !== null) {
+  let cursor: UnitRow | null = parentRow;
+  while (cursor && cursor.parent_id !== null) {
     if (cursor.parent_id === unit.id) {
       throw new HttpError(409, 'A unit cannot move under its own descendant.');
     }
-    cursor = fetchRow('units', cursor.parent_id);
+    cursor = findUnit(cursor.parent_id);
   }
 }
 
-function moveUnitRow(unit, newParentId, explicitPosition) {
+function moveUnitRow(
+  unit: UnitRow,
+  newParentId: number | null,
+  explicitPosition: Json | undefined,
+) {
   const oldParentId = unit.parent_id;
   shiftPositions(unit.orbat_id, oldParentId, unit.position + 1, -1);
   const rawCount = siblingCount(unit.orbat_id, newParentId);
@@ -347,8 +463,10 @@ function moveUnitRow(unit, newParentId, explicitPosition) {
     .run(newParentId, target, unit.id);
 }
 
-function updateUnit(unit, patch) {
-  const fieldUpdates: Record<string, any> = {};
+function updateUnit(unitRow: Row, body: Json) {
+  const unit = readUnit(unitRow);
+  const patch = fieldsOf(body);
+  const fieldUpdates: Partial<UnitFields> = {};
   if ('sidc' in patch) fieldUpdates.sidc = validateSidcValue(patch.sidc);
   if ('name' in patch) fieldUpdates.name = limitedString(patch.name, 'name', 120);
   if ('designation' in patch)
@@ -365,39 +483,33 @@ function updateUnit(unit, patch) {
   const newParentId = 'parentId' in patch ? normalizeParentId(patch.parentId) : unit.parent_id;
   if (isMove) validateMoveTarget(unit, newParentId);
 
-  const columns = {
-    sidc: 'sidc',
-    name: 'name',
-    designation: 'designation',
-    higherFormation: 'higher_formation',
-    reinforced: 'reinforced',
-    additional: 'additional',
-    notes: 'notes',
-  };
-
   return transact(database, () => {
     if (isMove) moveUnitRow(unit, newParentId, patch.position);
-    const keys = Object.keys(fieldUpdates);
-    if (keys.length) {
-      const sets = keys.map((key) => `${columns[key]} = ?`);
-      const params = keys.map((key) => fieldUpdates[key]);
+    const updates = UNIT_COLUMNS.flatMap(([key, column]) => {
+      const value = fieldUpdates[key];
+      return value === undefined ? [] : [{ column, value }];
+    });
+    if (updates.length) {
+      const sets = updates.map(({ column }) => `${column} = ?`);
+      const params = updates.map(({ value }) => value);
       database.prepare(`UPDATE units SET ${sets.join(', ')} WHERE id = ?`).run(...params, unit.id);
     }
     touchOrbat(unit.orbat_id);
-    return documentFor(fetchRow('orbats', unit.orbat_id));
+    return documentById(unit.orbat_id);
   });
 }
 
-function deleteUnit(unit) {
+function deleteUnit(unitRow: Row) {
+  const unit = readUnit(unitRow);
   return transact(database, () => {
     database.prepare('DELETE FROM units WHERE id = ?').run(unit.id); // cascades to descendants
     shiftPositions(unit.orbat_id, unit.parent_id, unit.position + 1, -1);
     touchOrbat(unit.orbat_id);
-    return documentFor(fetchRow('orbats', unit.orbat_id));
+    return documentById(unit.orbat_id);
   });
 }
 
-function cloneSubtree(sourceRow, parentId, position) {
+function cloneSubtree(sourceRow: UnitRow, parentId: number | null, position: number): number {
   const { lastInsertRowid } = database
     .prepare(
       `INSERT INTO units
@@ -419,12 +531,14 @@ function cloneSubtree(sourceRow, parentId, position) {
   const newId = Number(lastInsertRowid);
   const children = database
     .prepare('SELECT * FROM units WHERE parent_id = ? ORDER BY position, id')
-    .all(sourceRow.id);
+    .all(sourceRow.id)
+    .map(readUnit);
   children.forEach((child, index) => cloneSubtree(child, newId, index));
   return newId;
 }
 
-function duplicateUnit(unit) {
+function duplicateUnit(unitRow: Row) {
+  const unit = readUnit(unitRow);
   // Unlike an import that creates a brand-new document owned by the
   // caller's own cell, a duplicate is inserted into the *same* ORBAT under
   // its existing owner: it is a structural edit, not a read-only copy.
@@ -433,7 +547,7 @@ function duplicateUnit(unit) {
     const newId = cloneSubtree(unit, unit.parent_id, unit.position + 1);
     touchOrbat(unit.orbat_id);
     return {
-      ...documentFor(fetchRow('orbats', unit.orbat_id)),
+      ...documentById(unit.orbat_id),
       unitId: newId,
     };
   });
@@ -441,12 +555,13 @@ function duplicateUnit(unit) {
 
 // -- export / import ---------------------------------------------------------
 
-function exportChildren(orbatId, parentId) {
+function exportChildren(orbatId: number, parentId: number | null): UnitNode[] {
   const rows = database
     .prepare(
       `SELECT * FROM units WHERE orbat_id = ? AND ${parentClause(parentId)} ORDER BY position, id`,
     )
-    .all(orbatId, ...parentParams(parentId));
+    .all(orbatId, ...parentParams(parentId))
+    .map(readUnit);
   return rows.map((row) => ({
     sidc: row.sidc,
     name: row.name,
@@ -459,7 +574,12 @@ function exportChildren(orbatId, parentId) {
   }));
 }
 
-function exportOrbat(orbat) {
+function exportOrbat(orbatRow: Row) {
+  const orbat = {
+    id: num(orbatRow, 'id'),
+    name: text(orbatRow, 'name'),
+    description: text(orbatRow, 'description'),
+  };
   return {
     format: 'orbat',
     version: 1,
@@ -475,8 +595,13 @@ function exportOrbat(orbat) {
  * before any database work starts. `path` names the node the way the error
  * should read, e.g. `units[2].children[0]`.
  */
-function validateImportNode(node, path, depth, counters) {
-  if (typeof node !== 'object' || node === null || Array.isArray(node)) {
+function validateImportNode(
+  node: Json,
+  path: string,
+  depth: number,
+  counters: { count: number },
+): UnitNode {
+  if (!isJsonObject(node)) {
     throw new HttpError(400, `${path} must be an object.`);
   }
   counters.count += 1;
@@ -486,7 +611,7 @@ function validateImportNode(node, path, depth, counters) {
   if (depth > MAX_DEPTH) {
     throw new HttpError(400, `${path} exceeds the maximum depth of ${MAX_DEPTH}.`);
   }
-  const fields: Record<string, any> = {
+  const fields: UnitFields = {
     sidc: validateSidcValue(node.sidc, `${path}.sidc`),
     name: limitedString(node.name, `${path}.name`, 120),
     designation: limitedString(node.designation, `${path}.designation`, 40),
@@ -497,13 +622,20 @@ function validateImportNode(node, path, depth, counters) {
   };
   const childrenRaw = node.children === undefined ? [] : node.children;
   if (!Array.isArray(childrenRaw)) throw new HttpError(400, `${path}.children must be an array.`);
-  fields.children = childrenRaw.map((child, index) =>
-    validateImportNode(child, `${path}.children[${index}]`, depth + 1, counters),
-  );
-  return fields;
+  return {
+    ...fields,
+    children: childrenRaw.map((child, index) =>
+      validateImportNode(child, `${path}.children[${index}]`, depth + 1, counters),
+    ),
+  };
 }
 
-function insertImportedNode(orbatId, parentId, position, node) {
+function insertImportedNode(
+  orbatId: number,
+  parentId: number | null,
+  position: number,
+  node: UnitNode,
+) {
   const { lastInsertRowid } = database
     .prepare(
       `INSERT INTO units
@@ -529,8 +661,8 @@ function insertImportedNode(orbatId, parentId, position, node) {
 /** `owner` is `{ owner_cell, releasable_to }`, computed by the dispatcher —
  * an import always lands in the importer's own cell because the client
  * never sends `owner_cell`/`releasable_to` on import (see `client/`). */
-function importOrbat(owner, body) {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+function importOrbat(owner: Owner, body: Json) {
+  if (!isJsonObject(body)) {
     throw new HttpError(400, 'Body must be an object.');
   }
   if (body.format !== 'orbat') throw new HttpError(400, "format must be 'orbat'.");
@@ -540,7 +672,8 @@ function importOrbat(owner, body) {
   if (!Array.isArray(body.units)) throw new HttpError(400, 'units must be an array.');
 
   const counters = { count: 0 };
-  const validated = body.units.map((node, index) =>
+  const units: Json[] = body.units;
+  const validated = units.map((node, index) =>
     validateImportNode(node, `units[${index}]`, 1, counters),
   );
 
@@ -561,6 +694,6 @@ function importOrbat(owner, body) {
       );
     const orbatId = Number(lastInsertRowid);
     validated.forEach((node, index) => insertImportedNode(orbatId, null, index, node));
-    return documentFor(fetchRow('orbats', orbatId));
+    return documentById(orbatId);
   });
 }

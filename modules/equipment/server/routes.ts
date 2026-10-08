@@ -1,12 +1,22 @@
 import { createReadStream } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { open, type FileHandle } from 'node:fs/promises';
+import type { ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { HttpError, integerParameter, sendJson } from '../../../server/http.ts';
+import type { DatabaseSync } from 'node:sqlite';
+
+import type { ModuleSpec } from '../../../server/dispatch.ts';
+import {
+  HttpError,
+  integerParameter,
+  isJsonObject,
+  sendJson,
+  type Json,
+} from '../../../server/http.ts';
 import { referenceFile } from '../../../server/reference.ts';
 import { dataDirectory } from '../../../server/state.ts';
-import { openBookmarks } from './bookmarks.ts';
+import { openBookmarks, type Bookmark } from './bookmarks.ts';
 import {
   KINDS,
   imagePath,
@@ -16,8 +26,10 @@ import {
   showCard,
   stats,
   taxonomy,
+  type CardImage,
+  type CardsQuery,
 } from './db.ts';
-import { cardRanges } from './ranges.ts';
+import { cardRanges, type RangeEntry } from './ranges.ts';
 import bookmarksState from './state.ts';
 
 const ID = 'equipment';
@@ -37,7 +49,7 @@ const SIGNATURES: [number[], string][] = [
   [[0x4d, 0x4d, 0x00, 0x2a], 'image/tiff'],
 ];
 
-function publicImageUrl(identifier, image) {
+function publicImageUrl(identifier: string, image: CardImage) {
   if (image.local_path)
     return `/api/${ID}/images/${encodeURIComponent(identifier)}/${image.ordinal}`;
   if (image.source_path)
@@ -46,7 +58,7 @@ function publicImageUrl(identifier, image) {
 }
 
 /** Local image files carry no extension, so sniff the first bytes. */
-async function imageContentType(file) {
+async function imageContentType(file: FileHandle) {
   const { buffer, bytesRead } = await file.read(Buffer.alloc(512), 0, 512, 0);
   const head = buffer.subarray(0, bytesRead);
   for (const [magic, type] of SIGNATURES) {
@@ -62,8 +74,8 @@ async function imageContentType(file) {
   return 'application/octet-stream';
 }
 
-function clampInteger(value, fallback, minimum, maximum) {
-  const number = Number.parseInt(value, 10);
+function clampInteger(value: Json | undefined, fallback: number, minimum: number, maximum: number) {
+  const number = Number.parseInt(typeof value === 'object' ? '' : String(value), 10);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(Math.max(number, minimum), maximum);
 }
@@ -71,7 +83,7 @@ function clampInteger(value, fallback, minimum, maximum) {
 /** GET carries filters as repeated query params: fine for the handful of
  * keys a plain text search sends, but a wide multi-select would overflow
  * the request-header size limit. */
-function cardsParamsFromQuery(query) {
+function cardsParamsFromQuery(query: URLSearchParams): CardsQuery {
   return {
     text: query.get('q'),
     filters: Object.fromEntries(KINDS.map((kind) => [kind, query.getAll(kind)])),
@@ -86,22 +98,30 @@ function cardsParamsFromQuery(query) {
  * across taxonomies stays safe. The body is untrusted: anything but a JSON
  * object is a 400, and every field is clamped or dropped rather than trusted.
  */
-export function cardsParams(body) {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+export function cardsParams(body: Json): CardsQuery {
+  if (!isJsonObject(body)) {
     throw new HttpError(400, 'The body must be a JSON object.');
   }
-  const filters = body.filters && typeof body.filters === 'object' ? body.filters : {};
+  const filters = isJsonObject(body.filters) ? body.filters : {};
   return {
     text: typeof body.text === 'string' ? body.text : null,
     filters: Object.fromEntries(
-      KINDS.map((kind) => [kind, Array.isArray(filters[kind]) ? filters[kind].map(String) : []]),
+      KINDS.map((kind) => {
+        const keys = filters[kind];
+        return [kind, Array.isArray(keys) ? keys.map((key) => scalarKey(key)) : []];
+      }),
     ),
     limit: clampInteger(body.limit, 100, 1, 200),
     offset: clampInteger(body.offset, 0, 0, Number.MAX_SAFE_INTEGER),
   };
 }
 
-function apiCards(database, { text, filters, limit, offset }) {
+/** A filter key from JSON, as text (what `String()` of a scalar gives). */
+function scalarKey(value: Json): string {
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+function apiCards(database: DatabaseSync, { text, filters, limit, offset }: CardsQuery) {
   const { items, total } = listCards(database, { text, filters, limit, offset });
   const { images, classifications } = listCardExtras(
     database,
@@ -116,7 +136,7 @@ function apiCards(database, { text, filters, limit, offset }) {
   return { items, count: items.length, offset, total };
 }
 
-function apiCard(database, identifier) {
+function apiCard(database: DatabaseSync, identifier: string) {
   const card = showCard(database, identifier);
   if (!card) throw new HttpError(404, 'Equipment card not found.');
   for (const image of card.images) image.url = publicImageUrl(identifier, image);
@@ -125,7 +145,7 @@ function apiCard(database, identifier) {
 
 const RANGES_BATCH_MAX = 200;
 
-function apiCardRanges(database, identifier) {
+function apiCardRanges(database: DatabaseSync, identifier: string) {
   const ranges = cardRanges(showCard, database, identifier);
   if (ranges === null) throw new HttpError(404, 'Equipment card not found.');
   return ranges;
@@ -135,14 +155,14 @@ function apiCardRanges(database, identifier) {
  * carry several weapon systems worth looking up at once). Unlike the single
  * GET, an unknown identifier is not an error here: it simply maps to `[]`,
  * so one bad id in a batch does not fail the rest. */
-function apiBatchRanges(database, body) {
-  if (typeof body !== 'object' || body === null || !Array.isArray(body.identifiers)) {
+function apiBatchRanges(database: DatabaseSync, body: Json) {
+  if (!isJsonObject(body) || !Array.isArray(body.identifiers)) {
     throw new HttpError(400, 'The body must have an "identifiers" array.');
   }
   if (body.identifiers.length > RANGES_BATCH_MAX) {
     throw new HttpError(400, `At most ${RANGES_BATCH_MAX} identifiers per request.`);
   }
-  const result: Record<string, any> = {};
+  const result: Record<string, RangeEntry[]> = {};
   for (const identifier of body.identifiers) {
     if (typeof identifier !== 'string' || !identifier.trim()) {
       throw new HttpError(400, 'Every identifier must be a non-empty string.');
@@ -152,21 +172,26 @@ function apiBatchRanges(database, body) {
   return result;
 }
 
-function apiTaxonomy(database, query) {
+function apiTaxonomy(database: DatabaseSync, query: URLSearchParams) {
   const kind = query.get('kind');
   if (kind !== null && !KINDS.includes(kind)) throw new HttpError(400, 'Unknown taxonomy kind.');
   const usedOnly = ['1', 'true', 'yes'].includes((query.get('used_only') || '').toLowerCase());
   return taxonomy(database, kind, usedOnly);
 }
 
-async function serveImage(database, response, identifier, ordinalText) {
+async function serveImage(
+  database: DatabaseSync,
+  response: ServerResponse,
+  identifier: string,
+  ordinalText: string,
+) {
   const ordinal = Number.parseInt(ordinalText, 10);
   if (Number.isNaN(ordinal)) throw new HttpError(400, 'Bad image path.');
   const localPath = imagePath(database, identifier, ordinal);
   if (!localPath) throw new HttpError(404, 'Image not found.');
   const absolute = path.resolve(DATA_ROOT, localPath);
   if (!absolute.startsWith(DATA_ROOT + path.sep)) throw new HttpError(400, 'Bad image path.');
-  let file;
+  let file: FileHandle;
   try {
     file = await open(absolute, 'r');
   } catch {
@@ -189,7 +214,7 @@ async function serveImage(database, response, identifier, ordinalText) {
  * are presentation, so they are looked up here rather than stored twice. A
  * card that has since disappeared from the reference data falls back to
  * showing its bare identifier instead of failing the whole list. */
-function enrichBookmark(database, bookmark) {
+function enrichBookmark(database: DatabaseSync, bookmark: Bookmark) {
   const card = showCard(database, bookmark.identifier);
   if (!card) {
     return { ...bookmark, name: bookmark.identifier, title: bookmark.identifier, image_url: null };
@@ -203,12 +228,12 @@ function enrichBookmark(database, bookmark) {
   };
 }
 
-function bookmarkId(text) {
+function bookmarkId(text: string | undefined) {
   if (!/^\d+$/.test(text ?? '')) throw new HttpError(404, 'Unknown API route.');
   return Number(text);
 }
 
-let bookmarkStore;
+let bookmarkStore: ReturnType<typeof openBookmarks> | undefined;
 bookmarksState.onClose(() => {
   bookmarkStore?.close();
   bookmarkStore = undefined;
@@ -288,7 +313,9 @@ export default {
       path: 'images/:identifier/:ordinal',
       verb: 'none',
       handler: async ({ params, response }) => {
+        if (!response) throw new Error('images/:identifier/:ordinal streams to a response.');
         await serveImage(referenceDatabase(), response, params.identifier, params.ordinal);
+        return undefined;
       },
     },
     {
@@ -312,7 +339,11 @@ export default {
       handler: ({ body, response }) => {
         const database = referenceDatabase();
         bookmarkStore ??= openBookmarks(bookmarksState.path);
-        sendJson(response, enrichBookmark(database, bookmarkStore.create(body)), 201);
+        const created = enrichBookmark(database, bookmarkStore.create(body));
+        // Sent here for the 201; an internal call (no response) returns it instead.
+        if (!response) return created;
+        sendJson(response, created, 201);
+        return undefined;
       },
     },
     {
@@ -341,4 +372,4 @@ export default {
       },
     },
   ],
-};
+} satisfies ModuleSpec;

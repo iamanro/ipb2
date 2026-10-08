@@ -4,10 +4,15 @@
  * don't clutter the data layer; both functions are pure (row data in, text
  * out), which also makes them easy to test directly.
  */
+import { readGeometry, type Geometry, type Position } from '../../../server/geometry.ts';
+import { isJsonObject, type JsonObject } from '../../../server/http.ts';
 import { affiliationOf } from '../../../src/symbols/sidc.js';
 
+/** A study as export needs it. */
+type ExportStudy = { name: string };
+
 /** Fixed colour per non-unit, non-graphic layer; unit/graphic follow affiliation instead. */
-const LAYER_COLOR = {
+const LAYER_COLOR: Record<string, string> = {
   aoi: '#e6c229',
   mcoo: '#8e44ad',
   'key-terrain': '#16a085',
@@ -19,7 +24,7 @@ const LAYER_COLOR = {
   note: '#34495e',
   'range-ring': '#3d8bff',
 };
-const AFFILIATION_COLOR = {
+const AFFILIATION_COLOR: Record<string, string> = {
   friendly: '#3d8bff',
   hostile: '#ff4d4d',
   neutral: '#3fbf5f',
@@ -28,20 +33,30 @@ const AFFILIATION_COLOR = {
 /** "None" affiliation and any layer without a fixed colour: ink. */
 const INK = '#2c3e50';
 
-function colorFor(feature) {
-  const properties = feature.properties || {};
-  if (feature.layer === 'unit' && typeof properties.sidc === 'string') {
+/** A stored feature row (as the store shapes it): fields read with their types. */
+function featureLayer(feature: JsonObject): string {
+  return typeof feature.layer === 'string' ? feature.layer : '';
+}
+function featureProperties(feature: JsonObject): JsonObject {
+  return isJsonObject(feature.properties) ? feature.properties : {};
+}
+
+function colorFor(feature: JsonObject) {
+  const properties = featureProperties(feature);
+  const layer = featureLayer(feature);
+  if (layer === 'unit' && typeof properties.sidc === 'string') {
     return AFFILIATION_COLOR[affiliationOf(properties.sidc)] || INK;
   }
-  if (feature.layer === 'graphic') {
-    return AFFILIATION_COLOR[properties.affiliation] || INK;
+  if (layer === 'graphic') {
+    const affiliation = properties.affiliation;
+    return (typeof affiliation === 'string' && AFFILIATION_COLOR[affiliation]) || INK;
   }
-  return LAYER_COLOR[feature.layer] || INK;
+  return LAYER_COLOR[layer] || INK;
 }
 
 /** A study name as a safe download filename stem: letters, digits, space, `_`, `-`. */
-export function sanitizeFilename(name) {
-  const cleaned = String(name ?? '')
+export function sanitizeFilename(name: string | null | undefined) {
+  const cleaned = (name ?? '')
     .replace(/[^A-Za-z0-9 _-]/g, '')
     .trim()
     .replace(/\s+/g, '-');
@@ -51,7 +66,7 @@ export function sanitizeFilename(name) {
 // -- GeoJSON ------------------------------------------------------------------
 
 /** A FeatureCollection in WGS84 (RFC 7946 default; no `crs` member). */
-export function toGeoJson(study, features) {
+export function toGeoJson(study: ExportStudy, features: JsonObject[]) {
   return {
     type: 'FeatureCollection',
     properties: { study: study.name, exported_at: new Date().toISOString() },
@@ -63,7 +78,7 @@ export function toGeoJson(study, features) {
         layer: feature.layer,
         kind: feature.kind,
         label: feature.label,
-        ...feature.properties,
+        ...featureProperties(feature),
       },
     })),
   };
@@ -71,34 +86,41 @@ export function toGeoJson(study, features) {
 
 // -- KML ------------------------------------------------------------------------
 
-const XML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' };
+const XML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&apos;',
+};
 
-function xmlEscape(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (ch) => XML_ESCAPES[ch]);
+function xmlEscape(value: string | number | boolean | null | undefined) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => XML_ESCAPES[ch] ?? ch);
 }
 
 /** `#rrggbb` → KML's `aabbggrr`, fully opaque. */
-function kmlColor(hex) {
+function kmlColor(hex: string) {
   const clean = hex.replace('#', '');
   const [r, g, b] = [clean.slice(0, 2), clean.slice(2, 4), clean.slice(4, 6)];
   return `ff${b}${g}${r}`;
 }
 
-function coordinatesText(points) {
+function coordinatesText(points: Position[]) {
   return points.map((point) => point.slice(0, 2).join(',')).join(' ');
 }
 
-function ringXml(points) {
+function ringXml(points: Position[]) {
   return `<LinearRing><coordinates>${coordinatesText(points)}</coordinates></LinearRing>`;
 }
 
-function polygonXml(rings) {
+function polygonXml(rings: Position[][]) {
   const [outer, ...holes] = rings;
   const inner = holes.map((hole) => `<innerBoundaryIs>${ringXml(hole)}</innerBoundaryIs>`).join('');
   return `<Polygon><outerBoundaryIs>${ringXml(outer)}</outerBoundaryIs>${inner}</Polygon>`;
 }
 
-function geometryXml(geometry) {
+function geometryXml(geometry: Geometry | null) {
+  if (!geometry) return '';
   switch (geometry.type) {
     case 'Point':
       return `<Point><coordinates>${coordinatesText([geometry.coordinates])}</coordinates></Point>`;
@@ -123,15 +145,20 @@ function geometryXml(geometry) {
   }
 }
 
-function extendedDataXml(properties) {
-  const entries: [string, unknown][] = [];
-  if (properties.sidc) entries.push(['sidc', properties.sidc]);
-  if (properties.graphic) entries.push(['graphic', properties.graphic]);
+/** A property value as KML text: scalars as-is, anything structured as JSON. */
+function propertyText(value: JsonObject[string]): string {
+  return typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
+}
+
+function extendedDataXml(properties: JsonObject) {
+  const entries: [string, string][] = [];
+  if (properties.sidc) entries.push(['sidc', propertyText(properties.sidc)]);
+  if (properties.graphic) entries.push(['graphic', propertyText(properties.graphic)]);
   if (properties.coa_id !== undefined && properties.coa_id !== null) {
-    entries.push(['coa_id', properties.coa_id]);
+    entries.push(['coa_id', propertyText(properties.coa_id)]);
   }
   if (Array.isArray(properties.radii) && properties.radii.length) {
-    entries.push(['radii', properties.radii.join(',')]);
+    entries.push(['radii', properties.radii.map(propertyText).join(',')]);
   }
   if (!entries.length) return '';
   const data = entries
@@ -143,7 +170,7 @@ function extendedDataXml(properties) {
   return `<ExtendedData>${data}</ExtendedData>`;
 }
 
-function styleXml(color) {
+function styleXml(color: string) {
   const kml = kmlColor(color);
   return (
     '<Style>' +
@@ -154,23 +181,26 @@ function styleXml(color) {
   );
 }
 
-function placemarkXml(feature) {
+function placemarkXml(feature: JsonObject) {
+  const label = typeof feature.label === 'string' ? feature.label : '';
   return (
     '<Placemark>' +
-    `<name>${xmlEscape(feature.label || feature.layer)}</name>` +
+    `<name>${xmlEscape(label || featureLayer(feature))}</name>` +
     styleXml(colorFor(feature)) +
-    extendedDataXml(feature.properties || {}) +
-    geometryXml(feature.geometry) +
+    extendedDataXml(featureProperties(feature)) +
+    geometryXml(readGeometry(feature.geometry)) +
     '</Placemark>'
   );
 }
 
 /** KML 2.2: one `<Folder>` per layer, in the order layers first appear. */
-export function toKml(study, features) {
-  const byLayer = new Map();
+export function toKml(study: ExportStudy, features: JsonObject[]) {
+  const byLayer = new Map<string, JsonObject[]>();
   for (const feature of features) {
-    if (!byLayer.has(feature.layer)) byLayer.set(feature.layer, []);
-    byLayer.get(feature.layer).push(feature);
+    const layer = featureLayer(feature);
+    const items = byLayer.get(layer) ?? [];
+    items.push(feature);
+    byLayer.set(layer, items);
   }
   const folders = [...byLayer.entries()]
     .map(

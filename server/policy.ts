@@ -52,7 +52,7 @@ export function isWhite(user: Actor | null | undefined) {
  * parsed a row) or the raw JSON text SQLite handed back — normalise either
  * to an array, defensively empty for anything else (missing column, NULL,
  * malformed text). */
-function releasableArray(releasableTo: ReleasableTo): string[] {
+export function releasableArray(releasableTo: ReleasableTo): string[] {
   if (Array.isArray(releasableTo)) return releasableTo;
   if (typeof releasableTo === 'string') {
     let parsed: Json;

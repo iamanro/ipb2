@@ -98,6 +98,11 @@ export async function readJson(request: IncomingMessage, limit = 1 << 20): Promi
   }
 }
 
+/** A body's fields: a non-object body reads as having none (each route validates its own). */
+export function fieldsOf(body: Json | undefined): JsonObject {
+  return isJsonObject(body) ? body : {};
+}
+
 /** A JSON request body that must be an object (every form-like route's body). */
 export async function readJsonObject(
   request: IncomingMessage,

@@ -31,6 +31,20 @@
  * than guessed away, since they are plausibly a weapon's own reach.
  */
 
+import type { DatabaseSync } from 'node:sqlite';
+
+import type { Json, JsonObject } from '../../../server/http.ts';
+import type { CardSection, showCard as ShowCard } from './db.ts';
+
+/** One drawable weapon range (C8). */
+export type RangeEntry = {
+  system: string;
+  kind: string;
+  min_m: number | null;
+  max_m: number | null;
+  raw: string;
+};
+
 const EXCLUDE_NAME = [
   // mechanical / angular motion, not distance
   /\btraverse\b/i,
@@ -101,12 +115,18 @@ const ROOT_PREFIX_EXCLUDE = /^(?:automotive|propulsion|radar)\b/i;
 const ROOT_EXACT_EXCLUDE = new Set(['communications', 'communication', 'performance']);
 
 /** True for a top-level section whose whole subtree is never a weapon range. */
-function isExcludedRoot(name) {
-  const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ');
+function isExcludedRoot(name: string | null) {
+  const normalized = (name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
   return ROOT_PREFIX_EXCLUDE.test(normalized) || ROOT_EXACT_EXCLUDE.has(normalized);
 }
 
-const UNIT_METERS = { m: 1, km: 1000 };
+const UNIT_METERS = { m: 1, km: 1000 } as const;
+
+/** A property cell as text: '' when empty, objects (never expected) as their JSON. */
+function scalarText(value: Json | undefined): string {
+  if (value === null || value === undefined) return '';
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
 
 const SKIP_VALUES = /^(?:ina|n\/?a|unk(?:nown)?|tbd|-+)$/i;
 
@@ -115,8 +135,11 @@ const SKIP_VALUES = /^(?:ina|n\/?a|unk(?:nown)?|tbd|-+)$/i;
  * text is not a distance: blank, "INA"/"N/A", or missing a recognizable unit
  * (only "m"/"km" are supported, matching the contract).
  */
-function parseDistance(rawValue, rawUnits) {
-  let text = String(rawValue ?? '').trim();
+function parseDistance(
+  rawValue: Json | undefined,
+  rawUnits: Json | undefined,
+): { min: number; max: number } | { single: number } | null {
+  let text = scalarText(rawValue).trim();
   if (!text || SKIP_VALUES.test(text)) return null;
 
   // Thousands separators: a comma immediately before a digit, e.g. "2,000".
@@ -125,15 +148,13 @@ function parseDistance(rawValue, rawUnits) {
   // A unit embedded in the value ("200-1,800m", "40 m") wins over the units
   // column, since it is specific to that exact figure and sometimes repeats
   // or overrides a column that describes a different property on the row.
-  let unit: string | null = null;
+  let unit: 'm' | 'km' | null = null;
   const embedded = /^(.*\d)\s*(km|m)$/i.exec(text);
   if (embedded) {
     text = embedded[1].trim();
-    unit = embedded[2].toLowerCase();
+    unit = embedded[2].toLowerCase() === 'km' ? 'km' : 'm';
   } else {
-    const column = String(rawUnits ?? '')
-      .trim()
-      .toLowerCase();
+    const column = scalarText(rawUnits).trim().toLowerCase();
     if (column === 'm' || column === 'km') unit = column;
   }
   if (!unit) return null;
@@ -154,7 +175,7 @@ const EFFECTIVE = /effective|engagement/i;
 const MINIMUM = /\bmin(?:imum)?\b/i;
 const MAXIMUM = /\bmax(?:imum)?\b/i;
 
-function classifyKind(name) {
+function classifyKind(name: string) {
   if (SIGHT.test(name)) return 'sight';
   if (EFFECTIVE.test(name)) return 'effective';
   if (MINIMUM.test(name)) return 'minimum';
@@ -168,11 +189,12 @@ function classifyKind(name) {
  * dedupes identical results (the same figure sometimes repeats verbatim
  * across sibling ammunition options in the source data).
  */
-export function parseRanges(rows) {
-  const seen = new Set();
-  const entries: any[] = [];
+export function parseRanges(rows: readonly (JsonObject | null)[] | null | undefined): RangeEntry[] {
+  const seen = new Set<string>();
+  const entries: RangeEntry[] = [];
   for (const row of rows ?? []) {
-    const name = row?.name;
+    if (!row) continue;
+    const name = row.name;
     if (typeof name !== 'string' || !/range/i.test(name)) continue;
     if (EXCLUDE_NAME.some((pattern) => pattern.test(name))) continue;
     const parsed = parseDistance(row.value, row.units);
@@ -185,15 +207,18 @@ export function parseRanges(rows) {
       // A lone figure is the envelope's minimum only when the name says so
       // ("Minimum Range"); otherwise it is the outer reach ("Maximum Range",
       // "Effective Range", "Range, Day Sight", or a bare "Range").
-      if (MINIMUM.test(name)) min_m = parsed.single ?? null;
-      else max_m = parsed.single ?? null;
+      if (MINIMUM.test(name)) min_m = parsed.single;
+      else max_m = parsed.single;
     } else {
       min_m = parsed.min;
       max_m = parsed.max;
     }
 
-    const raw = row.units ? `${row.value} ${row.units}`.trim() : String(row.value).trim();
-    const entry = { system: row.sectionPath ?? '', kind, min_m, max_m, raw };
+    const raw = row.units
+      ? `${scalarText(row.value)} ${scalarText(row.units)}`.trim()
+      : scalarText(row.value).trim();
+    const system = typeof row.sectionPath === 'string' ? row.sectionPath : '';
+    const entry: RangeEntry = { system, kind, min_m, max_m, raw };
     const key = JSON.stringify(entry);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -211,11 +236,11 @@ export function parseRanges(rows) {
  * specific exists there. Whole subtrees under an excluded root (see the
  * module doc comment) are skipped entirely.
  */
-function flattenSections(sections, ancestorPath, rows) {
+function flattenSections(sections: CardSection[], ancestorPath: string[], rows: JsonObject[]) {
   for (const section of sections) {
     if (ancestorPath.length === 0 && isExcludedRoot(section.name)) continue;
     const generic = section.name === 'System' && ancestorPath.length > 0;
-    const path = generic ? ancestorPath : [...ancestorPath, section.name];
+    const path = generic ? ancestorPath : [...ancestorPath, section.name ?? ''];
     for (const property of section.properties) {
       rows.push({
         sectionPath: path.join(' › '),
@@ -229,10 +254,14 @@ function flattenSections(sections, ancestorPath, rows) {
 }
 
 /** C8 entries for one card, or `null` if `showCard` found nothing. */
-export function cardRanges(showCard, database, identifier) {
+export function cardRanges(
+  showCard: typeof ShowCard,
+  database: DatabaseSync,
+  identifier: string,
+): RangeEntry[] | null {
   const card = showCard(database, identifier);
   if (!card) return null;
-  const rows: any[] = [];
+  const rows: JsonObject[] = [];
   flattenSections(card.sections, [], rows);
   return parseRanges(rows);
 }

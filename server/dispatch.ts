@@ -93,6 +93,21 @@ export function isItemRow(row: Row | null | undefined): row is ItemRow {
   );
 }
 
+// A route that declares `item`/`part` (or verb 'create') always gets it; these
+// say so to the checker, and fail loudly if a route table ever disagrees.
+export function requireItem(item: ItemRow | undefined): ItemRow {
+  if (!item) throw new Error('This route resolved no item; it must declare one.');
+  return item;
+}
+export function requirePart(part: Row | undefined): Row {
+  if (!part) throw new Error('This route resolved no part; it must declare one.');
+  return part;
+}
+export function requireOwner(owner: Owner | undefined): Owner {
+  if (!owner) throw new Error("Only a 'create' route gets an owner.");
+  return owner;
+}
+
 /** What a handler composes access with: bound to the requester, never exposing them. */
 export type Access = {
   white: boolean;
