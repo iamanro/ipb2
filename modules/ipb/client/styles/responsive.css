@@ -1,0 +1,200 @@
+/* IPB: narrower screens. */
+@layer responsive {
+  [data-module='ipb'] {
+    @media (max-width: 1280px) {
+      .workspace {
+        --sheet-l: calc(300px + 2 * var(--sheet-gap));
+        --sheet-r: calc(360px + 2 * var(--sheet-gap));
+      }
+
+      .control-panel {
+        width: 300px;
+      }
+
+      .detail-panel {
+        width: 360px;
+      }
+    }
+
+    /* Narrow: the sheets dock to the bottom half, one at a time (view.js
+     * closes the other); map chrome rides above whichever is open. */
+    @media (max-width: 980px) {
+      .workspace {
+        --sheet-l: var(--sheet-gap);
+        --sheet-r: var(--sheet-gap);
+        --chrome-b: calc(50% + var(--sheet-gap));
+
+        height: calc(100dvh - var(--masthead));
+      }
+
+      .workspace[data-tools='closed'][data-worksheet='closed'] {
+        --chrome-b: calc(var(--target) + 2 * var(--sheet-gap));
+      }
+
+      .control-panel,
+      .detail-panel {
+        align-self: end;
+        justify-self: stretch;
+        width: auto;
+        height: calc(50% - var(--sheet-gap));
+        max-height: none;
+        margin: 0 var(--sheet-gap) var(--sheet-gap);
+      }
+
+      .workspace[data-tools='closed'] .control-panel,
+      .workspace[data-worksheet='closed'] .detail-panel {
+        translate: 0 calc(100% + 2 * var(--sheet-gap));
+      }
+
+      /* The status bar holds the sheet toggles, so it must ride above a docked
+       * sheet rather than disappear under it. */
+      .status-bar {
+        bottom: var(--chrome-b);
+        transition: bottom var(--d-slow) var(--ease-out);
+      }
+
+      .workspace[data-tools='closed'][data-worksheet='closed'] .status-bar {
+        bottom: var(--sheet-gap);
+      }
+    }
+
+    @media print {
+      .control-panel,
+      .map-panel {
+        display: none;
+      }
+
+      .workspace {
+        display: block;
+        height: auto;
+      }
+
+      /* The worksheet sheet prints as the page, open or put away. */
+      .detail-panel {
+        width: auto;
+        max-height: none;
+        margin: 0;
+        overflow: visible;
+        border: 0;
+        padding: 0;
+        background: none;
+        backdrop-filter: none;
+        box-shadow: none;
+        translate: none;
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .worksheet-heading {
+        border-bottom-color: var(--ink);
+      }
+
+      .custom-layers-print {
+        display: block;
+        page-break-before: always;
+      }
+
+      .custom-layers-print h4 {
+        margin: 14px 0 6px;
+        border-left: 10px solid var(--chip);
+        padding-left: 6px;
+      }
+
+      /* overflow:auto containers (wide tables scroll on screen) corrupt
+         table layout when Chromium paginates them for print — columns
+         collapse and cells stack vertically instead of side by side. Print
+         has no scrolling anyway, so let content flow and shrink normally. */
+      .worksheet-block,
+      .event-matrix-wrap {
+        overflow: visible;
+      }
+
+      .step-section {
+        display: block !important;
+        break-inside: avoid;
+        page-break-before: always;
+      }
+
+      .step-section:first-of-type {
+        page-break-before: avoid;
+      }
+
+      .icon-button,
+      .row-menu-toggle,
+      #print-worksheet,
+      tr.add-row {
+        display: none !important;
+      }
+
+      .worksheet-heading {
+        display: block;
+      }
+
+      textarea,
+      .light-controls,
+      .note-field {
+        display: none;
+      }
+
+      .print-map {
+        display: block;
+        margin: 0 0 18px;
+        break-inside: avoid;
+      }
+
+      .print-map canvas {
+        display: block;
+        width: auto;
+        height: auto;
+        max-width: 100%;
+        /* A4 minus margins, masthead and worksheet heading leaves ~19 cm;
+           15 cm keeps map and caption on page 1 instead of pushing both to 2.
+           Both limits scale the canvas proportionally, so the frame hugs it. */
+        max-height: 15cm;
+        border: 1px solid var(--ink);
+      }
+
+      .print-map figcaption {
+        display: grid;
+        gap: 2px;
+        margin-top: 6px;
+        font: var(--t-xs) / 1.4 var(--data);
+      }
+
+      .print-map figcaption strong {
+        font-size: var(--t-sm);
+      }
+
+      .print-map figcaption small {
+        color: var(--muted);
+        font-size: 8px;
+      }
+
+      .print-copy {
+        display: block;
+        white-space: pre-wrap;
+        color: var(--ink);
+        font: var(--t-sm) / 1.6 var(--body);
+      }
+
+      .coa-card,
+      .feature-row,
+      .data-table:not(.event-matrix) {
+        break-inside: avoid;
+      }
+
+      /* The event matrix can span several pages (many COAs or indicators);
+         forcing break-inside: avoid on a table taller than one page is an
+         impossible constraint, and Chromium corrupts the footer row's
+         layout — columns collapse and stack — trying to honour it anyway.
+         Row-level avoidance is still safe and keeps a row from splitting. */
+      .event-matrix tr {
+        break-inside: avoid;
+      }
+
+      .status-cell {
+        cursor: default;
+      }
+    }
+  }
+}
