@@ -1,11 +1,36 @@
 import { DatabaseSync } from 'node:sqlite';
 
+import type { Json, JsonObject } from '../../../server/http.ts';
+import { scalarJson, text } from '../../../server/state.ts';
 import {
   METRES_PER_DEGREE_LATITUDE,
   latticeOver,
   longitudeScale,
   metresBetween,
+  type LonLat,
 } from './lattice.ts';
+
+/** Elevation (or slope) at a point; NaN outside the model. */
+export type ElevationFn = (lon: number, lat: number) => number;
+type ProfilePoint = { distance: number; lon: number; lat: number; elevation: number };
+type Post = LonLat & { ground: number; eye: number };
+export type ViewshedRequest = {
+  observers: LonLat[];
+  radiusMetres?: number;
+  observerHeight?: number;
+  targetHeight?: number;
+  cellMetres?: number;
+};
+type Analyses = ReturnType<typeof createAnalyses>;
+/** A plain or composite elevation model: one interface either way. */
+export type ElevationModel = Analyses & {
+  /** The `meta` table as stored; a composite adds the detail model's under `detail`. */
+  meta: JsonObject;
+  bounds: Json;
+  elevation: ElevationFn;
+  slopeDegrees: ElevationFn;
+  close(): void;
+};
 
 const TILE = 256;
 const DEFAULT_TILE_CACHE_LIMIT = 96;
@@ -17,7 +42,7 @@ const REFRACTION = 0.13;
  * less standard atmospheric refraction. Ignoring it overstates visibility by
  * tens of metres past ten kilometres.
  */
-function curvatureDrop(distance) {
+function curvatureDrop(distance: number) {
   return ((1 - REFRACTION) * distance * distance) / (2 * EARTH_RADIUS);
 }
 
@@ -27,7 +52,7 @@ function curvatureDrop(distance) {
  * own grid step and the composite's per-point step (its detail step where
  * the detail model has data, its base step otherwise).
  */
-function slopeFromElevation(elevation, step, lon, lat) {
+function slopeFromElevation(elevation: ElevationFn, step: number, lon: number, lat: number) {
   const west = elevation(lon - step, lat);
   const east = elevation(lon + step, lat);
   const south = elevation(lon, lat - step);
@@ -44,12 +69,16 @@ function slopeFromElevation(elevation, step, lon, lat) {
  * them for free by calling this on its own combined `elevation` — the
  * detail/base split is invisible past that point.
  */
-function createAnalyses(elevation) {
+function createAnalyses(elevation: ElevationFn) {
   /** Evenly spaced terrain profile between two points. */
-  function profile(from, to, { spacingMetres = 30 } = {}) {
+  function profile(
+    from: LonLat,
+    to: LonLat,
+    { spacingMetres = 30 }: { spacingMetres?: number } = {},
+  ) {
     const distance = metresBetween(from, to);
     const count = Math.min(Math.max(Math.round(distance / spacingMetres) + 1, 2), 2048);
-    const points: any[] = [];
+    const points: ProfilePoint[] = [];
     for (let index = 0; index < count; index += 1) {
       const t = index / (count - 1);
       const lon = from.lon + (to.lon - from.lon) * t;
@@ -69,8 +98,8 @@ function createAnalyses(elevation) {
    * blocking terrain is the first sample that rises above the sight line.
    */
   function lineOfSight(
-    from,
-    to,
+    from: LonLat,
+    to: LonLat,
     {
       observerHeight = 1.8,
       targetHeight = 1.8,
@@ -85,7 +114,7 @@ function createAnalyses(elevation) {
     }
     const eyeHeight = groundStart + observerHeight;
     const aimHeight = groundEnd + targetHeight - curvatureDrop(distance);
-    let blockedAt: any = null;
+    let blockedAt: number | null = null;
     let worstIntrusion = 0;
     const samples = points.map((point) => {
       const t = distance === 0 ? 0 : point.distance / distance;
@@ -128,8 +157,8 @@ function createAnalyses(elevation) {
     observerHeight = 1.8,
     targetHeight = 1.8,
     cellMetres = 50,
-  }) {
-    const posts = observers.map(({ lon, lat }) => {
+  }: ViewshedRequest) {
+    const posts = observers.map(({ lon, lat }): Post => {
       const ground = elevation(lon, lat);
       if (Number.isNaN(ground)) {
         throw new Error('An observer is outside the elevation model.');
@@ -155,7 +184,7 @@ function createAnalyses(elevation) {
     const stepMetres = Math.max(cell / 2, 15);
 
     /** Whether `post` sees the target cell `range` metres away at offset (dx, dy). */
-    function sees(post, dx, dy, range, targetGround) {
+    function sees(post: Post, dx: number, dy: number, range: number, targetGround: number) {
       if (range < cell) return true;
       const aim = targetGround + targetHeight - curvatureDrop(range);
       const steps = Math.max(Math.ceil(range / stepMetres), 2);
@@ -181,7 +210,7 @@ function createAnalyses(elevation) {
         const cellLon = grid.lon(column);
         let inRange = false;
         let seenBy = 0;
-        let targetGround: any = null;
+        let targetGround: number | null = null;
         for (const post of posts) {
           const dx = (cellLon - post.lon) * lonScale;
           const dy = (cellLat - post.lat) * METRES_PER_DEGREE_LATITUDE;
@@ -228,20 +257,23 @@ function createAnalyses(elevation) {
  * viewshed, close }`. Tile addressing, the LRU cache and bilinear interpolation
  * stay inside; metres and grids come from the metric plane in lattice.js.
  */
-export function openTerrain(file, { tileCacheLimit = DEFAULT_TILE_CACHE_LIMIT } = {}) {
+export function openTerrain(
+  file: string,
+  { tileCacheLimit = DEFAULT_TILE_CACHE_LIMIT }: { tileCacheLimit?: number } = {},
+): ElevationModel {
   const database = new DatabaseSync(file, { readOnly: true });
-  const meta = Object.fromEntries(
+  const meta: JsonObject = Object.fromEntries(
     database
       .prepare('SELECT key, value FROM meta')
       .all()
-      .map((row) => [row.key, row.value]),
+      .map((row) => [text(row, 'key'), scalarJson(row.value)]),
   );
   const cellsPerDegree = Number(meta.cells_per_degree || 3600);
-  const bounds = JSON.parse(meta.bounds || '[0,0,0,0]');
+  const bounds: Json = JSON.parse(typeof meta.bounds === 'string' ? meta.bounds : '[0,0,0,0]');
   const selectTile = database.prepare('SELECT grid FROM dem_tiles WHERE tx = ? AND ty = ?');
-  const cache = new Map();
+  const cache = new Map<number, Float32Array | null>();
 
-  function tileGrid(tx, ty) {
+  function tileGrid(tx: number, ty: number) {
     const key = tx * 100000 + ty;
     const cached = cache.get(key);
     if (cached !== undefined) {
@@ -256,12 +288,13 @@ export function openTerrain(file, { tileCacheLimit = DEFAULT_TILE_CACHE_LIMIT } 
         ? new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4)
         : null;
     cache.set(key, grid);
-    if (cache.size > tileCacheLimit) cache.delete(cache.keys().next().value);
+    const oldest = cache.keys().next().value;
+    if (cache.size > tileCacheLimit && oldest !== undefined) cache.delete(oldest);
     return grid;
   }
 
   /** Elevation of one grid cell, NaN when the cell is absent. */
-  function cellElevation(ix, iy) {
+  function cellElevation(ix: number, iy: number) {
     const tx = Math.floor(ix / TILE);
     const ty = Math.floor(iy / TILE);
     const grid = tileGrid(tx, ty);
@@ -270,7 +303,7 @@ export function openTerrain(file, { tileCacheLimit = DEFAULT_TILE_CACHE_LIMIT } 
   }
 
   /** Bilinear elevation in metres, NaN outside the built area. */
-  function elevation(lon, lat) {
+  function elevation(lon: number, lat: number) {
     const x = lon * cellsPerDegree - 0.5;
     const y = lat * cellsPerDegree - 0.5;
     const ix = Math.floor(x);
@@ -290,7 +323,7 @@ export function openTerrain(file, { tileCacheLimit = DEFAULT_TILE_CACHE_LIMIT } 
   }
 
   const step = 1 / cellsPerDegree;
-  const slopeDegrees = (lon, lat) => slopeFromElevation(elevation, step, lon, lat);
+  const slopeDegrees = (lon: number, lat: number) => slopeFromElevation(elevation, step, lon, lat);
 
   return {
     meta,
@@ -313,18 +346,22 @@ export function openTerrain(file, { tileCacheLimit = DEFAULT_TILE_CACHE_LIMIT } 
  * independently reopens just that one), and recomposes them here on every
  * request — composing is pointer-cheap, no data is copied.
  */
-export function openElevation(base, detail) {
-  if (!detail) return base;
+export function openElevation(
+  base: ElevationModel,
+  detailModel: ElevationModel | null,
+): ElevationModel {
+  if (!detailModel) return base;
+  const detail = detailModel;
   const detailStep = 1 / Number(detail.meta.cells_per_degree || 3600);
 
   /** Detail where it has data (including at its own ragged edge), base elsewhere. */
-  function elevation(lon, lat) {
+  function elevation(lon: number, lat: number) {
     const fine = detail.elevation(lon, lat);
     return Number.isNaN(fine) ? base.elevation(lon, lat) : fine;
   }
 
   /** Central differences at the detail spacing inside detail's coverage, the base spacing outside it. */
-  function slopeDegrees(lon, lat) {
+  function slopeDegrees(lon: number, lat: number) {
     if (!Number.isNaN(detail.elevation(lon, lat))) {
       return slopeFromElevation(elevation, detailStep, lon, lat);
     }

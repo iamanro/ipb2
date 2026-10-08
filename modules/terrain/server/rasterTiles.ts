@@ -1,6 +1,7 @@
 // Raster overlays rendered per web-mercator tile from the elevation model:
 // hillshade (Terrain basemap) and slope classes. Both need the terrain
 // gradient at every pixel, which `forEachGradient` provides.
+import type { ElevationFn } from './dem.ts';
 import { NO_GO, SLOW_GO } from './landcover.ts';
 import { LEGEND, NO_GO_SLOPE, SLOW_GO_SLOPE, slopeClass } from './mobility.ts';
 import { tileXToLon, tileYToLat } from './tiles.ts';
@@ -14,7 +15,14 @@ const MERCATOR_CIRCUMFERENCE = 40075016.686;
  * any neighbour lacks elevation data. `index` is the pixel's row-major index.
  * `elevation(lon, lat)` returns metres or NaN.
  */
-function forEachGradient(elevation, z, x, y, size, visit) {
+function forEachGradient(
+  elevation: ElevationFn,
+  z: number,
+  x: number,
+  y: number,
+  size: number,
+  visit: (index: number, dzdx: number, dzdy: number) => void,
+) {
   // Elevation at every pixel centre plus a one-pixel border, so each output
   // pixel has all four neighbours for central differences.
   const span = size + 2;
@@ -67,7 +75,13 @@ const HIGHLIGHT_ALPHA = 90;
  * slopes facing it translucent white, so the basemap's own colours survive.
  * Pixels without elevation data (outside the built area) are transparent.
  */
-export function renderHillshade(elevation, z, x, y, size = 256) {
+export function renderHillshade(
+  elevation: ElevationFn,
+  z: number,
+  x: number,
+  y: number,
+  size = 256,
+) {
   const rgba = new Uint8Array(size * size * 4);
   forEachGradient(elevation, z, x, y, size, (index, gx, gy) => {
     const dzdx = gx * VERTICAL_EXAGGERATION;
@@ -89,7 +103,7 @@ export function renderHillshade(elevation, z, x, y, size = 256) {
 
 // -- Slope classes ----------------------------------------------------------------
 
-function hexToRgb(hex) {
+function hexToRgb(hex: string): [number, number, number] {
   const value = Number.parseInt(hex.slice(1), 16);
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 }
@@ -123,7 +137,13 @@ const HATCH_WIDTH = 2;
  * their MCOO colours; GO ground and pixels without data stay transparent.
  * The hatch follows global pixel positions, so it continues across tiles.
  */
-export function renderSlopeClasses(elevation, z, x, y, size = 256) {
+export function renderSlopeClasses(
+  elevation: ElevationFn,
+  z: number,
+  x: number,
+  y: number,
+  size = 256,
+) {
   const rgba = new Uint8Array(size * size * 4);
   forEachGradient(elevation, z, x, y, size, (index, dzdx, dzdy) => {
     const hatch = SLOPE_HATCH.get(slopeClass((Math.atan(Math.hypot(dzdx, dzdy)) * 180) / Math.PI));

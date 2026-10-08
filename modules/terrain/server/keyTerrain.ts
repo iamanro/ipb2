@@ -1,9 +1,19 @@
-import { latticeOver } from './lattice.ts';
+import type { ElevationFn } from './dem.ts';
+import { latticeOver, type Bounds } from './lattice.ts';
+
+type Candidate = {
+  idx: number;
+  lon: number;
+  lat: number;
+  elevation: number;
+  prominence: number;
+  visibleAreaSquareKm?: number;
+};
 
 const MAX_CELLS = 250000;
 const EDGE_MARGIN_CELLS = 2;
 
-const NEIGHBOUR_OFFSETS = [
+const NEIGHBOUR_OFFSETS: [number, number][] = [
   [-1, -1],
   [-1, 0],
   [-1, 1],
@@ -15,7 +25,7 @@ const NEIGHBOUR_OFFSETS = [
 ];
 
 /** Union-find root with path compression. */
-function find(parent, x) {
+function find(parent: Int32Array, x: number) {
   while (parent[x] !== x) {
     parent[x] = parent[parent[x]];
     x = parent[x];
@@ -23,16 +33,16 @@ function find(parent, x) {
   return x;
 }
 
-function round1(value) {
+function round1(value: number) {
   return Math.round(value * 10) / 10;
 }
 
-function round6(value) {
+function round6(value: number) {
   return Math.round(value * 1e6) / 1e6;
 }
 
 /** Deterministic tie-break: elevation desc, then lon asc, then lat asc. */
-function compareTies(a, b) {
+function compareTies(a: Candidate, b: Candidate) {
   if (b.elevation !== a.elevation) return b.elevation - a.elevation;
   if (a.lon !== b.lon) return a.lon - b.lon;
   return a.lat - b.lat;
@@ -52,6 +62,14 @@ export function keyTerrainCandidates({
   minProminence = 30,
   limit = 8,
   visibleArea,
+}: {
+  elevation: ElevationFn;
+  bounds: Bounds;
+  cellMetres?: number;
+  minProminence?: number;
+  limit?: number;
+  /** Visible ground (km²) from a point, to re-rank the shortlist; optional. */
+  visibleArea?: (lon: number, lat: number) => number;
 }) {
   const grid = latticeOver(bounds, { cellMetres, maxCells: MAX_CELLS });
   const { width, height } = grid;
@@ -129,7 +147,7 @@ export function keyTerrainCandidates({
     if (Number.isNaN(prominenceOf[idx])) prominenceOf[idx] = peakElevOf[idx] - lowestFinite;
   }
 
-  const candidates: any[] = [];
+  const candidates: Candidate[] = [];
   for (let row = EDGE_MARGIN_CELLS; row < height - EDGE_MARGIN_CELLS; row += 1) {
     for (let col = EDGE_MARGIN_CELLS; col < width - EDGE_MARGIN_CELLS; col += 1) {
       const idx = row * width + col;
@@ -152,7 +170,9 @@ export function keyTerrainCandidates({
     for (const candidate of shortlist) {
       candidate.visibleAreaSquareKm = visibleArea(candidate.lon, candidate.lat);
     }
-    shortlist.sort((a, b) => b.visibleAreaSquareKm - a.visibleAreaSquareKm || compareTies(a, b));
+    shortlist.sort(
+      (a, b) => (b.visibleAreaSquareKm ?? 0) - (a.visibleAreaSquareKm ?? 0) || compareTies(a, b),
+    );
   }
 
   return shortlist.slice(0, limit).map((candidate) => ({
@@ -160,6 +180,6 @@ export function keyTerrainCandidates({
     lat: round6(candidate.lat),
     elevation: round1(candidate.elevation),
     prominence: round1(candidate.prominence),
-    visibleAreaSquareKm: visibleArea ? candidate.visibleAreaSquareKm : null,
+    visibleAreaSquareKm: visibleArea ? (candidate.visibleAreaSquareKm ?? null) : null,
   }));
 }

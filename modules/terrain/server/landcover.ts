@@ -1,8 +1,13 @@
-import { open } from 'node:fs/promises';
+import { open, type FileHandle } from 'node:fs/promises';
 
 import { VectorTile } from '@mapbox/vector-tile';
 import { PbfReader } from 'pbf';
 import { PMTiles } from 'pmtiles';
+
+import type { Bounds, Lattice } from './lattice.ts';
+
+export type Peak = { name: string; ele: number | null; lon: number; lat: number };
+type Position = number[];
 
 export const GO = 0;
 export const SLOW_GO = 1;
@@ -12,7 +17,10 @@ export const UNKNOWN = 255;
 const TILE_ZOOM = 14;
 
 /** Obstacle class contributed by one OpenMapTiles feature, or null to ignore. */
-export function coverClass(layerName, properties) {
+export function coverClass(
+  layerName: string,
+  properties: Record<string, number | string | boolean>,
+) {
   const kind = String(properties.class || properties.subclass || '');
   if (layerName === 'water') return kind === 'swimming_pool' ? null : NO_GO;
   if (layerName === 'waterway') {
@@ -39,11 +47,11 @@ export function coverClass(layerName, properties) {
 
 const LAYERS = ['water', 'waterway', 'building', 'landcover', 'landuse'];
 
-function tileRange(bounds, zoom) {
+function tileRange(bounds: Bounds, zoom: number) {
   const [west, south, east, north] = bounds;
   const scale = 2 ** zoom;
-  const toX = (lon) => Math.floor(((lon + 180) / 360) * scale);
-  const toY = (lat) => {
+  const toX = (lon: number) => Math.floor(((lon + 180) / 360) * scale);
+  const toY = (lat: number) => {
     const radians = (Math.min(Math.max(lat, -85.05), 85.05) * Math.PI) / 180;
     const y = (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
     return Math.floor(y * scale);
@@ -52,11 +60,11 @@ function tileRange(bounds, zoom) {
 }
 
 /** Local-file byte source for the PMTiles reader. */
-function fileSource(file) {
-  let handle: any = null;
+function fileSource(file: string) {
+  let handle: FileHandle | null = null;
   return {
     getKey: () => file,
-    async getBytes(offset, length) {
+    async getBytes(offset: number, length: number) {
       handle ??= await open(file, 'r');
       const buffer = Buffer.alloc(length);
       const { bytesRead } = await handle.read(buffer, 0, length, offset);
@@ -74,7 +82,7 @@ function fileSource(file) {
  * `place`), from its metadata, or [] when the file is missing or unreadable.
  * Lets the client offer only the labels the built basemap can actually draw.
  */
-export async function vectorLayerNames(file) {
+export async function vectorLayerNames(file: string): Promise<string[]> {
   const source = fileSource(file);
   try {
     const metadata = await new PMTiles(source).getMetadata();
@@ -82,7 +90,13 @@ export async function vectorLayerNames(file) {
       metadata && typeof metadata === 'object' && 'vector_layers' in metadata
         ? metadata.vector_layers
         : [];
-    return Array.isArray(layers) ? layers.map((layer) => layer.id) : [];
+    return Array.isArray(layers)
+      ? layers.flatMap((layer) =>
+          layer && typeof layer === 'object' && 'id' in layer && typeof layer.id === 'string'
+            ? [layer.id]
+            : [],
+        )
+      : [];
   } catch {
     return [];
   } finally {
@@ -97,11 +111,11 @@ const PEAK_ZOOM = 12;
  * Named peaks (`mountain_peak`) inside bounds from the vector basemap, as
  * `[{ name, ele, lon, lat }]`; [] when the archive has no peak layer.
  */
-export async function namedPeaks(file, bounds) {
+export async function namedPeaks(file: string, bounds: Bounds): Promise<Peak[]> {
   const source = fileSource(file);
   const archive = new PMTiles(source);
   const [west, south, east, north] = bounds;
-  const peaks: any[] = [];
+  const peaks: Peak[] = [];
   try {
     const range = tileRange(bounds, PEAK_ZOOM);
     for (let x = range.xMin; x <= range.xMax; x += 1) {
@@ -109,7 +123,8 @@ export async function namedPeaks(file, bounds) {
         const tile = await archive.getZxy(PEAK_ZOOM, x, y);
         if (!tile?.data) continue;
         const layer = new VectorTile(new PbfReader(new Uint8Array(tile.data))).layers.mountain_peak;
-        for (let index = 0; index < (layer?.length ?? 0); index += 1) {
+        if (!layer) continue;
+        for (let index = 0; index < layer.length; index += 1) {
           const feature = layer.feature(index);
           const { name, ele } = feature.properties;
           if (!name) continue;
@@ -135,29 +150,29 @@ export async function namedPeaks(file, bounds) {
  * per cell, row-major. Tile addressing, protobuf decoding and polygon filling
  * stay inside.
  */
-export function openLandcover(file) {
+export function openLandcover(file: string) {
   const source = fileSource(file);
   const archive = new PMTiles(source);
 
-  async function decodeTile(x, y) {
+  async function decodeTile(x: number, y: number) {
     const tile = await archive.getZxy(TILE_ZOOM, x, y);
     if (!tile?.data) return null;
     return new VectorTile(new PbfReader(new Uint8Array(tile.data)));
   }
 
-  async function classify(grid) {
+  async function classify(grid: Lattice) {
     const { width, height, column: toColumn, row: toRow } = grid;
     const values = new Uint8Array(width * height).fill(GO);
 
-    const mark = (index, cover) => {
+    const mark = (index: number, cover: number) => {
       if (values[index] < cover) values[index] = cover;
     };
 
-    const fillRing = (rings, cover) => {
+    const fillRing = (rings: Position[][], cover: number) => {
       // Even-odd scanline fill through cell centres.
       let minRow = Infinity;
       let maxRow = -Infinity;
-      const edges: any[] = [];
+      const edges: [{ x: number; y: number }, { x: number; y: number }][] = [];
       for (const ring of rings) {
         for (let index = 0; index < ring.length - 1; index += 1) {
           const a = { x: toColumn(ring[index][0]), y: toRow(ring[index][1]) };
@@ -173,7 +188,7 @@ export function openLandcover(file) {
       const rowEnd = Math.min(Math.ceil(maxRow), height - 1);
       for (let row = rowStart; row <= rowEnd; row += 1) {
         const y = row + 0.5;
-        const crossings: any[] = [];
+        const crossings: number[] = [];
         for (const [a, b] of edges) {
           if (y < Math.min(a.y, b.y) || y >= Math.max(a.y, b.y)) continue;
           crossings.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
@@ -187,7 +202,7 @@ export function openLandcover(file) {
       }
     };
 
-    const strokeLine = (line, cover) => {
+    const strokeLine = (line: Position[], cover: number) => {
       for (let index = 0; index < line.length - 1; index += 1) {
         const x0 = toColumn(line[index][0]);
         const y0 = toRow(line[index][1]);

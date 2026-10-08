@@ -1,16 +1,27 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+import type { ApiRequest } from '../../../server/api.ts';
+import type { ModuleSpec } from '../../../server/dispatch.ts';
+import { readGeometry } from '../../../server/geometry.ts';
 import {
   errorMessage,
+  fieldsOf,
   HttpError,
+  isJsonObject,
   numberParameter,
   sendBytes,
   serveFile,
+  type Json,
+  type JsonObject,
 } from '../../../server/http.ts';
+import type { ElevationModel } from './dem.ts';
+import { resultOf, type JobKind, type JobPayloads, type JobResults } from './jobs.ts';
 import { currentElevationModel, openElevationSource } from './elevationSource.ts';
 import { BASEMAP, ID, IMAGERY_DATABASE, ORTHO_DATABASE } from './paths.ts';
 import { SLOPE_LEGEND } from './rasterTiles.ts';
 import { openImagery } from './imagery.ts';
 import { namedPeaks, vectorLayerNames } from './landcover.ts';
-import { metresBetween } from './lattice.ts';
+import { metresBetween, type Bounds, type LonLat } from './lattice.ts';
 import { LEGEND } from './mobility.ts';
 import { createTerrainPool } from './pool.ts';
 import { referenceFile } from '../../../server/reference.ts';
@@ -40,7 +51,7 @@ const NAMED_PEAK_RADIUS = 400;
 /** Tile URLs carry the data's build time, so a rebuilt dataset gets new URLs. */
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
-function point(query, name) {
+function point(query: URLSearchParams, name: string): LonLat {
   const raw = query.get(name);
   const parts = (raw || '').split(',').map(Number);
   if (parts.length !== 2 || parts.some((value) => !Number.isFinite(value))) {
@@ -50,7 +61,7 @@ function point(query, name) {
 }
 
 /** `"lon,lat;lon,lat;…"` → `[{ lon, lat }]`, between 1 and `max` points. */
-function pointList(query, name, max) {
+function pointList(query: URLSearchParams, name: string, max: number): LonLat[] {
   const raw = (query.get(name) || '').split(';').filter(Boolean);
   if (!raw.length || raw.length > max) {
     throw new HttpError(
@@ -61,26 +72,41 @@ function pointList(query, name, max) {
   return raw.map((text) => point(new URLSearchParams({ [name]: text }), name));
 }
 
-function boundsParameter(query) {
+function boundsParameter(query: URLSearchParams): Bounds {
   const parts = (query.get('bounds') || '').split(',').map(Number);
   if (parts.length !== 4 || parts.some((value) => !Number.isFinite(value))) {
     throw new HttpError(400, 'The bounds must be "west,south,east,north".');
   }
   const [west, south, east, north] = parts;
   if (west >= east || south >= north) throw new HttpError(400, 'The bounds are inverted.');
-  return parts;
+  return [west, south, east, north];
 }
 
-function gridPayload(grid) {
+/** An analysis grid for JSON: its cell values as base64. */
+function gridPayload<G extends { values: Uint8Array }>(
+  grid: G,
+): Omit<G, 'values'> & { values: string } {
   const { values, ...rest } = grid;
   return { ...rest, values: Buffer.from(values).toString('base64') };
 }
 
+/** A text entry of a model's `meta` table ('' when absent). */
+function metaText(meta: JsonObject, key: string): string {
+  const value = meta[key];
+  return typeof value === 'string' ? value : '';
+}
+
+/** The detail model's `meta`, when the composite has one. */
+function detailMeta(model: ElevationModel): JsonObject | null {
+  return isJsonObject(model.meta.detail) ? model.meta.detail : null;
+}
+
 /** Version string for tile URLs and cache keys: both built_at times, so either rebuild busts them. */
-function elevationVersion(model) {
-  return model.meta.detail
-    ? `${model.meta.built_at}+${model.meta.detail.built_at}`
-    : model.meta.built_at;
+function elevationVersion(model: ElevationModel) {
+  const detail = detailMeta(model);
+  return detail
+    ? `${metaText(model.meta, 'built_at')}+${metaText(detail, 'built_at')}`
+    : metaText(model.meta, 'built_at');
 }
 
 // The main thread keeps its own elevation-model handle for cheap point
@@ -103,8 +129,8 @@ function elevationModel() {
 }
 
 /** `request.user?.name` set by the api middleware, or the client IP when signed out — the pool's fairness key. */
-function userKey(request) {
-  return request.user?.name || request.socket?.remoteAddress || 'unknown';
+function userKey(request: ApiRequest | null) {
+  return request?.user?.name || request?.socket.remoteAddress || 'unknown';
 }
 
 /**
@@ -113,7 +139,7 @@ function userKey(request) {
  * request is done (successfully or not) so a normal `close` after the
  * response is sent doesn't matter.
  */
-function abortSignal(request, response) {
+function abortSignal(request: IncomingMessage, response: ServerResponse) {
   const controller = new AbortController();
   const onClose = () => {
     if (!response.writableEnded) controller.abort();
@@ -128,13 +154,22 @@ function abortSignal(request, response) {
  * domain errors with the right HTTP status (see worker.js), so this just
  * forwards whatever `pool.submit` settles with.
  */
-async function poolJob(kind, payload, request, response) {
-  const { signal, dispose } = abortSignal(request, response);
+async function poolJob<K extends JobKind>(
+  kind: K,
+  payload: JobPayloads[K],
+  request: IncomingMessage | null,
+  response: ServerResponse | null,
+): Promise<JobResults[K]> {
+  // An internal call (no request) has no client to disconnect.
+  const cancel = request && response ? abortSignal(request, response) : null;
   try {
     pool ??= createTerrainPool();
-    return await pool.submit(kind, payload, { user: userKey(request), signal });
+    return resultOf(
+      kind,
+      await pool.submit(kind, payload, { user: userKey(request), signal: cancel?.signal }),
+    );
   } finally {
-    dispose();
+    cancel?.dispose();
   }
 }
 
@@ -144,9 +179,18 @@ async function poolJob(kind, payload, request, response) {
  * milliseconds and fills the shared tile cache, and `cachedTile` may have
  * handed this same render to other users' requests too.
  */
-function tileJob(kind, payload) {
+async function tileJob<K extends 'raster' | 'contour'>(
+  kind: K,
+  payload: JobPayloads[K],
+): Promise<Uint8Array> {
   pool ??= createTerrainPool();
-  return pool.submit(kind, payload, { lane: 'tile' });
+  return resultOf(kind, await pool.submit(kind, payload, { lane: 'tile' }));
+}
+
+/** The response a streaming route writes to; internal calls never reach these routes. */
+function needResponse(response: ServerResponse | null): ServerResponse {
+  if (!response) throw new Error('This route streams to a response.');
+  return response;
 }
 
 /** The satellite archive, or null until tools/build_satellite.mjs has run. */
@@ -160,7 +204,7 @@ function orthoArchive() {
 }
 
 /** `{ z, x, y }` (numbers) from a tile route's named capture groups. */
-function tileAddress(params) {
+function tileAddress(params: Record<string, string>) {
   const z = Number(params.z);
   const x = Number(params.x);
   const y = Number(params.y);
@@ -169,20 +213,21 @@ function tileAddress(params) {
 }
 
 /** Encoded tiles generated on request, least recently used evicted first. */
-const tileCache = new Map();
+const tileCache = new Map<string, Promise<Uint8Array>>();
 
 /**
  * Caches `render()`'s (a promise, backed by a pool job) result under `key`,
  * least-recently-used evicted first. Concurrent requests for the same
  * missing key share one in-flight promise instead of rendering twice.
  */
-async function cachedTile(key, render) {
+async function cachedTile(key: string, render: () => Promise<Uint8Array>): Promise<Uint8Array> {
   let pending = tileCache.get(key);
   if (pending) {
     tileCache.delete(key);
   } else {
     pending = render();
-    if (tileCache.size >= TILE_CACHE_LIMIT) tileCache.delete(tileCache.keys().next().value);
+    const oldest = tileCache.keys().next().value;
+    if (tileCache.size >= TILE_CACHE_LIMIT && oldest !== undefined) tileCache.delete(oldest);
   }
   tileCache.set(key, pending);
   try {
@@ -209,7 +254,9 @@ export default {
       path: VECTOR_TILES,
       verb: 'none',
       handler: async ({ request, response }) => {
-        await serveFile(request, response, BASEMAP, 'application/octet-stream');
+        if (!request) throw new Error('The basemap streams to a request.');
+        await serveFile(request, needResponse(response), BASEMAP, 'application/octet-stream');
+        return undefined;
       },
     },
     {
@@ -217,17 +264,19 @@ export default {
       path: RASTER_TILE,
       verb: 'none',
       handler: async ({ params, response }) => {
-        const { kind } = params;
+        // RASTER_TILE only matches these two.
+        const kind = params.kind === 'slope' ? 'slope' : 'hillshade';
         const { z, x, y } = tileAddress(params);
         const model = elevationModel();
-        const maxZoom = model.meta.detail ? DETAIL_RASTER_MAX_ZOOM : RASTER_MAX_ZOOM;
+        const maxZoom = detailMeta(model) ? DETAIL_RASTER_MAX_ZOOM : RASTER_MAX_ZOOM;
         if (z < RASTER_MIN_ZOOM || z > maxZoom) {
           throw new HttpError(404, `No ${kind} tiles at this zoom.`);
         }
         const png = await cachedTile(`${elevationVersion(model)}/${kind}/${z}/${x}/${y}`, () =>
           tileJob('raster', { renderer: kind, z, x, y }),
         );
-        sendBytes(response, png, 'image/png', IMMUTABLE);
+        sendBytes(needResponse(response), png, 'image/png', IMMUTABLE);
+        return undefined;
       },
     },
     {
@@ -237,14 +286,15 @@ export default {
       handler: async ({ params, response }) => {
         const { z, x, y } = tileAddress(params);
         const model = elevationModel();
-        const maxZoom = model.meta.detail ? DETAIL_CONTOUR_MAX_ZOOM : CONTOUR_MAX_ZOOM;
+        const maxZoom = detailMeta(model) ? DETAIL_CONTOUR_MAX_ZOOM : CONTOUR_MAX_ZOOM;
         if (z < CONTOUR_MIN_ZOOM || z > maxZoom) {
           throw new HttpError(404, 'No contours at this zoom.');
         }
         const json = await cachedTile(`${elevationVersion(model)}/contours/${z}/${x}/${y}`, () =>
           tileJob('contour', { z, x, y }),
         );
-        sendBytes(response, json, 'application/geo+json', IMMUTABLE);
+        sendBytes(needResponse(response), json, 'application/geo+json', IMMUTABLE);
+        return undefined;
       },
     },
     {
@@ -262,7 +312,8 @@ export default {
         const { z, x, y } = tileAddress(params);
         const tile = archive.tile(z, x, y);
         if (!tile) throw new HttpError(404, 'No imagery tile here.');
-        sendBytes(response, tile, 'image/jpeg', IMMUTABLE);
+        sendBytes(needResponse(response), tile, 'image/jpeg', IMMUTABLE);
+        return undefined;
       },
     },
     {
@@ -280,7 +331,8 @@ export default {
         const { z, x, y } = tileAddress(params);
         const tile = archive.tile(z, x, y);
         if (!tile) throw new HttpError(404, 'No imagery tile here.');
-        sendBytes(response, tile, 'image/jpeg', IMMUTABLE);
+        sendBytes(needResponse(response), tile, 'image/jpeg', IMMUTABLE);
+        return undefined;
       },
     },
     {
@@ -291,10 +343,14 @@ export default {
         const model = elevationModel();
         const archive = imageryArchive();
         const orthoImagery = orthoArchive();
-        const version = (value) => `?v=${encodeURIComponent(value ?? '')}`;
+        const version = (value: string | null) => `?v=${encodeURIComponent(value ?? '')}`;
         const elevationTileVersion = version(elevationVersion(model));
-        const rasterMaxZoom = model.meta.detail ? DETAIL_RASTER_MAX_ZOOM : RASTER_MAX_ZOOM;
-        const contourMaxZoom = model.meta.detail ? DETAIL_CONTOUR_MAX_ZOOM : CONTOUR_MAX_ZOOM;
+        const detail = detailMeta(model);
+        const rasterMaxZoom = detail ? DETAIL_RASTER_MAX_ZOOM : RASTER_MAX_ZOOM;
+        const contourMaxZoom = detail ? DETAIL_CONTOUR_MAX_ZOOM : CONTOUR_MAX_ZOOM;
+        const detailBounds: Json = detail
+          ? JSON.parse(metaText(detail, 'bounds') || '[0,0,0,0]')
+          : null;
         return {
           elevation: {
             dataset: model.meta.dataset,
@@ -302,12 +358,12 @@ export default {
             verticalDatum: model.meta.vertical_datum,
             attribution: model.meta.attribution,
             builtAt: model.meta.built_at,
-            detail: model.meta.detail
+            detail: detail
               ? {
-                  dataset: model.meta.detail.dataset,
-                  bounds: JSON.parse(model.meta.detail.bounds || '[0,0,0,0]'),
-                  cellsPerDegree: Number(model.meta.detail.cells_per_degree),
-                  builtAt: model.meta.detail.built_at,
+                  dataset: detail.dataset,
+                  bounds: detailBounds,
+                  cellsPerDegree: Number(detail.cells_per_degree),
+                  builtAt: detail.built_at,
                 }
               : null,
           },
@@ -372,7 +428,7 @@ export default {
       role: 'observer',
       changes: false,
       handler: ({ body, request, response }) =>
-        poolJob('extremes', { area: body?.area }, request, response),
+        poolJob('extremes', { area: readGeometry(fieldsOf(body).area) }, request, response),
     },
     {
       method: 'GET',
@@ -486,4 +542,4 @@ export default {
       },
     },
   ],
-};
+} satisfies ModuleSpec;

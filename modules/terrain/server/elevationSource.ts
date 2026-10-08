@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 
 import { HttpError } from '../../../server/http.ts';
 import { referenceFile } from '../../../server/reference.ts';
-import { openElevation, openTerrain } from './dem.ts';
+import { openElevation, openTerrain, type ElevationModel } from './dem.ts';
 import { DETAIL_DATABASE, DETAIL_TILE_CACHE_LIMIT, ELEVATION_DATABASE } from './paths.ts';
 
 /**
@@ -25,8 +25,8 @@ export function openElevationSource() {
 }
 
 /** The current elevation model, or a 503 `HttpError` while none is built. */
-export function currentElevationModel(source) {
-  let model;
+export function currentElevationModel(source: ReturnType<typeof openElevationSource>) {
+  let model: ElevationModel | null;
   try {
     model = source.get();
   } catch {

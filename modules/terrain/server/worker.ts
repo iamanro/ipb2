@@ -10,6 +10,7 @@ import { contourTile } from './contours.ts';
 import { suggestAvenues } from './corridors.ts';
 import { currentElevationModel, openElevationSource } from './elevationSource.ts';
 import { elevationExtremes } from './extremes.ts';
+import type { JobKind, JobRequest, JobResult, WorkerReply } from './jobs.ts';
 import { keyTerrainCandidates } from './keyTerrain.ts';
 import { mobilityOverlay } from './mobility.ts';
 import { BASEMAP } from './paths.ts';
@@ -24,7 +25,7 @@ const source = openElevationSource();
  * each job kind — mirrors the try/catch that used to sit in routes.js right
  * next to each analysis call.
  */
-const DEFAULT_ERROR_STATUS = {
+const DEFAULT_ERROR_STATUS: Record<JobKind, number> = {
   viewshed: 422,
   extremes: 422,
   avenues: 422,
@@ -35,45 +36,53 @@ const DEFAULT_ERROR_STATUS = {
 };
 
 /** A `Uint8Array` over its own, un-pooled `ArrayBuffer`, safe to hand to `postMessage`'s transfer list. */
-function ownBytes(bytes) {
-  if (bytes.byteOffset === 0 && bytes.buffer.byteLength === bytes.byteLength) {
-    return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes.buffer);
+function ownBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (
+    bytes.byteOffset === 0 &&
+    bytes.buffer instanceof ArrayBuffer &&
+    bytes.buffer.byteLength === bytes.byteLength
+  ) {
+    return new Uint8Array(bytes.buffer);
   }
   return new Uint8Array(bytes); // copies out of a shared/offset buffer (e.g. Node's small-Buffer pool)
 }
 
 /** ArrayBuffers inside `result` that are safe and worthwhile to transfer instead of structured-cloning. */
-function transferablesOf(result) {
-  if (result instanceof Uint8Array) return [result.buffer];
-  if (result?.values instanceof Uint8Array) return [result.values.buffer];
-  return [];
+function transferablesOf(result: JobResult): ArrayBuffer[] {
+  const bytes =
+    result instanceof Uint8Array
+      ? result
+      : !Array.isArray(result) && 'values' in result
+        ? result.values
+        : null;
+  return bytes && bytes.buffer instanceof ArrayBuffer ? [bytes.buffer] : [];
 }
 
-async function runJob(kind, payload) {
-  switch (kind) {
+async function runJob(job: JobRequest): Promise<JobResult> {
+  switch (job.kind) {
     case 'raster': {
       const model = currentElevationModel(source);
-      const { renderer, z, x, y } = payload;
+      const { renderer, z, x, y } = job.payload;
       const pixels = RASTER_RENDERERS[renderer](model.elevation, z, x, y);
       return ownBytes(encodePng(256, 256, pixels));
     }
     case 'contour': {
       const model = currentElevationModel(source);
-      const { z, x, y } = payload;
+      const { z, x, y } = job.payload;
       return ownBytes(Buffer.from(JSON.stringify(contourTile(model.elevation, z, x, y))));
     }
     case 'viewshed': {
       const model = currentElevationModel(source);
-      return model.viewshed(payload);
+      return model.viewshed(job.payload);
     }
     case 'extremes': {
       const model = currentElevationModel(source);
-      return elevationExtremes(model.elevation, payload.area);
+      return elevationExtremes(model.elevation, job.payload.area);
     }
     case 'key-terrain': {
       const model = currentElevationModel(source);
-      const { bounds, minProminence, limit, radiusMetres } = payload;
-      const visibleArea = (lon, lat) => {
+      const { bounds, minProminence, limit, radiusMetres } = job.payload;
+      const visibleArea = (lon: number, lat: number) => {
         const grid = model.viewshed({ observers: [{ lon, lat }], radiusMetres, cellMetres: 100 });
         return (grid.visibleCells * grid.cellMetres ** 2) / 1e6;
       };
@@ -90,8 +99,8 @@ async function runJob(kind, payload) {
       return mobilityOverlay({
         terrain: model,
         basemapFile: BASEMAP,
-        bounds: payload.bounds,
-        cellMetres: payload.cellMetres,
+        bounds: job.payload.bounds,
+        cellMetres: job.payload.cellMetres,
       });
     }
     case 'avenues': {
@@ -99,13 +108,13 @@ async function runJob(kind, payload) {
       const grid = await mobilityOverlay({
         terrain: model,
         basemapFile: BASEMAP,
-        bounds: payload.bounds,
-        cellMetres: payload.cellMetres,
+        bounds: job.payload.bounds,
+        cellMetres: job.payload.cellMetres,
       });
-      return suggestAvenues(grid, payload.avenues);
+      return suggestAvenues(grid, job.payload.avenues);
     }
     default:
-      throw new HttpError(400, `Unknown terrain job kind "${kind}".`);
+      throw new HttpError(400, 'Unknown terrain job kind.');
   }
 }
 
@@ -113,13 +122,16 @@ async function runJob(kind, payload) {
 if (!port) throw new Error('This file runs only as a worker thread.');
 const parentPort = port;
 
-parentPort.on('message', async ({ id, kind, payload }) => {
+parentPort.on('message', async (job: JobRequest) => {
+  const { id, kind } = job;
+  const reply = (message: WorkerReply, transfer: ArrayBuffer[] = []) =>
+    parentPort.postMessage(message, transfer);
   try {
-    const result = await runJob(kind, payload);
-    parentPort.postMessage({ id, ok: true, result }, transferablesOf(result));
+    const result = await runJob(job);
+    reply({ id, ok: true, result }, transferablesOf(result));
   } catch (error) {
     const status = error instanceof HttpError ? error.status : DEFAULT_ERROR_STATUS[kind] || 500;
-    parentPort.postMessage({
+    reply({
       id,
       ok: false,
       status,

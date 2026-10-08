@@ -1,7 +1,11 @@
+import type { Geometry, Position } from '../../../server/geometry.ts';
+import type { ElevationFn } from './dem.ts';
 import { latticeOver } from './lattice.ts';
 
+type Spot = { lon: number; lat: number; elevation: number };
+
 /** Even-odd ray casting over every ring, so holes count as outside. */
-export function insidePolygon(lon, lat, rings) {
+export function insidePolygon(lon: number, lat: number, rings: Position[][]) {
   let inside = false;
   for (const ring of rings) {
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
@@ -23,8 +27,12 @@ export function insidePolygon(lon, lat, rings) {
  * Returns `{ cellMetres, highest, lowest }`, each `{ lon, lat, elevation }`
  * or null when the polygon has no data.
  */
-export function elevationExtremes(elevation, geometry, { maxSamples = 250_000 } = {}) {
-  let polygons;
+export function elevationExtremes(
+  elevation: ElevationFn,
+  geometry: Geometry | null | undefined,
+  { maxSamples = 250_000 }: { maxSamples?: number } = {},
+) {
+  let polygons: Position[][][];
   if (geometry?.type === 'Polygon') polygons = [geometry.coordinates];
   else if (geometry?.type === 'MultiPolygon') polygons = geometry.coordinates;
   else throw new Error('The area must be a GeoJSON Polygon or MultiPolygon.');
@@ -43,8 +51,8 @@ export function elevationExtremes(elevation, geometry, { maxSamples = 250_000 } 
 
   const grid = latticeOver([west, south, east, north], { cellMetres: 30, maxCells: maxSamples });
 
-  let highest: any = null;
-  let lowest: any = null;
+  let highest: Spot | null = null;
+  let lowest: Spot | null = null;
   for (let row = 0; row < grid.height; row += 1) {
     const lat = grid.lat(row);
     for (let column = 0; column < grid.width; column += 1) {

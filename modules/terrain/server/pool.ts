@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { HttpError } from '../../../server/http.ts';
+import type { JobPayload, JobResult, WorkerReply } from './jobs.ts';
 
 const WORKER_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'worker.ts');
 
@@ -56,15 +57,15 @@ type Slot = { worker: Worker; index: number; job: Job | null; terminating: boole
 type Job = {
   id: number;
   kind: string;
-  payload: unknown;
+  payload: JobPayload;
   user: string;
   tile: boolean;
   queued: boolean;
   slot: Slot | null;
   settled: boolean;
   // Replaced by the promise's own settle functions as soon as the job is made.
-  resolve: (value: unknown) => void;
-  reject: (error: unknown) => void;
+  resolve: (value: JobResult) => void;
+  reject: (error: Error) => void;
 };
 
 export function createTerrainPool({
@@ -82,26 +83,26 @@ export function createTerrainPool({
   let nextId = 1;
   let closed = false;
 
-  function spawn(index) {
+  function spawn(index: number) {
     const worker = new Worker(workerFile);
     const slot: Slot = { worker, index, job: null, terminating: false };
-    worker.on('message', (message) => onMessage(slot, message));
-    worker.on('error', (error) => onCrash(slot, error));
-    worker.on('exit', (code) => onExit(slot, code));
+    worker.on('message', (message: WorkerReply) => onMessage(slot, message));
+    worker.on('error', (error: Error) => onCrash(slot, error));
+    worker.on('exit', (code: number) => onExit(slot, code));
     slots[index] = slot;
     return slot;
   }
 
   for (let index = 0; index < poolSize; index += 1) spawn(index);
 
-  function releaseUser(job) {
+  function releaseUser(job: Job) {
     const set = byUser.get(job.user);
     if (!set) return;
     set.delete(job);
     if (set.size === 0) byUser.delete(job.user);
   }
 
-  function onMessage(slot, message) {
+  function onMessage(slot: Slot, message: WorkerReply) {
     const job = slot.job;
     if (!job || job.id !== message.id) return; // stale message from a job we already gave up on
     slot.job = null;
@@ -114,7 +115,7 @@ export function createTerrainPool({
     pump();
   }
 
-  function onCrash(slot, error) {
+  function onCrash(slot: Slot, error: Error) {
     const job = slot.job;
     slot.job = null;
     if (!slot.terminating && !closed) spawn(slot.index);
@@ -125,12 +126,12 @@ export function createTerrainPool({
     pump();
   }
 
-  function onExit(slot, code) {
+  function onExit(slot: Slot, code: number) {
     if (slot.terminating || closed) return; // an intentional terminate(), already handled elsewhere
     if (code !== 0) onCrash(slot, new Error(`worker exited with code ${code}`));
   }
 
-  function dispatch(slot, job) {
+  function dispatch(slot: Slot, job: Job) {
     job.queued = false;
     slot.job = job;
     slot.worker.postMessage({ id: job.id, kind: job.kind, payload: job.payload });
@@ -160,7 +161,7 @@ export function createTerrainPool({
     }
   }
 
-  function cancel(job) {
+  function cancel(job: Job) {
     if (job.settled) return;
     if (job.queued) {
       const lane = job.tile ? tileQueue : queue;
@@ -192,7 +193,7 @@ export function createTerrainPool({
    */
   function submit(
     kind: string,
-    payload: unknown,
+    payload: JobPayload,
     {
       user,
       signal,
@@ -232,8 +233,7 @@ export function createTerrainPool({
       jobs.add(job);
     }
 
-    // A worker's result is whatever it posted back: untyped, like any message.
-    const promise = new Promise<any>((resolve, reject) => {
+    const promise = new Promise<JobResult>((resolve, reject) => {
       job.resolve = (value) => {
         if (job.settled) return;
         job.settled = true;

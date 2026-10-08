@@ -1,10 +1,31 @@
 import { GO, NO_GO, SLOW_GO, UNKNOWN } from './landcover.ts';
-import { METRES_PER_DEGREE_LATITUDE, latticeOf, longitudeScale, metresBetween } from './lattice.ts';
+import {
+  METRES_PER_DEGREE_LATITUDE,
+  latticeOf,
+  longitudeScale,
+  metresBetween,
+  type Bounds,
+  type Lattice,
+  type LonLat,
+} from './lattice.ts';
+
+/** The MCOO grid avenues are routed over: obstacle class per cell. */
+type ObstacleGrid = {
+  extent: Bounds;
+  width: number;
+  height: number;
+  cellMetres: number;
+  values: Uint8Array;
+};
+type RoutingGrid = Lattice & { values: Uint8Array };
+type PlanePoint = { x: number; y: number };
+export type AvenueRequest = { from: LonLat; to: LonLat; corridorWidth: number; count?: number };
+type Route = ReturnType<typeof buildRoute>;
 
 const BLOCK_SENTINEL = 1e9; // finite stand-in for "far from any obstacle" in the EDT pass
 
 /** Per-metre movement cost for one obstacle class; only GO/SLOW-GO cells are ever traversable. */
-function costPerMetre(cls) {
+function costPerMetre(cls: number) {
   return cls === SLOW_GO ? 4 : 1;
 }
 
@@ -13,7 +34,7 @@ function costPerMetre(cls) {
  * twice (columns then rows) to build a full 2-D Euclidean distance transform.
  * `f[i]` is 0 at a source and `BLOCK_SENTINEL` elsewhere.
  */
-function edt1d(f, n, out, stride, offset) {
+function edt1d(f: Float64Array, n: number, out: Float64Array, stride: number, offset: number) {
   const v = new Int32Array(n);
   const z = new Float64Array(n + 1);
   let k = 0;
@@ -21,7 +42,7 @@ function edt1d(f, n, out, stride, offset) {
   z[0] = -Infinity;
   z[1] = Infinity;
   for (let q = 1; q < n; q += 1) {
-    let s;
+    let s = 0;
     for (;;) {
       const fv = f[v[k]] + v[k] * v[k];
       s = (f[q] + q * q - fv) / (2 * q - 2 * v[k]);
@@ -49,7 +70,7 @@ function edt1d(f, n, out, stride, offset) {
  * blocking (NO_GO or UNKNOWN) cell. The AOI edge is not itself an obstacle,
  * so unblocked cells never see a bound imposed by the grid boundary.
  */
-function distanceTransform(values, width, height) {
+function distanceTransform(values: Uint8Array, width: number, height: number) {
   const squared = new Float64Array(width * height);
   const column = new Float64Array(height);
   for (let c = 0; c < width; c += 1) {
@@ -70,11 +91,11 @@ function distanceTransform(values, width, height) {
 }
 
 /** Binary min-heap over parallel typed arrays; avoids per-node allocation. */
-function makeHeap(capacity) {
+function makeHeap(capacity: number) {
   const nodes = new Int32Array(capacity);
   const costs = new Float64Array(capacity);
   let size = 0;
-  function push(node, cost) {
+  function push(node: number, cost: number) {
     let i = size;
     size += 1;
     nodes[i] = node;
@@ -110,7 +131,7 @@ function makeHeap(capacity) {
   return { push, pop, isEmpty: () => size === 0 };
 }
 
-const NEIGHBOURS = [
+const NEIGHBOURS: [number, number, number][] = [
   [-1, 0, 1],
   [1, 0, 1],
   [0, -1, 1],
@@ -126,7 +147,13 @@ const NEIGHBOURS = [
  * penalise cells already used by an accepted route so the next search finds
  * a genuinely different corridor. Returns an array of node indices, or null.
  */
-function astar(grid, traversable, startNode, goalNode, costMultiplier) {
+function astar(
+  grid: RoutingGrid,
+  traversable: Uint8Array,
+  startNode: number,
+  goalNode: number,
+  costMultiplier: Float64Array,
+): number[] | null {
   const { width, height, cellMetres, values } = grid;
   const total = width * height;
   const goalRow = Math.floor(goalNode / width);
@@ -140,7 +167,7 @@ function astar(grid, traversable, startNode, goalNode, costMultiplier) {
   const startCol = startNode % width;
   heap.push(startNode, heuristic(startRow, startCol, goalRow, goalCol, cellMetres));
 
-  function heuristic(r, c, gr, gc, cellSize) {
+  function heuristic(r: number, c: number, gr: number, gc: number, cellSize: number) {
     return Math.hypot(r - gr, c - gc) * cellSize;
   }
 
@@ -183,12 +210,17 @@ function astar(grid, traversable, startNode, goalNode, costMultiplier) {
 }
 
 /** Cell-centre longitude/latitude for a node index. */
-function cellCentre(grid, node) {
+function cellCentre(grid: RoutingGrid, node: number): LonLat {
   return { lon: grid.lon(node % grid.width), lat: grid.lat(Math.floor(node / grid.width)) };
 }
 
 /** Nearest traversable cell to a lon/lat, within `maxMetres`; null if none qualifies. */
-function snapToTraversable(grid, traversable, point, maxMetres) {
+function snapToTraversable(
+  grid: RoutingGrid,
+  traversable: Uint8Array,
+  point: LonLat,
+  maxMetres: number,
+): number | null {
   const { width, height, cellMetres } = grid;
   const col = grid.column(point.lon);
   const row = grid.row(point.lat);
@@ -216,14 +248,14 @@ function snapToTraversable(grid, traversable, point, maxMetres) {
 }
 
 /** Local planar metres for perpendicular-distance math in Douglas-Peucker. */
-function toLocalMetres(point, originLat) {
+function toLocalMetres(point: LonLat, originLat: number): PlanePoint {
   return {
     x: point.lon * longitudeScale(originLat),
     y: point.lat * METRES_PER_DEGREE_LATITUDE,
   };
 }
 
-function perpendicularDistance(point, a, b) {
+function perpendicularDistance(point: PlanePoint, a: PlanePoint, b: PlanePoint) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const lengthSquared = dx * dx + dy * dy;
@@ -236,7 +268,7 @@ function perpendicularDistance(point, a, b) {
 }
 
 /** Douglas-Peucker simplification, always keeping the first and last points. */
-function simplify(points, tolerance) {
+function simplify(points: LonLat[], tolerance: number): LonLat[] {
   if (points.length <= 2) return points;
   const originLat = points[0].lat;
   const local = points.map((p) => toLocalMetres(p, originLat));
@@ -264,7 +296,7 @@ function simplify(points, tolerance) {
 }
 
 /** Marks cells within `radiusMetres` of any point on `path` (node indices) as `1`. */
-function markCorridor(grid, path, radiusMetres, mask) {
+function markCorridor(grid: RoutingGrid, path: number[], radiusMetres: number, mask: Uint8Array) {
   const { width, height, cellMetres } = grid;
   const radiusCells = Math.max(1, Math.round(radiusMetres / cellMetres));
   for (const node of path) {
@@ -282,7 +314,7 @@ function markCorridor(grid, path, radiusMetres, mask) {
   }
 }
 
-function withinExtent(grid, point) {
+function withinExtent(grid: ObstacleGrid, point: LonLat) {
   const [west, south, east, north] = grid.extent;
   return point.lon >= west && point.lon <= east && point.lat >= south && point.lat <= north;
 }
@@ -292,12 +324,15 @@ function withinExtent(grid, point) {
  * over the MCOO grid so a unit of frontage `corridorWidth` metres fits
  * through every cell it uses. Best (cheapest) route first.
  */
-export function suggestAvenues(grid, { from, to, corridorWidth, count = 3 }) {
+export function suggestAvenues(
+  grid: ObstacleGrid,
+  { from, to, corridorWidth, count = 3 }: AvenueRequest,
+) {
   if (!withinExtent(grid, from)) throw new Error('The start point is outside the AOI.');
   if (!withinExtent(grid, to)) throw new Error('The objective is outside the AOI.');
 
   const { width, height, values, cellMetres } = grid;
-  const fullGrid = { ...latticeOf(grid), values };
+  const fullGrid: RoutingGrid = { ...latticeOf(grid), values };
 
   const squaredCellDist = distanceTransform(values, width, height);
   const traversable = new Uint8Array(width * height);
@@ -318,7 +353,7 @@ export function suggestAvenues(grid, { from, to, corridorWidth, count = 3 }) {
 
   const costMultiplier = new Float64Array(width * height).fill(1);
   const acceptedMask = new Uint8Array(width * height);
-  const routes: any[] = [];
+  const routes: Route[] = [];
   const maxAttempts = count * 6;
   let attempts = 0;
 
@@ -348,14 +383,19 @@ export function suggestAvenues(grid, { from, to, corridorWidth, count = 3 }) {
 }
 
 /** Multiplies `costMultiplier` by 6 for every cell within `corridorWidth` of `path`. */
-function applyPenalty(grid, path, corridorWidth, costMultiplier) {
+function applyPenalty(
+  grid: RoutingGrid,
+  path: number[],
+  corridorWidth: number,
+  costMultiplier: Float64Array,
+) {
   const mask = new Uint8Array(grid.width * grid.height);
   markCorridor(grid, path, corridorWidth, mask);
   for (let i = 0; i < mask.length; i += 1) if (mask[i]) costMultiplier[i] *= 6;
 }
 
 /** Converts a node-index path into the public route shape. */
-function buildRoute(grid, path) {
+function buildRoute(grid: RoutingGrid, path: number[]) {
   const points = path.map((node) => cellCentre(grid, node));
   let lengthMetres = 0;
   let goLength = 0;

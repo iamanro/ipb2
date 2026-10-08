@@ -1,5 +1,9 @@
 import { GO, NO_GO, SLOW_GO, UNKNOWN, openLandcover } from './landcover.ts';
-import { latticeOver } from './lattice.ts';
+import type { ElevationModel } from './dem.ts';
+import { latticeOver, type Bounds } from './lattice.ts';
+
+/** One obstacle class per cell over a lattice: the MCOO grid. */
+export type MobilityGrid = Awaited<ReturnType<typeof mobilityOverlay>>;
 
 export const LEGEND = [
   { value: GO, code: 'GO', label: 'Unrestricted', color: '#2f7a3d' },
@@ -12,7 +16,7 @@ export const LEGEND = [
 export const SLOW_GO_SLOPE = 10;
 export const NO_GO_SLOPE = 30;
 
-export function slopeClass(degrees) {
+export function slopeClass(degrees: number) {
   if (Number.isNaN(degrees)) return UNKNOWN;
   if (degrees >= NO_GO_SLOPE) return NO_GO;
   if (degrees >= SLOW_GO_SLOPE) return SLOW_GO;
@@ -32,12 +36,18 @@ export async function mobilityOverlay({
   bounds,
   cellMetres = 50,
   maxCells = 360000,
+}: {
+  terrain: ElevationModel;
+  basemapFile: string;
+  bounds: Bounds;
+  cellMetres?: number;
+  maxCells?: number;
 }) {
   const grid = latticeOver(bounds, { cellMetres, maxCells });
   const { width, height, cellMetres: resolution } = grid;
 
   const landcover = openLandcover(basemapFile);
-  let cover;
+  let cover: Uint8Array;
   try {
     cover = await landcover.classify(grid);
   } finally {
