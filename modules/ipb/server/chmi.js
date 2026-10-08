@@ -160,7 +160,7 @@ export function createChmiClient({ fetchImpl = fetch, now = () => Date.now() } =
    * with a recent value; a quantity with none within MAX_DISTANCE_KM is absent.
    * Null when no quantity is found at all (e.g. outside Czechia).
    */
-  async function nearestMeasurements(at) {
+  async function nearestStationValues(at) {
     const list = await loadStations();
     const byDistance = list
       .map((station) => ({ station, ...distanceAndBearing(at, station) }))
@@ -192,7 +192,7 @@ export function createChmiClient({ fetchImpl = fetch, now = () => Date.now() } =
     return Object.keys(groups).length ? { groups } : null;
   }
 
-  return { nearestMeasurements };
+  return { nearestMeasurements: nearestStationValues };
 }
 
 const client = createChmiClient();

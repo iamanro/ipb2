@@ -130,39 +130,41 @@ describe('parseRanges', () => {
 });
 
 describe('cardRanges (integration, real reference database)', () => {
-  const available = existsSync(DATABASE);
-  const maybeTest = available ? test : test.skip;
+  const missing = !existsSync(DATABASE);
 
-  maybeTest('T-72B3: main gun effective and maximum ranges, no automotive/radio range', () => {
-    const database = new DatabaseSync(DATABASE, { readOnly: true });
-    try {
-      const cards = database
-        .prepare("SELECT identifier FROM cards WHERE name LIKE '%T-72B3%'")
-        .all();
-      expect(cards).toHaveLength(1);
-      const entries = cardRanges(showCard, database, cards[0].identifier);
+  test.skipIf(missing)(
+    'T-72B3: main gun effective and maximum ranges, no automotive/radio range',
+    () => {
+      const database = new DatabaseSync(DATABASE, { readOnly: true });
+      try {
+        const cards = database
+          .prepare("SELECT identifier FROM cards WHERE name LIKE '%T-72B3%'")
+          .all();
+        expect(cards).toHaveLength(1);
+        const entries = cardRanges(showCard, database, cards[0].identifier);
 
-      const effective = entries.find(
-        (e) => e.kind === 'effective' && e.system.startsWith('Main Gun'),
-      );
-      expect(effective).toMatchObject({ min_m: 2000, max_m: 3000 });
+        const effective = entries.find(
+          (e) => e.kind === 'effective' && e.system.startsWith('Main Gun'),
+        );
+        expect(effective).toMatchObject({ min_m: 2000, max_m: 3000 });
 
-      const maximum = entries.find(
-        (e) => e.kind === 'maximum' && e.system.startsWith('Main Gun') && e.max_m === 5000,
-      );
-      expect(maximum).toBeTruthy();
+        const maximum = entries.find(
+          (e) => e.kind === 'maximum' && e.system.startsWith('Main Gun') && e.max_m === 5000,
+        );
+        expect(maximum).toBeTruthy();
 
-      // The vehicle's road range ("Automotive" section) and its radio's
-      // range ("R-173 Range") are not weapon ranges.
-      expect(entries.some((e) => e.raw.includes('500') && e.raw.includes('km'))).toBe(false);
-      expect(entries.some((e) => e.system.toLowerCase().includes('automotive'))).toBe(false);
-      expect(entries.some((e) => e.system.toLowerCase().includes('communications'))).toBe(false);
-    } finally {
-      database.close();
-    }
-  });
+        // The vehicle's road range ("Automotive" section) and its radio's
+        // range ("R-173 Range") are not weapon ranges.
+        expect(entries.some((e) => e.raw.includes('500') && e.raw.includes('km'))).toBe(false);
+        expect(entries.some((e) => e.system.toLowerCase().includes('automotive'))).toBe(false);
+        expect(entries.some((e) => e.system.toLowerCase().includes('communications'))).toBe(false);
+      } finally {
+        database.close();
+      }
+    },
+  );
 
-  maybeTest('a man-portable ATGM (9K115 Metis) parses embedded-unit min/max', () => {
+  test.skipIf(missing)('a man-portable ATGM (9K115 Metis) parses embedded-unit min/max', () => {
     const database = new DatabaseSync(DATABASE, { readOnly: true });
     try {
       const cards = database
@@ -181,7 +183,7 @@ describe('cardRanges (integration, real reference database)', () => {
     }
   });
 
-  maybeTest('a howitzer (D-30) parses min/max and skips INA options', () => {
+  test.skipIf(missing)('a howitzer (D-30) parses min/max and skips INA options', () => {
     const database = new DatabaseSync(DATABASE, { readOnly: true });
     try {
       const cards = database
@@ -203,7 +205,7 @@ describe('cardRanges (integration, real reference database)', () => {
     }
   });
 
-  maybeTest('cardRanges returns null for an unknown identifier', () => {
+  test.skipIf(missing)('cardRanges returns null for an unknown identifier', () => {
     const database = new DatabaseSync(DATABASE, { readOnly: true });
     try {
       expect(cardRanges(showCard, database, 'does-not-exist')).toBeNull();
