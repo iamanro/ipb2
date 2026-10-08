@@ -26,6 +26,9 @@ test('each IPB step worksheet renders without script errors', async ({ page, req
     const worksheet = page.locator(`#worksheet-${step}`);
     await expect(worksheet).toBeVisible();
     await expect(worksheet.locator('*').first()).toBeAttached();
+    // The view catches some render failures and shows them inline instead.
+    for (const text of await page.locator('.inline-error').allTextContents())
+      if (text.trim() && !EXPECTED.test(text)) errors.push(`step ${step}: ${text}`);
   }
 
   // The map's right-click menu (menus.js) and the guide panel (toolPanel.js).
