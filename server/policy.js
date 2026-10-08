@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * The cell and role rules (docs/phase1-access.md). Pure, no I/O: plain data
  * in, plain data out or an `HttpError`. `server/dispatch.js` is their one
@@ -12,6 +13,12 @@ import { HttpError } from './http.js';
 export const CELLS = ['white', 'blue', 'red'];
 
 export const ROLES = ['observer', 'analyst', 'collection-manager', 'game-master', 'admin'];
+
+/**
+ * The C1 shape a request runs as: name, exercise cell and role, and the
+ * global admin flag. Every field may be absent (signed out, no membership).
+ * @typedef {{ name?: string, cell?: string | null, role?: string | null, admin?: boolean }} Actor
+ */
 
 function rank(role) {
   const index = ROLES.indexOf(role);
@@ -28,6 +35,7 @@ export function roleAtLeast(role, required) {
  * whether or not they hold a membership of their own (their `admin` flag
  * always wins here; only their *role*, gating actions, follows a real
  * membership when they have one). */
+/** @param {Actor | null | undefined} user */
 export function isWhite(user) {
   return Boolean(user?.admin) || user?.cell === 'white';
 }
@@ -68,6 +76,10 @@ export function canSee(user, item) {
  * query. White/admin get an unconditional `1=1`; a cell member gets an
  * owner-or-released check; a user with no cell gets an unconditional
  * `0=1` (matches `canSee`'s "sees nothing" for the same case).
+ */
+/**
+ * @param {Actor | null | undefined} user
+ * @param {{ alias?: string }} [options]
  */
 export function visibilitySql(user, { alias } = {}) {
   if (isWhite(user)) return { sql: '1=1', params: [] };
@@ -126,7 +138,7 @@ export function normalizeRelease(cells, owner) {
     if (cell === owner) continue;
     set.add(cell);
   }
-  return [...set].sort();
+  return [...set].toSorted((a, b) => a.localeCompare(b));
 }
 
 /** The cells a live event about `item` should reach: its owner plus

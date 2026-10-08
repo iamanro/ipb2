@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * One writable state database: where it lives, whether it belongs to the
  * current exercise, and every file-level operation on it (archive/backup
@@ -14,6 +15,7 @@ import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } fro
 import path from 'node:path';
 
 import { integrityCheck, vacuumInto } from './dbArchive.js';
+import { errorMessage } from './http.js';
 import { stateDirectory } from './state.js';
 
 const SIDECARS = ['-wal', '-shm', '-journal'];
@@ -65,7 +67,7 @@ export function declareStateDatabase({ id, file, exercise, defaultDir }) {
       try {
         check = integrityCheck(source);
       } catch (error) {
-        check = error.message;
+        check = errorMessage(error);
       }
       if (check !== 'ok') throw new Error(`${source} failed its integrity check (${check}).`);
       close();

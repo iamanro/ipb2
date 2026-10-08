@@ -275,7 +275,10 @@ export function createCollectionController(ctx) {
     const sirId = Number.parseInt(form.querySelector('[name=sir_id]').value, 10);
     const naiId = form.querySelector('[name=nai_id]').value;
     const notes = form.querySelector('[name=notes]').value.trim();
-    if (!collectorId || !sirId) return showError(container, 'Choose a collector and a SIR.');
+    if (!collectorId || !sirId) {
+      showError(container, 'Choose a collector and a SIR.');
+      return;
+    }
     try {
       const startAt = readDtgValue(form.querySelector('[name=start_at]'));
       const endAt = readDtgValue(form.querySelector('[name=end_at]'));

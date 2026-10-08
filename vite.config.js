@@ -61,6 +61,8 @@ export default defineConfig({
   // switched off below were measured against the code and found to be noise
   // here; the reason is next to each one.
   lint: {
+    // Type checks run through tsgolint over the files tsconfig.json opts in.
+    options: { typeAware: true, typeCheck: true },
     plugins: ['eslint', 'typescript', 'unicorn', 'oxc', 'import', 'promise', 'vitest', 'node'],
     categories: {
       correctness: 'error',
@@ -84,6 +86,11 @@ export default defineConfig({
       'promise/always-return': 'off',
       // Side-effect imports are stylesheets and @fontsource faces.
       'import/no-unassigned-import': ['error', { allow: ['**/*.css'] }],
+      // Type-aware rules with many existing hits, kept visible as warnings
+      // until fixed: un-awaited async calls (mostly UI event handlers that
+      // report their own errors), and non-string values in template text.
+      'typescript/no-floating-promises': 'warn',
+      'typescript/restrict-template-expressions': 'warn',
       // Tests assert through expectStatus()/assertNoOverlaps()-style helpers.
       'vitest/expect-expect': ['error', { assertFunctionNames: ['expect', 'expect*', 'assert*'] }],
     },

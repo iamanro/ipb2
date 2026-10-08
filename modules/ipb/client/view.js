@@ -2201,7 +2201,7 @@ function drawHereItems(lon, lat) {
     submenu: config.kinds.map((kind) => {
       const disabled = layer === 'coa' && !state.selectedCoaId;
       return {
-        label: `${kind === 'point' ? 'Point here' : `Start ${kind}`}`,
+        label: kind === 'point' ? 'Point here' : `Start ${kind}`,
         disabled,
         action: () => {
           if (disabled) return;

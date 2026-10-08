@@ -1,10 +1,11 @@
+// @ts-check
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 
 import authState from './authState.js';
 import { HttpError } from './http.js';
 import { CELLS, ROLES } from './policy.js';
-import { openState, transact } from './state.js';
+import { countRows, openState, transact } from './state.js';
 
 /** A session cookie is valid for this long since it was last used (sliding). */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -32,6 +33,7 @@ const MEMBERSHIP_ROLES = ROLES.filter((role) => role !== 'admin');
 
 const scrypt = promisify(crypto.scrypt);
 
+/** @type {import('./state.js').Migration[]} */
 const MIGRATIONS = [
   `
   CREATE TABLE users (
@@ -265,7 +267,8 @@ function ipGroup(ip) {
  * one's `close()` pulling the handle out from under another.
  */
 export function openAuthStore(file = authState.path) {
-  let database = openState(file, MIGRATIONS);
+  const database = openState(file, MIGRATIONS);
+  let closed = false;
   // Login attempts live in memory, not the database: a rate limit resetting
   // on a dev-server restart is an acceptable trade for not persisting an
   // attacker's IP forever, and it keeps `openAuthStore` synchronous and
@@ -341,9 +344,7 @@ export function openAuthStore(file = authState.path) {
    * refuse to cross for the last one, so a classroom can never lock itself
    * out of user management entirely. */
   function countEnabledAdmins() {
-    return database
-      .prepare('SELECT COUNT(*) AS n FROM users WHERE admin = 1 AND disabled = 0')
-      .get().n;
+    return countRows(database, 'SELECT COUNT(*) AS n FROM users WHERE admin = 1 AND disabled = 0');
   }
 
   /** Throws if demoting/disabling/deleting `user` would leave zero enabled
@@ -390,7 +391,7 @@ export function openAuthStore(file = authState.path) {
 
   return {
     hasUsers() {
-      return database.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
+      return countRows(database, 'SELECT COUNT(*) AS n FROM users') > 0;
     },
 
     listUsers() {
@@ -586,7 +587,8 @@ export function openAuthStore(file = authState.path) {
 
     getExercise() {
       const row = database.prepare('SELECT name, started_at FROM exercise WHERE id = 1').get();
-      const members = database.prepare('SELECT COUNT(*) AS n FROM memberships').get().n;
+      if (!row) throw new Error('auth.db has no exercise record; its migrations seed one.');
+      const members = countRows(database, 'SELECT COUNT(*) AS n FROM memberships');
       return { name: row.name, started_at: row.started_at, members };
     },
 
@@ -665,8 +667,8 @@ export function openAuthStore(file = authState.path) {
         )
         .get(hashToken(token));
       if (!row) return null;
-      const expired = new Date(row.expires_at).getTime() <= Date.now();
-      const overAge = new Date(row.created_at).getTime() + SESSION_ABSOLUTE_TTL_MS <= Date.now();
+      const expired = Date.parse(String(row.expires_at)) <= Date.now();
+      const overAge = Date.parse(String(row.created_at)) + SESSION_ABSOLUTE_TTL_MS <= Date.now();
       if (expired || overAge) {
         database.prepare('DELETE FROM sessions WHERE id = ?').run(row.sid);
         return null;
@@ -685,7 +687,7 @@ export function openAuthStore(file = authState.path) {
     },
 
     listAudit({ limit = 50, offset = 0 } = {}) {
-      const total = database.prepare('SELECT COUNT(*) AS n FROM audit').get().n;
+      const total = countRows(database, 'SELECT COUNT(*) AS n FROM audit');
       const items = database
         .prepare(
           'SELECT at, user, method, path, status, client FROM audit ORDER BY id DESC LIMIT ? OFFSET ?',
@@ -701,8 +703,9 @@ export function openAuthStore(file = authState.path) {
     },
 
     close() {
-      database?.close();
-      database = undefined;
+      if (closed) return;
+      closed = true;
+      database.close();
     },
   };
 }

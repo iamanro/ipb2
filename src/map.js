@@ -1820,7 +1820,7 @@ export function createMap(options) {
    */
   function setScenario(scenario, { editing = false } = {}) {
     currentScenario = scenario || null;
-    editingScenario = Boolean(editing);
+    editingScenario = editing;
     scenarioIndex = buildScenarioNameIndex(currentScenario);
     countriesSource.clear();
     if (currentScenario) {

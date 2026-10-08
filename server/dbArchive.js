@@ -1,3 +1,4 @@
+// @ts-check
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 

@@ -337,7 +337,8 @@ function validateChecked(value) {
       `checked must be an array of at most ${MAX_CHECKED_TASKS} task ids (a-z, 0-9, -).`,
     );
   }
-  return [...new Set(value)].sort();
+  // Task ids are ASCII slugs: code-unit order, as plain sort() gave.
+  return [...new Set(value)].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** `{ lon, lat }` in range, or null for "derive from the AOI". */
@@ -771,7 +772,7 @@ function listStudies(
   access = { white: true, cell: 'white', visible: () => ({ sql: '1=1', params: [] }) },
 ) {
   const { sql, params } = access.visible('study', { alias: 's' });
-  const ordinaryCellOnly = access.white === false;
+  const ordinaryCellOnly = !access.white;
   const cellStudySql = ordinaryCellOnly ? ' AND s.cell_study_cell = ?' : '';
   const rows = database
     .prepare(

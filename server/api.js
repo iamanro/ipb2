@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * `/api/*` entry point: a Vite plugin middleware. Handles `/api/live` (SSE,
  * C2) and `/api/auth/*` (C3) directly, authenticates and authorises every
@@ -295,6 +296,7 @@ export function createApiMiddleware(mode) {
    * users, so it never overwrites an admin created since. Never logs the
    * password.
    */
+  /** @type {Promise<void> | null} */
   let bootstrapPromise = null;
   function ensureBootstrapped() {
     bootstrapPromise ??= (async () => {
@@ -542,6 +544,7 @@ export function createApiMiddleware(mode) {
    * admin set) may only sign in, change it or sign out: the browser's forced
    * change screen is a courtesy, this is the rule.
    */
+  /** @param {string | null} [authRoute] */
   function requirePasswordChanged(request, authRoute = null) {
     if (!request.user?.must_change_password) return;
     if (authRoute !== null && PASSWORD_CHANGE_ROUTES.has(authRoute)) return;
@@ -603,7 +606,8 @@ export function createApiMiddleware(mode) {
         sendJson(response, { error: 'Not found.' }, 404);
         return;
       }
-      return next();
+      next();
+      return;
     }
 
     try {
@@ -616,6 +620,8 @@ export function createApiMiddleware(mode) {
         return;
       }
 
+      // Unreachable (neither match falls through above), but says so to the checker.
+      if (!moduleMatch) throw new HttpError(404, 'Unknown module.');
       const moduleId = moduleMatch[1];
       const route = moduleMatch[2];
       if (!byId.has(moduleId)) throw new HttpError(404, 'Unknown module.');

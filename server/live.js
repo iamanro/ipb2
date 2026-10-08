@@ -1,3 +1,4 @@
+// @ts-check
 import { HttpError } from './http.js';
 
 /** How often an idle connection gets a comment line, so proxies and browsers
@@ -12,7 +13,19 @@ const MAX_CLIENTS = 64;
  * else's live updates by opening every global slot (IPB-AUTH-005). */
 const MAX_CLIENTS_PER_USER = 8;
 
-/** `response -> { keepAlive, user, cell, role, admin, tokenHash, revalidate }`. */
+/**
+ * @typedef {{ cell: string | null, role: string | null, admin?: boolean | number }} LiveAccess
+ * @typedef {{
+ *   keepAlive: ReturnType<typeof setInterval>,
+ *   user: string | undefined,
+ *   cell: string | null,
+ *   role: string | null,
+ *   admin: boolean,
+ *   tokenHash: string | null,
+ * }} LiveClient
+ */
+
+/** @type {Map<import('node:http').ServerResponse, LiveClient>} */
 const clients = new Map();
 
 /** C4: a stream receives `event` when it carries no `cells` (a global
@@ -73,6 +86,18 @@ function forget(response) {
  *   open stream silently keeping the old filtering/permissions;
  * - the default (`off` mode, or no token to re-check) returns `true`: no
  *   membership to track, never closes on its own.
+ */
+/**
+ * @param {import('node:http').IncomingMessage} request
+ * @param {import('node:http').ServerResponse} response
+ * @param {{
+ *   user?: string,
+ *   cell?: string | null,
+ *   role?: string | null,
+ *   admin?: boolean | number,
+ *   tokenHash?: string | null,
+ *   revalidate?: () => LiveAccess | boolean | null | undefined,
+ * }} [options]
  */
 export function handleLive(
   request,

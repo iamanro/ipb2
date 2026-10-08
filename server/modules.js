@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Server-side module registry. Each entry serves `/api/<id>/...` through
  * `server/dispatch.js`: a module exports its cell-owned items, their parts
