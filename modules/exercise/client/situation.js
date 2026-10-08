@@ -24,6 +24,7 @@ import { symbolElement } from '../../../src/symbols/symbol.js';
 
 import { createLocationField } from './locationField.js';
 import { appendOwnerReassign } from './ownerReassign.js';
+import { reportTimeLabel } from './reportTime.js';
 import './situation.css';
 
 const API = '/api/exercise';
@@ -542,7 +543,7 @@ export function createSituationController(ctx) {
       const list = el('ul', 'situation-linked-reports');
       linkedReports.forEach((report) => {
         const item = document.createElement('li');
-        const at = formatDtg(new Date(report.occurred_at || report.created_at).getTime());
+        const at = reportTimeLabel(report);
         const button = el('button', 'text-button', `${at} \u2014 ${report.text.slice(0, 60)}`);
         button.type = 'button';
         button.addEventListener('click', () => ctx.switchTab?.('reports'));
@@ -601,7 +602,7 @@ export function createSituationController(ctx) {
       el(
         'p',
         'panel-note',
-        `${formatDtg(new Date(report.occurred_at || report.created_at).getTime())} \u00b7 ${formatMgrs(report.lon, report.lat)}`,
+        `${reportTimeLabel(report)} \u00b7 ${formatMgrs(report.lon, report.lat)}`,
       ),
     );
     const link = el('button', 'chip-button', 'Open in Reports tab');

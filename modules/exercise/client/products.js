@@ -14,6 +14,7 @@ import { canEditClient, renderCellBadge, renderReleaseControl } from '../../../s
 import { can, currentUser, sessionMode } from '../../../src/session.js';
 
 import { appendOwnerReassign } from './ownerReassign.js';
+import { reportTimeLabel } from './reportTime.js';
 import './staff.css';
 
 const TERRAIN_API = '/api/terrain';
@@ -580,7 +581,7 @@ export function createProductsController(ctx) {
         createElement(
           'p',
           'panel-note',
-          `DTG ${formatDtg(new Date(report.occurred_at ?? report.created_at).getTime())} · MGRS ${formatMgrs(report.lon, report.lat)} · Admiralty ${report.reliability}${report.credibility}`,
+          `DTG ${reportTimeLabel(report)} · MGRS ${formatMgrs(report.lon, report.lat)} · Admiralty ${report.reliability}${report.credibility}`,
         ),
       );
       const dl = document.createElement('dl');

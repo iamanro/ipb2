@@ -155,6 +155,11 @@
       vertical-align: top;
     }
 
+    .report-table .report-time-unknown {
+      color: var(--muted);
+      font-style: italic;
+    }
+
     .report-row-toggle {
       min-height: auto;
       padding: 0 6px;

@@ -153,6 +153,14 @@ observation. If an observation time is required to plot, prompt for it before
 submitting the track mutation. Verify paused and accelerated scenario clocks and
 an intentionally unknown observation time.
 
+**Status (8 October 2026): implemented, verified locally.** The report list column is
+now "Observed" and shows `unknown (received <DTG>)` when no observation time was given;
+the situation view and the SALUTE/SPOT sheet in Products use the same label. Plotting a
+report without an observation time asks for one (a short DTG takes its month from the
+scenario clock) and refuses to submit until it parses. Verified in the dev app with a
+paused clock: an empty plot is refused with no track created; `080930Z` created the track
+at 08 OCT 09:30Z. Unit tests: `modules/exercise/client/reportTime.test.js`.
+
 ### 3. Make graphic INTSUM printing ready and legible
 
 **Observed:** printing immediately after selecting a report/rebuilding Products
