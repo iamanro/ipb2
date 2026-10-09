@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * Standalone production server: the connect-style `/api/*` middleware from
  * `./api.js` in front of the static `dist/` build, as one plain
@@ -32,6 +33,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 import { createApiMiddleware, isBlockedStaticPath, resolveAuthMode } from './api.js';
+import { errorMessage } from './http.js';
 import { dataDirectory, stateDirectory } from './state.js';
 
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -139,7 +141,7 @@ export function createHealthzHandler({ projectRoot }) {
       checks.state = true;
     } catch (error) {
       checks.state = false;
-      checks.stateError = error.message;
+      checks.stateError = errorMessage(error);
     }
 
     const terrainRoot = dataDirectory(
@@ -177,7 +179,7 @@ export function createHealthzHandler({ projectRoot }) {
         }
       } catch (error) {
         checks.data.terrainMetaOk = false;
-        checks.data.terrainMetaError = error.message;
+        checks.data.terrainMetaError = errorMessage(error);
       }
     } else {
       checks.data.terrainMetaOk = false;
@@ -267,7 +269,7 @@ async function main() {
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, host, resolve);
+    server.listen(port, host, () => resolve(undefined));
   });
   console.log(`[ipb] listening on http://${host}:${port} (auth ${mode}, ${os.hostname()})`);
 }

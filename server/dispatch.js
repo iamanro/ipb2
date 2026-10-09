@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Item-scoped requests (docs/adr/0002-item-scoped-requests.md): the one
  * place a request's cell access is decided. A module declares its
@@ -70,6 +71,24 @@ const REACHES = new Set(['everyone', 'white', 'handler']);
 const ANNOUNCE = Symbol('announce');
 const DEFAULT_BODY_LIMIT = 1 << 20;
 
+/**
+ * One route a module declares (see the module doc above for each field).
+ * @typedef {{
+ *   method: string,
+ *   path: string | RegExp,
+ *   verb: string,
+ *   item?: string,
+ *   part?: string,
+ *   role?: string,
+ *   reach?: string,
+ *   changes?: boolean,
+ *   bodyLimit?: number,
+ *   handler?: (context: any) => unknown,
+ * }} RouteSpec
+ * @typedef {RouteSpec & { match: (path: string) => Record<string, string> | null }} CompiledRoute
+ * @typedef {import('./policy.js').Actor} Actor
+ */
+
 /** What a `reach: 'handler'` route returns: the body, and the cells that hear about it. */
 export function announce(value, cells) {
   if (!Array.isArray(cells) || cells.some((cell) => !CELLS.includes(cell))) {
@@ -86,6 +105,10 @@ export const EXERCISE_CONTROL = Object.freeze({
   role: 'game-master',
 });
 
+/**
+ * @param {string | RegExp} path
+ * @returns {(route: string) => Record<string, string> | null}
+ */
 function compilePath(path) {
   if (path instanceof RegExp)
     return (route) => path.exec(route)?.groups ?? (path.test(route) ? {} : null);
@@ -150,6 +173,7 @@ function compileModule(module) {
     if (!part.table || !part.column)
       throw new Error(`${module.id}: part "${kind}" needs table and column.`);
   }
+  /** @type {CompiledRoute[]} */
   const routes = [];
   for (const route of module.routes ?? []) {
     if (!VERBS.has(route.verb))
@@ -208,6 +232,10 @@ function compileModule(module) {
   return { module, items, parts, routes };
 }
 
+/**
+ * @param {any[]} modules
+ * @param {{ publish?: (event: object) => void, audit?: (entry: object) => void }} [options]
+ */
 export function createDispatcher(modules, { publish = () => {}, audit = () => {} } = {}) {
   const compiled = new Map(modules.map((module) => [module.id, compileModule(module)]));
 
@@ -296,6 +324,17 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
    * Runs one request. `route` is the path after `/api/<moduleId>/`. `request`
    * and `response` may be null for an internal call (see `runAs`), in which
    * case `body` is given directly and the value is returned, not sent.
+   *
+   * @param {{
+   *   moduleId: string,
+   *   method: string,
+   *   route: string,
+   *   url?: URL,
+   *   actor: Actor,
+   *   request?: import('node:http').IncomingMessage | null,
+   *   response?: import('node:http').ServerResponse | null,
+   *   body?: unknown,
+   * }} options
    */
   async function run({
     moduleId,
@@ -309,7 +348,9 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
   }) {
     const entry = compiled.get(moduleId);
     if (!entry) throw new HttpError(404, 'Unknown module.');
+    /** @type {CompiledRoute | null} */
     let route = null;
+    /** @type {Record<string, string> | null} */
     let params = null;
     let pathMatched = false;
     for (const candidate of entry.routes) {
@@ -360,7 +401,8 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
         const ownerCell = ownerCellForCreate(actor, body?.owner_cell ?? undefined);
         const requested = body?.releasable_to ?? [];
         if (requested.length && !canRelease(actor, { owner_cell: ownerCell })) {
-          throw new HttpError(403, `You may not release this ${entry.items[route.item].label}.`);
+          const label = route.item ? entry.items[route.item]?.label : null;
+          throw new HttpError(403, `You may not release this ${label ?? 'item'}.`);
         }
         owner = { owner_cell: ownerCell, releasable_to: normalizeRelease(requested, ownerCell) };
         cells = liveCellsFor(owner);
@@ -368,6 +410,8 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
         cells = liveCellsFor(item);
       }
       const query = url?.searchParams ?? new URLSearchParams();
+      // Only the generated release/reassign routes lack a handler, and they returned above.
+      if (!route.handler) throw new Error(`${moduleId}: ${method} ${path} has no handler.`);
       value = await route.handler({
         item,
         part,

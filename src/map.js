@@ -3,7 +3,7 @@
 import { Map as OlMap, View } from 'ol';
 import { unByKey } from 'ol/Observable.js';
 import { fromLonLat, getPointResolution, toLonLat, transformExtent } from 'ol/proj.js';
-import { buffer as bufferExtent, getCenter as extentCenter, getWidth } from 'ol/extent.js';
+import { buffer as bufferExtent, getWidth } from 'ol/extent.js';
 import VectorTileLayer from 'ol/layer/VectorTile.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import ImageLayer from 'ol/layer/Image.js';
@@ -20,1215 +20,66 @@ import Draw from 'ol/interaction/Draw.js';
 import Modify from 'ol/interaction/Modify.js';
 import Feature from 'ol/Feature.js';
 import LineString from 'ol/geom/LineString.js';
-import Polygon from 'ol/geom/Polygon.js';
 import Point from 'ol/geom/Point.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import Style from 'ol/style/Style.js';
 import Stroke from 'ol/style/Stroke.js';
 import Fill from 'ol/style/Fill.js';
 import CircleStyle from 'ol/style/Circle.js';
-import RegularShape from 'ol/style/RegularShape.js';
-import TextStyle from 'ol/style/Text.js';
-import IconStyle from 'ol/style/Icon.js';
 import { defaults as defaultControls, ScaleLine } from 'ol/control.js';
-
 import { buildMgrsGrid, mgrsGridSpacing } from './mgrsGrid.js';
-import { downwindRotation, recolourCloudMask, wmsTileUrl } from './weather.js';
-import { formatMetres } from './geo.js';
-import { formatDtg } from './dtg.js';
-import { TACTICAL_GRAPHICS, graphicColor, graphicLabel, rangeRingGeometry } from './tactical.js';
+import { recolourCloudMask } from './weather.js';
+import { TACTICAL_GRAPHICS, graphicColor } from './tactical.js';
 import { createMeasureController } from './measure.js';
-import { withStatus } from './symbols/sidc.js';
-import { createSymbol } from './symbols/symbol.js';
-import { unitSymbolOptions } from './symbols/unitProperties.js';
-
-const MAP_PROJECTION = 'EPSG:3857';
-/** Amplifier text on map symbols; the symbols' light outline carries it on dark imagery. */
-const MAP_SYMBOL_INK = '#1b1b1b';
-const DATA_PROJECTION = 'EPSG:4326';
-const GEOJSON_OPTIONS = { featureProjection: MAP_PROJECTION, dataProjection: DATA_PROJECTION };
-
-const DRAW_GEOMETRY_TYPE = { point: 'Point', line: 'LineString', polygon: 'Polygon' };
-
-// -- Basemap style (muted OpenMapTiles backdrop) ---------------------------
-
-const ROAD_WIDTH = {
-  motorway: 3.2,
-  trunk: 2.8,
-  primary: 2.4,
-  secondary: 2,
-  tertiary: 1.6,
-  minor: 1.2,
-  service: 1,
-  path: 0.8,
-  rail: 1.2,
-};
-const ROAD_COLOR = {
-  motorway: '#d5a56b',
-  trunk: '#dcb48d',
-  primary: '#e6ceac',
-  secondary: '#e9ddc6',
-  tertiary: '#ede7d7',
-  minor: '#f0ebe1',
-  service: '#efeae0',
-  path: '#c9c2b0',
-  rail: '#a6a096',
-};
-
-const WATER_STYLE = new Style({ fill: new Fill({ color: '#b7c9d8' }) });
-const WATERWAY_STYLE = new Style({ stroke: new Stroke({ color: '#b7c9d8', width: 1.4 }) });
-const WOOD_STYLE = new Style({ fill: new Fill({ color: '#cbd8c1' }) });
-const LANDUSE_STYLE = new Style({ fill: new Fill({ color: '#e7e2d6' }) });
-const BUILDING_STYLE = new Style({
-  fill: new Fill({ color: '#dcd5c6' }),
-  stroke: new Stroke({ color: '#cfc6b3', width: 0.5 }),
-});
-/**
- * Military land, in every vector style, is an outline only. OSM wraps a whole
- * training area in one `landuse=military` polygon; filling or hatching it
- * (as OpenTopoMap does) hides the terrain inside, which is what IPB reads.
- */
-const MILITARY_OUTLINE = new Style({
-  stroke: new Stroke({ color: 'rgba(142, 63, 160, 0.9)', width: 2, lineDash: [12, 5] }),
-});
-const BOUNDARY_STYLE_CACHE = new Map();
-const ROAD_STYLE_CACHE = new Map();
-
-function boundaryStyle(adminLevel) {
-  const level = Number(adminLevel) || 10;
-  const key = level <= 2 ? 2 : 10;
-  if (!BOUNDARY_STYLE_CACHE.has(key)) {
-    BOUNDARY_STYLE_CACHE.set(
-      key,
-      new Style({
-        stroke: new Stroke({
-          color: 'rgba(150, 130, 165, 0.55)',
-          width: key === 2 ? 1.6 : 1,
-          lineDash: key === 2 ? undefined : [4, 4],
-        }),
-      }),
-    );
-  }
-  return BOUNDARY_STYLE_CACHE.get(key);
-}
-
-function roadStyle(roadClass) {
-  const key = ROAD_WIDTH[roadClass] ? roadClass : 'minor';
-  if (!ROAD_STYLE_CACHE.has(key)) {
-    ROAD_STYLE_CACHE.set(
-      key,
-      new Style({ stroke: new Stroke({ color: ROAD_COLOR[key], width: ROAD_WIDTH[key] }) }),
-    );
-  }
-  return ROAD_STYLE_CACHE.get(key);
-}
-
-function basemapStyle(feature) {
-  const sourceLayer = feature.get('layer');
-  switch (sourceLayer) {
-    case 'water':
-      return WATER_STYLE;
-    case 'waterway':
-      return WATERWAY_STYLE;
-    case 'landcover':
-      return feature.get('class') === 'wood' || feature.get('class') === 'forest'
-        ? WOOD_STYLE
-        : undefined;
-    case 'landuse':
-      return feature.get('class') === 'military' ? MILITARY_OUTLINE : LANDUSE_STYLE;
-    case 'building':
-      return BUILDING_STYLE;
-    case 'transportation':
-      return roadStyle(feature.get('class'));
-    case 'boundary':
-      return boundaryStyle(feature.get('admin_level'));
-    default:
-      return undefined;
-  }
-}
-
-// -- Topographic style (the "Topo" basemap) -----------------------------------
-
-const fillStyle = (color) => new Style({ fill: new Fill({ color }) });
-
-/**
- * Land cover by OpenMapTiles class. Drawn in full, because inside a training
- * area this is the ground truth an analyst reads: forest, meadow, wetland.
- */
-const TOPO_LANDCOVER = {
-  wood: fillStyle('#c9ddb3'),
-  grass: fillStyle('#e3ecd3'),
-  wetland: fillStyle('#d6e9e4'),
-  farmland: fillStyle('#f3f0e3'),
-  sand: fillStyle('#eee6d3'),
-  rock: fillStyle('#e3e0da'),
-  ice: fillStyle('#eef4f8'),
-};
-const TOPO_SCRUB = fillStyle('#d6e2c1');
-const TOPO_LANDUSE = {
-  residential: fillStyle('#ebe4dc'),
-  suburb: fillStyle('#ebe4dc'),
-  commercial: fillStyle('#e6e1e1'),
-  industrial: fillStyle('#e3e0e0'),
-  retail: fillStyle('#e6e1e1'),
-  railway: fillStyle('#e3e0e0'),
-  quarry: fillStyle('#e2ddd3'),
-  cemetery: fillStyle('#dde6d6'),
-};
-const TOPO_WATER = fillStyle('#b5d0ea');
-const TOPO_WATER_INK = '#6d9fd3';
-const TOPO_WATERWAY = {
-  river: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 1.8 }) }),
-  canal: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 1.2 }) }),
-  stream: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 0.9 }) }),
-  ditch: new Style({ stroke: new Stroke({ color: TOPO_WATER_INK, width: 0.6 }) }),
-};
-const TOPO_BUILDING = new Style({
-  fill: new Fill({ color: '#cfc5b8' }),
-  stroke: new Stroke({ color: '#b9ad9d', width: 0.5 }),
-});
-const TOPO_TRACK_INK = '#8b6b3f';
-/** zIndex keeps every casing under every road fill, so junctions stay clean. */
-const TOPO_ROAD_FILL = {
-  motorway: '#e3a56a',
-  trunk: '#ecc07e',
-  primary: '#f4d493',
-  secondary: '#f7e6a8',
-  tertiary: '#ffffff',
-  minor: '#ffffff',
-  service: '#ffffff',
-};
-const TOPO_TRANSPORT_CACHE = new Map();
-
-function topoTransportStyle(roadClass) {
-  if (TOPO_TRANSPORT_CACHE.has(roadClass)) return TOPO_TRANSPORT_CACHE.get(roadClass);
-  let style;
-  if (roadClass === 'track') {
-    style = new Style({
-      stroke: new Stroke({ color: TOPO_TRACK_INK, width: 1.1, lineDash: [5, 3] }),
-      zIndex: 3,
-    });
-  } else if (roadClass === 'path') {
-    style = new Style({
-      stroke: new Stroke({ color: TOPO_TRACK_INK, width: 1, lineDash: [1.5, 2.5] }),
-      zIndex: 3,
-    });
-  } else if (roadClass === 'rail' || roadClass === 'transit') {
-    style = [
-      new Style({ stroke: new Stroke({ color: '#6b6b6b', width: 2 }), zIndex: 3 }),
-      new Style({
-        stroke: new Stroke({ color: '#ffffff', width: 1, lineDash: [6, 6] }),
-        zIndex: 4,
-      }),
-    ];
-  } else {
-    const key = TOPO_ROAD_FILL[roadClass] ? roadClass : 'minor';
-    style = [
-      new Style({
-        stroke: new Stroke({ color: '#8f8676', width: ROAD_WIDTH[key] + 1.4 }),
-        zIndex: 1,
-      }),
-      new Style({
-        stroke: new Stroke({ color: TOPO_ROAD_FILL[key], width: ROAD_WIDTH[key] }),
-        zIndex: 2,
-      }),
-    ];
-  }
-  TOPO_TRANSPORT_CACHE.set(roadClass, style);
-  return style;
-}
-
-function topoStyle(feature) {
-  const kind = feature.get('class');
-  switch (feature.get('layer')) {
-    case 'landcover':
-      if (kind === 'grass' && feature.get('subclass') === 'scrub') return TOPO_SCRUB;
-      return TOPO_LANDCOVER[kind];
-    case 'landuse':
-      return kind === 'military' ? MILITARY_OUTLINE : TOPO_LANDUSE[kind];
-    case 'water':
-      return TOPO_WATER;
-    case 'waterway':
-      return TOPO_WATERWAY[kind] ?? TOPO_WATERWAY.ditch;
-    case 'building':
-      return TOPO_BUILDING;
-    case 'transportation':
-      return topoTransportStyle(kind);
-    case 'boundary':
-      return boundaryStyle(feature.get('admin_level'));
-    default:
-      return undefined;
-  }
-}
-
-// -- Reference overlays: roads & water, place names, contours ------------------
-
-/** Basemap roads with a dark casing, water as outlines, so imagery stays visible. */
-const HYBRID_STYLE_CACHE = new Map();
-const HYBRID_WATER_COLOR = '#7fb2e5';
-const HYBRID_WATERWAY_STYLE = new Style({
-  stroke: new Stroke({ color: HYBRID_WATER_COLOR, width: 1.4 }),
-});
-const HYBRID_WATER_STYLE = new Style({
-  stroke: new Stroke({ color: HYBRID_WATER_COLOR, width: 1 }),
-  fill: new Fill({ color: 'rgba(127, 178, 229, 0.25)' }),
-});
-
-function hybridStyle(feature) {
-  const layer = feature.get('layer');
-  if (layer === 'waterway') return HYBRID_WATERWAY_STYLE;
-  if (layer === 'water') return HYBRID_WATER_STYLE;
-  if (layer !== 'transportation') return undefined;
-  const key = ROAD_WIDTH[feature.get('class')] ? feature.get('class') : 'minor';
-  if (!HYBRID_STYLE_CACHE.has(key)) {
-    HYBRID_STYLE_CACHE.set(key, [
-      new Style({
-        stroke: new Stroke({ color: 'rgba(0, 0, 0, 0.5)', width: ROAD_WIDTH[key] + 1.6 }),
-      }),
-      new Style({ stroke: new Stroke({ color: ROAD_COLOR[key], width: ROAD_WIDTH[key] }) }),
-    ]);
-  }
-  return HYBRID_STYLE_CACHE.get(key);
-}
-
-const LABEL_HALO = new Stroke({ color: 'rgba(255, 255, 255, 0.92)', width: 3 });
-
-/** One reusable style per label class; the text is set per feature at render time. */
-function labelStyle(font, color) {
-  return new Style({
-    text: new TextStyle({ font, fill: new Fill({ color }), stroke: LABEL_HALO, overflow: true }),
-  });
-}
-
-const PLACE_LABEL = {
-  city: labelStyle('700 15px system-ui, sans-serif', '#1b1b1b'),
-  town: labelStyle('700 13px system-ui, sans-serif', '#1b1b1b'),
-  village: labelStyle('600 12px system-ui, sans-serif', '#262626'),
-  minor: labelStyle('500 11px system-ui, sans-serif', '#3a3a3a'),
-  peak: labelStyle('600 11px system-ui, sans-serif', '#5a3d1e'),
-  water: labelStyle('italic 500 11px system-ui, sans-serif', '#2f5d8a'),
-};
-/**
- * Real labels a scenario leaves unmatched, shown only in the Exercise
- * editor: grey and italic, so they read as "not this war" but
- * stay clickable to rename.
- */
-const DIMMED_PLACE_LABEL = {
-  city: labelStyle('italic 700 15px system-ui, sans-serif', '#8b98a0'),
-  town: labelStyle('italic 700 13px system-ui, sans-serif', '#8b98a0'),
-  village: labelStyle('italic 600 12px system-ui, sans-serif', '#8b98a0'),
-  minor: labelStyle('italic 500 11px system-ui, sans-serif', '#8b98a0'),
-  peak: labelStyle('italic 600 11px system-ui, sans-serif', '#8b98a0'),
-  water: labelStyle('italic 500 11px system-ui, sans-serif', '#8b98a0'),
-};
-/** Hamlets and neighbourhoods only from about zoom 13, or they bury villages. */
-const MINOR_PLACE_MAX_RESOLUTION = 20;
-
-/**
- * Which `PLACE_LABEL`/`DIMMED_PLACE_LABEL` bucket a place/peak/water-name
- * feature falls into (`styleKind`), its real name, and the place class a
- * scenario place record uses (`placeKind`: the basemap's own class for
- * `place` features, or `'peak'`/`'water'`) — shared by the plain label
- * style below and by the scenario-aware one in `createMap`.
- */
-function resolvePlaceClass(feature, resolution) {
-  const name = feature.get('name');
-  if (!name) return null;
-  switch (feature.get('layer')) {
-    case 'place': {
-      const cls = feature.get('class');
-      if (cls === 'city' || cls === 'town' || cls === 'village') {
-        return { styleKind: cls, placeKind: cls, name };
-      }
-      if (resolution <= MINOR_PLACE_MAX_RESOLUTION) {
-        return { styleKind: 'minor', placeKind: cls || 'minor', name };
-      }
-      return null;
-    }
-    case 'mountain_peak':
-      return { styleKind: 'peak', placeKind: 'peak', name, ele: feature.get('ele') };
-    case 'water_name':
-      return { styleKind: 'water', placeKind: 'water', name };
-    default:
-      return null;
-  }
-}
-
-/**
- * A vector-tile feature's representative lon/lat: the point itself, or the
- * extent's centre for a line/polygon. These features render as
- * `ol/render/Feature`, whose `getGeometry()` returns itself rather than a
- * real Geometry (no `getCoordinates()`) — so this reads flat coordinates
- * and the extent off the feature directly instead of through that.
- */
-function featureLonLat(feature) {
-  const coordinate =
-    feature.getType() === 'Point'
-      ? feature.getFlatCoordinates().slice(0, 2)
-      : extentCenter(feature.getExtent());
-  return toLonLat(coordinate, MAP_PROJECTION);
-}
-
-/** Place, peak and water names from an OpenMapTiles-schema basemap. */
-function placeLabelStyle(feature, resolution) {
-  const resolved = resolvePlaceClass(feature, resolution);
-  if (!resolved) return undefined;
-  const style = PLACE_LABEL[resolved.styleKind];
-  const text =
-    resolved.styleKind === 'peak'
-      ? `▲ ${resolved.name}${resolved.ele ? ` ${resolved.ele} m` : ''}`
-      : resolved.name;
-  style.getText().setText(text);
-  return style;
-}
-
-/** Contour inks for a pale basemap and for dark imagery. */
-const CONTOUR_TONES = {
-  dark: { line: 'rgba(140, 90, 45, 0.55)', index: 'rgba(140, 90, 45, 0.9)', halo: '#ffffff' },
-  light: {
-    line: 'rgba(255, 214, 160, 0.55)',
-    index: 'rgba(255, 214, 160, 0.95)',
-    halo: 'rgba(0, 0, 0, 0.75)',
-  },
-};
-
-function contourStyles(tone) {
-  const ink = CONTOUR_TONES[tone];
-  return {
-    line: new Style({ stroke: new Stroke({ color: ink.line, width: 0.7 }) }),
-    index: new Style({
-      stroke: new Stroke({ color: ink.index, width: 1.3 }),
-      text: new TextStyle({
-        font: '600 10px "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace',
-        placement: 'line',
-        fill: new Fill({ color: ink.index }),
-        stroke: new Stroke({ color: ink.halo, width: 3 }),
-      }),
-    }),
-  };
-}
-const CONTOUR_STYLE = { dark: contourStyles('dark'), light: contourStyles('light') };
-
-// -- Feature overlay style --------------------------------------------------
-
-const LAYER_STYLE = {
-  // Area of operations: solid and heavier; the area of interest around it dashed.
-  ao: { color: '#ff7a3d', dash: null, width: 3, fillAlpha: 0 },
-  aoi: { color: '#f2c94c', dash: [10, 6], width: 2, fillAlpha: 0 },
-  mcoo: { color: '#8d6e63', dash: null, width: 1.5, fillAlpha: 0.18 },
-  'key-terrain': { color: '#6d9c50', dash: null, width: 2.5, fillAlpha: 0.22 },
-  avenue: { color: '#3d7ab8', dash: null, width: 4, fillAlpha: 0 },
-  obstacle: { color: '#c0392b', dash: [6, 4], width: 2.5, fillAlpha: 0.25 },
-  nai: { color: '#2f80ed', dash: [4, 3], width: 2, fillAlpha: 0.1 },
-  tai: { color: '#eb5757', dash: [4, 3], width: 2, fillAlpha: 0.1 },
-  coa: { color: '#27ae60', dash: null, width: 2, fillAlpha: 0.15 },
-  threat: { color: '#eb3b5a', dash: null, width: 2, fillAlpha: 0.2 },
-  note: { color: '#7f8c8d', dash: [2, 3], width: 1.5, fillAlpha: 0.1 },
-  // Where the study's weather is read (step 1); highest/lowest ground hollow.
-  weather: { color: '#0e7490', dash: null, width: 2, fillAlpha: 0 },
-};
-const DEFAULT_LAYER_STYLE = { color: '#546e7a', dash: null, width: 2, fillAlpha: 0.15 };
-
-function layerConfig(layerName) {
-  return LAYER_STYLE[layerName] || DEFAULT_LAYER_STYLE;
-}
-
-function withAlpha(color, alpha) {
-  if (typeof color !== 'string' || !color.startsWith('#')) return color;
-  const hex = color.slice(1);
-  const full =
-    hex.length === 3
-      ? hex
-          .split('')
-          .map((c) => c + c)
-          .join('')
-      : hex;
-  const value = Number.parseInt(full, 16);
-  const r = (value >> 16) & 255;
-  const g = (value >> 8) & 255;
-  const b = value & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-function buildLabelText(label, geometryType) {
-  return new TextStyle({
-    text: label,
-    font: '600 12px system-ui, sans-serif',
-    fill: new Fill({ color: '#1b1b1b' }),
-    stroke: new Stroke({ color: '#ffffff', width: 3 }),
-    offsetY: geometryType === 'Point' ? -14 : 0,
-    placement:
-      geometryType === 'LineString' || geometryType === 'MultiLineString' ? 'line' : 'point',
-    overflow: true,
-  });
-}
-
-function labelAnchor(geometry) {
-  if (geometry.getType() === 'Polygon' && typeof geometry.getInteriorPoint === 'function') {
-    return geometry.getInteriorPoint();
-  }
-  return new Point(extentCenter(geometry.getExtent()));
-}
-
-function buildBoxLabelStyle(geometry, label, color) {
-  return new Style({
-    geometry: labelAnchor(geometry),
-    text: new TextStyle({
-      text: label,
-      font: '700 11px system-ui, sans-serif',
-      fill: new Fill({ color: '#1b1b1b' }),
-      backgroundFill: new Fill({ color: 'rgba(255, 255, 255, 0.88)' }),
-      backgroundStroke: new Stroke({ color, width: 1.5 }),
-      padding: [3, 6, 3, 6],
-    }),
-  });
-}
-
-function buildArrowStyle(geometry, color) {
-  const coordinates = geometry.getCoordinates();
-  if (coordinates.length < 2) return null;
-  const [x2, y2] = coordinates[coordinates.length - 1];
-  const [x1, y1] = coordinates[coordinates.length - 2];
-  const rotation = Math.atan2(x2 - x1, y2 - y1);
-  return new Style({
-    geometry: new Point([x2, y2]),
-    image: new RegularShape({
-      points: 3,
-      radius: 9,
-      rotation,
-      fill: new Fill({ color }),
-      rotateWithView: true,
-    }),
-  });
-}
-
-/** How far (screen px) a traced line may stray from the trace once simplified. */
-const TRACE_TOLERANCE_PX = 2;
-
-/**
- * A traced line or area with only the vertices that matter at `tolerance`
- * (map units): Douglas–Peucker on the line or the area's outline. OL's own
- * Polygon simplify only quantizes, which keeps most points of a smooth trace.
- */
-function simplifyTrace(geometry, tolerance) {
-  if (geometry.getType() !== 'Polygon') return geometry.simplify(tolerance);
-  const outline = new LineString(geometry.getCoordinates()[0]).simplify(tolerance).getCoordinates();
-  return outline.length >= 4 ? new Polygon([outline]) : geometry;
-}
-
-/** Map symbol sizes (milsymbol `size`, the frame's height in px), chosen per map. */
-export const SYMBOL_SIZES = { small: 20, medium: 28, large: 40 };
-
-/**
- * A cached milsymbol icon, keyed by every option that changes its pixels (a
- * shared cache keyed on sidc alone would leak one feature's designation,
- * DTG or fade onto every other feature drawn with the same code). The
- * planned/anticipated dashed frame is a field of the SIDC itself
- * (`src/symbols/sidc.js`'s `withStatus`), not a milsymbol render option —
- * milsymbol derives the frame purely from the code it is given.
- * `amplifiers` are milsymbol text/graphic amplifier options.
- */
-function milSymbolIcon(symbols, { sidc, amplifiers = {}, opacity = 1 }) {
-  const { cache, size } = symbols;
-  const key = `${sidc}|${size}|${opacity}|${JSON.stringify(amplifiers)}`;
-  let icon = cache.get(key);
-  if (!icon) {
-    // Same APP-6 drawing as ORBAT and the picker; a canvas can't resolve the
-    // shared default `currentColor`, so the amplifier text gets real ink.
-    const symbol = createSymbol(sidc, { ...amplifiers, size, infoColor: MAP_SYMBOL_INK });
-    const canvas = symbol.asCanvas();
-    // The symbol's own insertion point, not the canvas centre: amplifier
-    // text, an HQ staff or a direction arrow make the canvas lopsided.
-    const anchor = symbol.getAnchor();
-    icon = new IconStyle({
-      img: canvas,
-      imgSize: [canvas.width, canvas.height],
-      anchor: [anchor.x, anchor.y],
-      anchorXUnits: 'pixels',
-      anchorYUnits: 'pixels',
-      opacity,
-    });
-    cache.set(key, icon);
-  }
-  return icon;
-}
-
-/** A `symbol`-kind feature: the SIDC icon with its amplifiers
- * (`src/symbols/unitProperties.js`). The feature's label is drawn only when
- * no unique designation (T) already names it beside the frame. */
-function buildSymbolStyle(properties, label, symbols) {
-  const icon = milSymbolIcon(symbols, {
-    sidc: properties.sidc,
-    amplifiers: unitSymbolOptions(properties),
-  });
-  const text = label && !properties.designation ? buildLabelText(label, 'Point') : undefined;
-  return new Style({ image: icon, text });
-}
-
-function buildSelectionHalo(geometry) {
-  const type = geometry.getType();
-  if (type === 'Point' || type === 'MultiPoint') {
-    return new Style({
-      image: new CircleStyle({
-        radius: 15,
-        fill: new Fill({ color: 'rgba(255, 245, 157, 0.35)' }),
-        stroke: new Stroke({ color: '#fff59d', width: 2 }),
-      }),
-    });
-  }
-  return new Style({ stroke: new Stroke({ color: '#fff59d', width: 7 }) });
-}
-
-/** A `graphic`-kind feature: `properties.graphic` looked up in `TACTICAL_GRAPHICS`. */
-function buildGraphicStyle(feature, properties, label, darkBase) {
-  const entry = TACTICAL_GRAPHICS[properties.graphic];
-  if (!entry) return [];
-  const color = graphicColor(properties.affiliation, darkBase);
-  return entry.style(feature, { color, darkBase, label });
-}
-
-/** A `range-ring`-kind feature: one dashed geodesic circle per `properties.radii` metres, labelled at its north point. */
-function buildRangeRingStyle(feature, properties, darkBase) {
-  const radii = Array.isArray(properties.radii) ? properties.radii : [];
-  if (!radii.length) return [];
-  const center = toLonLat(feature.getGeometry().getCoordinates(), MAP_PROJECTION);
-  const color = graphicColor(properties.affiliation, darkBase);
-  const ringLabels = Array.isArray(properties.ringLabels) ? properties.ringLabels : [];
-  const styles = [];
-  radii.forEach((radiusM, index) => {
-    const ring = rangeRingGeometry(center, radiusM).transform(DATA_PROJECTION, MAP_PROJECTION);
-    styles.push(
-      new Style({ geometry: ring, stroke: new Stroke({ color, width: 1.5, lineDash: [6, 4] }) }),
-    );
-    // circular()'s first vertex is due north of the centre — exactly the label anchor we want.
-    const north = ring.getCoordinates()[0][0];
-    const text = String(ringLabels[index] ?? formatMetres(radiusM));
-    styles.push(
-      new Style({
-        geometry: new Point(north),
-        text: new TextStyle({
-          text,
-          font: '700 11px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif',
-          fill: new Fill({ color: '#1b1b1b' }),
-          backgroundFill: new Fill({ color: 'rgba(255, 255, 255, 0.9)' }),
-          backgroundStroke: new Stroke({ color, width: 1.25 }),
-          padding: [1, 4, 1, 4],
-          textBaseline: 'bottom',
-          offsetY: -4,
-        }),
-      }),
-    );
-  });
-  return styles;
-}
-
-function buildFeatureStyle(feature, symbols, darkBase) {
-  const layerName = feature.get('layer');
-  const kind = feature.get('kind');
-  const properties = feature.get('properties') || {};
-  const label = feature.get('label');
-  const geometry = feature.getGeometry();
-  if (!geometry) return [];
-
-  if (kind === 'graphic')
-    return buildGraphicStyle(
-      feature,
-      properties,
-      label || graphicLabel(properties.graphic, properties.name),
-      darkBase,
-    );
-  if (kind === 'range-ring') return buildRangeRingStyle(feature, properties, darkBase);
-
-  if (properties.sidc) {
-    return [buildSymbolStyle(properties, label, symbols)];
-  }
-
-  const config = layerConfig(layerName);
-  const color = properties.color || config.color;
-  const geometryType = geometry.getType();
-  const styles = [];
-  // Suggestions not yet accepted: same colour as the layer, but hollow/dashed.
-  const draft = properties.draft === true;
-
-  if (geometryType === 'Point' || geometryType === 'MultiPoint') {
-    styles.push(
-      new Style({
-        image: new CircleStyle({
-          radius: 7,
-          fill: new Fill({ color: draft ? 'rgba(255, 255, 255, 0.85)' : withAlpha(color, 0.9) }),
-          stroke: draft
-            ? new Stroke({ color, width: 2.5, lineDash: [3, 2] })
-            : new Stroke({ color: '#1b1b1b', width: 1.5 }),
-        }),
-        text: label ? buildLabelText(label, 'Point') : undefined,
-      }),
-    );
-    return styles;
-  }
-
-  styles.push(
-    new Style({
-      stroke: new Stroke({
-        color: draft ? withAlpha(color, 0.85) : color,
-        width: config.width,
-        lineDash: draft ? [10, 6] : config.dash || undefined,
-      }),
-      fill: config.fillAlpha > 0 ? new Fill({ color: withAlpha(color, config.fillAlpha) }) : null,
-      text:
-        label && layerName !== 'nai' && layerName !== 'tai'
-          ? buildLabelText(label, geometryType)
-          : undefined,
-    }),
-  );
-
-  if (
-    layerName === 'avenue' &&
-    (geometryType === 'LineString' || geometryType === 'MultiLineString')
-  ) {
-    const arrow = buildArrowStyle(geometry, color);
-    if (arrow) styles.push(arrow);
-  }
-
-  if ((layerName === 'nai' || layerName === 'tai') && label) {
-    styles.push(buildBoxLabelStyle(geometry, label, color));
-  }
-
-  return styles;
-}
-
-// -- Situation overlay style (setSituation: Exercise's current tracks/reports) --
-
-/** `destroyed`/`lost` tracks fade instead of disappearing — still on the map, marked as no longer live. */
-const TRACK_FADED_OPACITY = 0.4;
-const SITUATION_LABEL_FONT = '700 11px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif';
-/** Report labels hide below this (OL "256px tile" resolution at zoom 12), so a busy situation doesn't bury the basemap when zoomed out. */
-const REPORT_LABEL_MAX_RESOLUTION = 38.22;
-const REPORT_INK = '#e6c229';
-
-/** A track's icon: designation + DTG via milsymbol modifiers, `suspected` dashed (planned), `destroyed`/`lost` faded. */
-function situationTrackStyle(feature, symbols) {
-  const track = feature.get('track');
-  const opacity = track.status === 'destroyed' || track.status === 'lost' ? TRACK_FADED_OPACITY : 1;
-  const sidc = track.status === 'suspected' ? withStatus(track.sidc, 'planned') : track.sidc;
-  const icon = milSymbolIcon(symbols, {
-    sidc,
-    amplifiers: unitSymbolOptions({
-      designation: track.designation,
-      dtg: track.observed_at ? formatDtg(new Date(track.observed_at).getTime()) : undefined,
-    }),
-    opacity,
-  });
-  return new Style({ image: icon });
-}
-
-const SITUATION_HISTORY_STYLE = new Style({
-  stroke: new Stroke({ color: '#546e7a', width: 1.5, lineDash: [3, 4] }),
-});
-const SITUATION_HISTORY_DOT_STYLE = new Style({
-  image: new CircleStyle({ radius: 2.5, fill: new Fill({ color: '#546e7a' }) }),
-});
-
-/** A report marker: a rotated square, filled by credibility (1-2 solid, 3 medium, 4-6 hollow). */
-function situationReportStyle(feature, resolution) {
-  const report = feature.get('report');
-  const fillAlpha = report.credibility <= 2 ? 0.9 : report.credibility === 3 ? 0.45 : 0;
-  const styles = [
-    new Style({
-      image: new RegularShape({
-        points: 4,
-        radius: 7,
-        angle: Math.PI / 4,
-        fill: new Fill({ color: withAlpha(REPORT_INK, fillAlpha) }),
-        stroke: new Stroke({ color: REPORT_INK, width: 1.75 }),
-      }),
-    }),
-  ];
-  if (resolution <= REPORT_LABEL_MAX_RESOLUTION) {
-    styles.push(
-      new Style({
-        text: new TextStyle({
-          text: (report.report_type || 'report').toUpperCase(),
-          font: SITUATION_LABEL_FONT,
-          offsetY: -14,
-          fill: new Fill({ color: '#1b1b1b' }),
-          stroke: new Stroke({ color: '#ffffff', width: 3 }),
-        }),
-      }),
-    );
-  }
-  return styles;
-}
-
-// -- Scenario overlay style (Exercise "Geography" fictional countries) -----
-
-/** Great-circle distance in km; good enough for the ≤5 km name-match rule. */
-function haversineKm(lon1, lat1, lon2, lat2) {
-  const R = 6371;
-  const toRad = (deg) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
-
-/**
- * Scenario places bucketed by lowercased real name, for a fast lookup before
- * the distance check. Exported so the Exercise "Geography" editor can run
- * the same match rule when a clicked real label is already
- * renamed, instead of guessing from `scenario.places` itself.
- */
-export function buildScenarioNameIndex(scenario) {
-  const index = new Map();
-  if (!scenario) return index;
-  for (const place of scenario.places) {
-    const key = place.real_name.trim().toLowerCase();
-    const bucket = index.get(key);
-    if (bucket) bucket.push(place);
-    else index.set(key, [place]);
-  }
-  return index;
-}
-
-/**
- * Match rule: same name (case/trim-insensitive), ≤5 km apart.
- * The name lookup narrows to a handful of candidates before any distance
- * math runs, which is what keeps this affordable per rendered label.
- */
-export function matchScenarioPlace(index, name, lon, lat) {
-  if (!name) return null;
-  const bucket = index.get(name.trim().toLowerCase());
-  if (!bucket) return null;
-  return bucket.find((place) => haversineKm(lon, lat, place.lon, place.lat) <= 5) ?? null;
-}
-
-/** "Arnland" -> "A R N L A N D": crude letter-spacing, canvas text has none. */
-function letterSpaced(text) {
-  return text.toLocaleUpperCase().split('').join('\u2009');
-}
-
-const COUNTRY_LABEL_FONT = '700 13px "IBM Plex Sans Condensed", "Arial Narrow", sans-serif';
-/** Dark ink over the pale vector basemap, light ink over dark imagery — same pairing as MGRS/contours. */
-const COUNTRY_TONE = {
-  dark: {
-    label: '#1b1b1b',
-    halo: 'rgba(255, 255, 255, 0.92)',
-    casing: 'rgba(255, 255, 255, 0.9)',
-  },
-  light: { label: '#ffffff', halo: 'rgba(8, 12, 16, 0.85)', casing: 'rgba(8, 12, 16, 0.85)' },
-};
-
-/**
- * A point safely inside a Polygon or MultiPolygon, for a country's label —
- * `getInteriorPoint()` only exists on `Polygon`; for a MultiPolygon (most
- * countries here, unioned from several kraje/okresy) this uses the largest
- * constituent polygon's interior point, so the label sits in the biggest
- * landmass rather than a sliver.
- */
-function geometryAnchor(geometry) {
-  if (geometry.getType() === 'Polygon') return geometry.getInteriorPoint().getCoordinates();
-  const largest = geometry
-    .getPolygons()
-    .reduce(
-      (best, polygon) => (!best || polygon.getArea() > best.getArea() ? polygon : best),
-      null,
-    );
-  return largest.getInteriorPoint().getCoordinates();
-}
-
-/** EPSG:3857 resolution (m/px) → the usual 256px-tile zoom level, for style
- * functions that only get a resolution — same tile grid this map uses
- * everywhere else (`createXYZ()`'s default). */
-function resolutionToZoom(resolution) {
-  return Math.log2(156543.03392804097 / resolution);
-}
-
-const COUNTRY_FILL_MAX_ALPHA = 0.16;
-/** Full fill at/below this zoom, fading to none by the zoom above: inside
- * one country the whole map isn't tinted once zoomed in to work in it. */
-const COUNTRY_FILL_FADE_START = 8;
-const COUNTRY_FILL_FADE_END = 10;
-
-/** A country fill's alpha at `zoom`: full through 8, 0 from 10, linear between. */
-function countryFillAlpha(zoom) {
-  if (zoom <= COUNTRY_FILL_FADE_START) return COUNTRY_FILL_MAX_ALPHA;
-  if (zoom >= COUNTRY_FILL_FADE_END) return 0;
-  const t = (zoom - COUNTRY_FILL_FADE_START) / (COUNTRY_FILL_FADE_END - COUNTRY_FILL_FADE_START);
-  return COUNTRY_FILL_MAX_ALPHA * (1 - t);
-}
-
-const COUNTRY_FILL_STYLE_CACHE = new Map();
-/** Cached by colour + a rounded alpha (zoom moves continuously; alpha only
- * needs ~256 steps to look smooth), so panning/zooming doesn't allocate a
- * new Style/Fill every frame. */
-function countryFillStyle(color, zoom) {
-  const alpha = Math.round(countryFillAlpha(zoom) * 255) / 255;
-  if (alpha <= 0) return null;
-  const key = `${color}|${alpha}`;
-  if (!COUNTRY_FILL_STYLE_CACHE.has(key)) {
-    COUNTRY_FILL_STYLE_CACHE.set(
-      key,
-      new Style({ fill: new Fill({ color: withAlpha(color, alpha) }) }),
-    );
-  }
-  return COUNTRY_FILL_STYLE_CACHE.get(key);
-}
-
-/** A scenario country: low-alpha fill (fading out zoomed in), a coloured
- * border on a casing, an uppercase spaced label — the border and label stay
- * at every zoom, only the fill fades. */
-function countryStyle(feature, tone, resolution) {
-  const color = feature.get('color') || '#8ea2a8';
-  const ink = COUNTRY_TONE[tone];
-  const anchor = geometryAnchor(feature.getGeometry());
-  const fill = countryFillStyle(color, resolutionToZoom(resolution));
-  return [
-    ...(fill ? [fill] : []),
-    new Style({ stroke: new Stroke({ color: ink.casing, width: 5 }) }),
-    new Style({ stroke: new Stroke({ color, width: 2.4 }) }),
-    new Style({
-      geometry: new Point(anchor),
-      text: new TextStyle({
-        text: letterSpaced(feature.get('name') || ''),
-        font: COUNTRY_LABEL_FONT,
-        fill: new Fill({ color: ink.label }),
-        stroke: new Stroke({ color: ink.halo, width: 4 }),
-        overflow: true,
-      }),
-    }),
-  ];
-}
-
-/** Kraj/okres outline for the Exercise "Pick regions" mode; tinted by its owning country, if any. */
-function regionStyle(ownerColor) {
-  return new Style({
-    stroke: new Stroke({
-      color: ownerColor ? withAlpha(ownerColor, 0.9) : 'rgba(159, 208, 222, 0.55)',
-      width: ownerColor ? 2 : 1,
-    }),
-    fill: new Fill({
-      color: ownerColor ? withAlpha(ownerColor, 0.22) : 'rgba(159, 208, 222, 0.05)',
-    }),
-  });
-}
-
-// -- MGRS grid style ------------------------------------------------------------
-
-const MGRS_INK = '#12324a';
-const MGRS_FONT = '"Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace';
-const MGRS_LINE_WIDTH = { zone: 2.2, square: 1.4, line: 0.8 };
-/**
- * Two tones: dark ink over the pale vector basemap, and over imagery (dark
- * and busy) white lines on a dark casing so they read on fields and forest.
- */
-const MGRS_LINE_STYLE = {
-  dark: {
-    zone: new Style({ stroke: new Stroke({ color: MGRS_INK, width: MGRS_LINE_WIDTH.zone }) }),
-    square: new Style({ stroke: new Stroke({ color: MGRS_INK, width: MGRS_LINE_WIDTH.square }) }),
-    line: new Style({
-      stroke: new Stroke({ color: 'rgba(18, 50, 74, 0.5)', width: MGRS_LINE_WIDTH.line }),
-    }),
-  },
-  light: Object.fromEntries(
-    Object.entries(MGRS_LINE_WIDTH).map(([rank, width]) => [
-      rank,
-      [
-        new Style({ stroke: new Stroke({ color: 'rgba(0, 0, 0, 0.45)', width: width + 1.6 }) }),
-        new Style({
-          stroke: new Stroke({
-            color: rank === 'line' ? 'rgba(255, 255, 255, 0.7)' : '#ffffff',
-            width,
-          }),
-        }),
-      ],
-    ]),
-  ),
-};
-const MGRS_LABEL_TEXT = {
-  // Easting digits sit just above the bottom edge, northing digits just
-  // right of the left edge, as on a paper map sheet's margin.
-  easting: { font: `600 11px ${MGRS_FONT}`, textBaseline: 'bottom', offsetY: -4 },
-  northing: { font: `600 11px ${MGRS_FONT}`, textAlign: 'left', offsetX: 5 },
-  square: { font: `700 12px ${MGRS_FONT}`, boxed: true },
-  zone: { font: `700 13px ${MGRS_FONT}`, boxed: true },
-};
-
-function mgrsLabelStyle(kind, text, tone) {
-  const { boxed, ...options } = MGRS_LABEL_TEXT[kind];
-  // Boxed labels carry their own white background and read on any basemap.
-  const light = tone === 'light' && !boxed;
-  return new Style({
-    text: new TextStyle({
-      ...options,
-      text,
-      fill: new Fill({ color: light ? '#ffffff' : MGRS_INK }),
-      ...(boxed
-        ? {
-            backgroundFill: new Fill({ color: 'rgba(255, 255, 255, 0.85)' }),
-            padding: [2, 5, 2, 5],
-          }
-        : { stroke: new Stroke({ color: light ? 'rgba(0, 0, 0, 0.8)' : '#ffffff', width: 3 }) }),
-    }),
-  });
-}
-
-// -- Print furniture ---------------------------------------------------------------
-
-/** Longest 1/2/5 × 10^n metres that fits in `maxMetres`. */
-function niceScaleLength(maxMetres) {
-  const power = 10 ** Math.floor(Math.log10(maxMetres));
-  return [5, 2, 1].map((step) => step * power).find((length) => length <= maxMetres);
-}
-
-/** Four-segment black/white scale bar in the bottom-left corner (CSS px). */
-function drawScaleBar(context, height, metresPerPixel) {
-  const metres = niceScaleLength(160 * metresPerPixel);
-  const barWidth = metres / metresPerPixel;
-  const x = 16;
-  const y = height - 30;
-  const label = metres >= 1000 ? `${metres / 1000} km` : `${metres} m`;
-  context.font = '600 11px "Cascadia Mono", "IBM Plex Mono", ui-monospace, monospace';
-  context.fillStyle = 'rgba(255, 255, 255, 0.9)';
-  context.fillRect(x - 8, y - 20, barWidth + 16 + context.measureText(label).width + 8, 38);
-  for (let segment = 0; segment < 4; segment += 1) {
-    context.fillStyle = segment % 2 ? '#ffffff' : '#1b1b1b';
-    context.fillRect(x + (segment * barWidth) / 4, y, barWidth / 4, 6);
-  }
-  context.strokeStyle = '#1b1b1b';
-  context.lineWidth = 1;
-  context.strokeRect(x, y, barWidth, 6);
-  context.fillStyle = '#1b1b1b';
-  context.textBaseline = 'bottom';
-  context.fillText('0', x - 3, y - 3);
-  context.fillText(label, x + barWidth + 6, y + 8);
-}
-
-/** North arrow in the top-right corner, only drawn when the view is rotated. */
-function drawNorthArrow(context, width, rotation) {
-  context.save();
-  context.translate(width - 30, 36);
-  context.rotate(rotation);
-  context.fillStyle = '#1b1b1b';
-  context.beginPath();
-  context.moveTo(0, -16);
-  context.lineTo(7, 10);
-  context.lineTo(0, 5);
-  context.lineTo(-7, 10);
-  context.closePath();
-  context.fill();
-  context.font = '700 11px system-ui, sans-serif';
-  context.textAlign = 'center';
-  context.fillText('N', 0, -20);
-  context.restore();
-}
-
-// -- Grid overlay rasterisation ---------------------------------------------
-
-function decodeGridValues(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function cssColorToRgba(css, probeContext) {
-  probeContext.clearRect(0, 0, 1, 1);
-  probeContext.fillStyle = css;
-  probeContext.fillRect(0, 0, 1, 1);
-  return probeContext.getImageData(0, 0, 1, 1).data;
-}
-
-function buildGridCanvas(grid, palette) {
-  const canvas = document.createElement('canvas');
-  canvas.width = grid.width;
-  canvas.height = grid.height;
-  const context = canvas.getContext('2d');
-  const imageData = context.createImageData(grid.width, grid.height);
-  const values = decodeGridValues(grid.values);
-
-  const probe = document.createElement('canvas');
-  probe.width = 1;
-  probe.height = 1;
-  const probeContext = probe.getContext('2d');
-  const colorCache = new Map();
-
-  for (let i = 0; i < values.length; i += 1) {
-    const value = values[i];
-    const css = palette[value];
-    const offset = i * 4;
-    if (!css) {
-      imageData.data[offset + 3] = 0;
-      continue;
-    }
-    let rgba = colorCache.get(css);
-    if (!rgba) {
-      rgba = cssColorToRgba(css, probeContext);
-      colorCache.set(css, rgba);
-    }
-    imageData.data[offset] = rgba[0];
-    imageData.data[offset + 1] = rgba[1];
-    imageData.data[offset + 2] = rgba[2];
-    imageData.data[offset + 3] = rgba[3];
-  }
-
-  context.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
-/** Paint a fixed-resolution raster canvas into the extent OL is requesting, nearest-neighbour. */
-function paintGridInto(sourceCanvas, sourceExtent, destExtent, destSize) {
-  const canvas = document.createElement('canvas');
-  canvas.width = destSize[0];
-  canvas.height = destSize[1];
-  const context = canvas.getContext('2d');
-  context.imageSmoothingEnabled = false;
-
-  const [gx0, gy0, gx1, gy1] = sourceExtent;
-  const [ex0, ey0, ex1, ey1] = destExtent;
-  const gw = sourceCanvas.width;
-  const gh = sourceCanvas.height;
-
-  const scaleX = (destSize[0] * (gx1 - gx0)) / (gw * (ex1 - ex0));
-  const scaleY = (destSize[1] * (gy1 - gy0)) / (gh * (ey1 - ey0));
-  const offsetX = (destSize[0] * (gx0 - ex0)) / (ex1 - ex0);
-  const offsetY = (destSize[1] * (ey1 - gy1)) / (ey1 - ey0);
-
-  context.setTransform(scaleX, 0, 0, scaleY, offsetX, offsetY);
-  context.drawImage(sourceCanvas, 0, 0);
-  context.setTransform(1, 0, 0, 1, 0, 0);
-  return canvas;
-}
-
-// -- Weather ----------------------------------------------------------------
-
-/** Cloud tint per basemap tone: dark shading on paper maps, white over imagery. */
-const CLOUD_TINT = {
-  dark: { rgb: [38, 58, 88], alpha: 0.38 },
-  light: { rgb: [255, 255, 255], alpha: 0.55 },
-};
-const WEATHER_TILE_SIZE = 256;
-const WEATHER_TILE_GRID = createXYZ({ tileSize: WEATHER_TILE_SIZE });
-/**
- * Deepest cloud-mask tile zoom. Meteosat's 3 km pixels are ~4-6 km at 50° N;
- * 32 px per zoom-8 tile (~4.9 km) is about that.
- */
-const CLOUD_MAX_ZOOM = 8;
-
-/**
- * Cloud-mask request size for a tile zoom, at about the product's own pixel
- * size, so the browser does the enlarging smoothly instead of the server in
- * hard blocks. Each zoom out doubles the ground a tile covers, so it doubles
- * the pixels, up to the full tile.
- */
-function cloudRequestSize(z) {
-  return Math.min(WEATHER_TILE_SIZE, 32 * 2 ** (CLOUD_MAX_ZOOM - z));
-}
-
-const WIND_INK = {
-  dark: { stroke: '#123047', halo: 'rgba(255, 255, 255, 0.9)' },
-  light: { stroke: '#ffffff', halo: 'rgba(0, 0, 0, 0.75)' },
-};
-const windArrowCache = new Map();
-
-/** A north-pointing arrow, longer for stronger wind (capped at 20 m/s). */
-function windArrowCanvas(length, tone) {
-  const key = `${tone}:${length}`;
-  let canvas = windArrowCache.get(key);
-  if (canvas) return canvas;
-  const ink = WIND_INK[tone];
-  const ratio = window.devicePixelRatio || 1;
-  const width = 14;
-  canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(width * ratio);
-  canvas.height = Math.ceil((length + 4) * ratio);
-  const context = canvas.getContext('2d');
-  context.scale(ratio, ratio);
-  context.lineCap = 'round';
-  context.lineJoin = 'round';
-  const shaft = () => {
-    context.beginPath();
-    context.moveTo(width / 2, length + 2);
-    context.lineTo(width / 2, 4);
-    context.moveTo(2, 10);
-    context.lineTo(width / 2, 2);
-    context.lineTo(width - 2, 10);
-  };
-  shaft();
-  context.strokeStyle = ink.halo;
-  context.lineWidth = 4.5;
-  context.stroke();
-  shaft();
-  context.strokeStyle = ink.stroke;
-  context.lineWidth = 2;
-  context.stroke();
-  windArrowCache.set(key, canvas);
-  return canvas;
-}
-
-/** Arrow pointing downwind plus "speed (gusts)" in m/s. */
-function windStyle({ speed, gusts, direction }, tone) {
-  if (!Number.isFinite(speed) || !Number.isFinite(direction)) return null;
-  const length = Math.round(14 + Math.min(speed, 20) * 1.6);
-  const ink = WIND_INK[tone];
-  const ratio = window.devicePixelRatio || 1;
-  // Not aviation "2G7": at label size the G reads as a 6.
-  const gustText = Number.isFinite(gusts) && gusts >= speed + 3 ? ` (${Math.round(gusts)})` : '';
-  return [
-    new Style({
-      image: new IconStyle({
-        img: windArrowCanvas(length, tone),
-        scale: 1 / ratio,
-        rotation: downwindRotation(direction),
-        rotateWithView: true,
-      }),
-    }),
-    new Style({
-      text: new TextStyle({
-        text: `${Math.round(speed)}${gustText}`,
-        font: '600 11px ui-monospace, SFMono-Regular, Menlo, monospace',
-        fill: new Fill({ color: ink.stroke }),
-        stroke: new Stroke({ color: ink.halo, width: 3 }),
-        offsetY: 18,
-      }),
-    }),
-  ];
-}
-
-/**
- * Load one WMS tile as a canvas; `transform(ImageData)` may recolour it. The
- * WMS answers with CORS `*`, so the pixels are readable. A coarse product can
- * be fetched at `size` < the tile size and upscaled smoothly here: the server
- * resamples nearest-neighbour, which draws its pixels as hard blocks.
- */
-async function loadWmsTile(layer, time, [z, x, y], signal, { size, transform } = {}) {
-  const extent = WEATHER_TILE_GRID.getTileCoordExtent([z, x, y]);
-  const requestSize = Math.min(size ?? WEATHER_TILE_SIZE, WEATHER_TILE_SIZE);
-  const response = await fetch(wmsTileUrl(layer, extent, requestSize, time), { signal });
-  if (!response.ok) throw new Error(`WMS ${response.status}`);
-  const bitmap = await createImageBitmap(await response.blob());
-  let canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  const context = canvas.getContext('2d', { willReadFrequently: Boolean(transform) });
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  if (transform) {
-    const image = context.getImageData(0, 0, canvas.width, canvas.height);
-    transform(image.data);
-    context.putImageData(image, 0, 0);
-  }
-  if (canvas.width < WEATHER_TILE_SIZE) {
-    const small = canvas;
-    canvas = document.createElement('canvas');
-    canvas.width = WEATHER_TILE_SIZE;
-    canvas.height = WEATHER_TILE_SIZE;
-    const large = canvas.getContext('2d');
-    large.imageSmoothingQuality = 'high';
-    large.drawImage(small, 0, 0, WEATHER_TILE_SIZE, WEATHER_TILE_SIZE);
-  }
-  return canvas;
-}
+import {
+  CONTOUR_STYLE,
+  DIMMED_PLACE_LABEL,
+  PLACE_LABEL,
+  basemapStyle,
+  featureLonLat,
+  hybridStyle,
+  placeLabelStyle,
+  resolvePlaceClass,
+  topoStyle,
+} from './map/basemapStyles.js';
+import { buildGridCanvas, drawNorthArrow, drawScaleBar, paintGridInto } from './map/canvas.js';
+import {
+  SYMBOL_SIZES,
+  TRACE_TOLERANCE_PX,
+  buildFeatureStyle,
+  buildSelectionHalo,
+  layerConfig,
+  simplifyTrace,
+  withAlpha,
+} from './map/featureStyles.js';
+import {
+  MGRS_LINE_STYLE,
+  SITUATION_HISTORY_DOT_STYLE,
+  SITUATION_HISTORY_STYLE,
+  buildScenarioNameIndex,
+  countryStyle,
+  matchScenarioPlace,
+  mgrsLabelStyle,
+  regionStyle,
+  situationReportStyle,
+  situationTrackStyle,
+} from './map/overlayStyles.js';
+import {
+  DATA_PROJECTION,
+  DRAW_GEOMETRY_TYPE,
+  GEOJSON_OPTIONS,
+  MAP_PROJECTION,
+} from './map/projection.js';
+import {
+  CLOUD_MAX_ZOOM,
+  CLOUD_TINT,
+  cloudRequestSize,
+  loadWmsTile,
+  windStyle,
+} from './map/weather.js';
+
+export { SYMBOL_SIZES } from './map/featureStyles.js';
+export { buildScenarioNameIndex, matchScenarioPlace } from './map/overlayStyles.js';
 
 // -- Controller ---------------------------------------------------------
 
@@ -1662,9 +513,10 @@ export function createMap(options) {
     return coveredInsets().map((inset) => inset + margin);
   }
 
-  function fitExtent(extent) {
+  /** `maxZoom` keeps a single point (a zero-size extent) from zooming to the last level. */
+  function fitExtent(extent, { maxZoom } = {}) {
     const extent3857 = transformExtent(extent, DATA_PROJECTION, MAP_PROJECTION);
-    map.getView().fit(extent3857, { padding: fitPadding(24), duration: 250 });
+    map.getView().fit(extent3857, { padding: fitPadding(24), duration: 250, maxZoom });
   }
 
   function getBounds() {
@@ -1819,7 +671,7 @@ export function createMap(options) {
    */
   function setScenario(scenario, { editing = false } = {}) {
     currentScenario = scenario || null;
-    editingScenario = Boolean(editing);
+    editingScenario = editing;
     scenarioIndex = buildScenarioNameIndex(currentScenario);
     countriesSource.clear();
     if (currentScenario) {
@@ -2205,8 +1057,22 @@ export function createMap(options) {
     return lastFrame;
   }
 
+  /**
+   * Resolves with the next settled frame (as `exportCanvas()` returns it),
+   * after asking for a render: unlike `exportCanvas()`, never a frame from
+   * before a view change or layer update that is still loading — what a
+   * print button waits on before calling `window.print()`.
+   */
+  function nextFrame() {
+    return new Promise((resolve) => {
+      frameWaiters.push(resolve);
+      map.render();
+    });
+  }
+
   let lastFrame = null;
   let frameTimer = null;
+  const frameWaiters = [];
   listenerKeys.push(
     map.on('rendercomplete', () => {
       window.clearTimeout(frameTimer);
@@ -2214,6 +1080,7 @@ export function createMap(options) {
       frameTimer = window.setTimeout(() => {
         const size = map.getSize();
         if (size?.[0] && size?.[1]) lastFrame = composeFrame(size);
+        if (lastFrame) frameWaiters.splice(0).forEach((resolve) => resolve(lastFrame));
       }, 250);
     }),
   );
@@ -2344,6 +1211,8 @@ export function createMap(options) {
   }
 
   function destroy() {
+    // A print still waiting on a frame gets none rather than hanging.
+    frameWaiters.splice(0).forEach((resolve) => resolve(null));
     cancelDraw();
     stopModify();
     stopEditing();
@@ -2397,6 +1266,7 @@ export function createMap(options) {
     drawArea,
     stopEditing,
     exportCanvas,
+    nextFrame,
     destroy,
   };
 }

@@ -1,3 +1,4 @@
+// @ts-check
 // Accounts, sessions, memberships and the exercise record: outlive any one exercise.
 import path from 'node:path';
 

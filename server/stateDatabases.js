@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Every writable state database, for the exercise lifecycle, backup and
  * restore. Only the small `state.js` declarations are imported, never route

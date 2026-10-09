@@ -1,3 +1,6 @@
+// @ts-check
+import { HttpError } from './http.js';
+
 /**
  * The per-module guard ADR 0002 relies on, generated from the route table so
  * a new route is swept the day it's added: every route that names an item,
@@ -45,7 +48,7 @@ export async function sweepRoutes({ dispatcher, moduleId, actor, fixtures, param
       try {
         await dispatcher.runAs(actor, moduleId, route.method, path, {});
       } catch (error) {
-        status = error.status ?? 500;
+        status = error instanceof HttpError ? error.status : 500;
       }
       if (status !== expected)
         failures.push(`${route.method} ${path} (${variant}): ${status}, expected ${expected}`);

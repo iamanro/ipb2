@@ -131,7 +131,7 @@ describe('conflictTaskingIds', () => {
       overlaps: [{ tasking_ids: [1, 2] }],
       outside: [{ tasking_id: 3 }],
     });
-    expect([...ids].sort()).toEqual([1, 2, 3]);
+    expect([...ids].toSorted((a, b) => a - b)).toEqual([1, 2, 3]);
   });
 
   test('handles an empty/missing conflicts object', () => {

@@ -153,6 +153,14 @@ observation. If an observation time is required to plot, prompt for it before
 submitting the track mutation. Verify paused and accelerated scenario clocks and
 an intentionally unknown observation time.
 
+**Status (8 October 2026): implemented, verified locally.** The report list column is
+now "Observed" and shows `unknown (received <DTG>)` when no observation time was given;
+the situation view and the SALUTE/SPOT sheet in Products use the same label. Plotting a
+report without an observation time asks for one (a short DTG takes its month from the
+scenario clock) and refuses to submit until it parses. Verified in the dev app with a
+paused clock: an empty plot is refused with no track created; `080930Z` created the track
+at 08 OCT 09:30Z. Unit tests: `modules/exercise/client/reportTime.test.js`.
+
 ### 3. Make graphic INTSUM printing ready and legible
 
 **Observed:** printing immediately after selecting a report/rebuilding Products
@@ -167,6 +175,16 @@ must contain the map, readable scale, legend, scenario DTG and classification.
 Verify immediate printing after opening Products and after changing selections,
 as well as an empty situation and widely separated tracks. Do not certify a
 legend-only PDF as a successful graphic product.
+
+**Status (8 October 2026): implemented, verified in a headless browser.** Print preview on
+the graphic INTSUM now waits (up to 15 s) for a fresh, settled map frame
+(`map.nextFrame()`) and prints nothing, with a message, if none arrives. A browser-menu
+print without a frame puts "MAP NOT RENDERED" on the page instead of a legend-only
+product. The map frames every track and located report, widened to at least ~5.5 km
+and capped at zoom 15; the caption now reads `scale bar on map · 1 px ≈ 6.1 m`
+instead of rounding to `0 m`. Regression test: `e2e/products.e2e.js` (fails on the old
+code with an empty map canvas, passes now). Still to check by hand: a real PDF from
+Chrome's print dialog, and widely separated tracks.
 
 ### 4. Validate with a staff audience
 

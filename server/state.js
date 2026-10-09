@@ -1,3 +1,4 @@
+// @ts-check
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -43,6 +44,13 @@ export function dataDirectory(moduleId, defaultDirectory) {
  *   (leaving `user_version` unchanged), then foreign keys go back on;
  * - `{ run(database) }`, a JS-driven migration (e.g. reparsing a column's text
  *   into new columns before dropping it), executed inside one transaction.
+ *
+ * @typedef {string
+ *   | { sql: string, rebuild: true }
+ *   | { run(database: DatabaseSync): void }} Migration
+ * @param {string} file
+ * @param {Migration[]} migrations
+ * @returns {DatabaseSync}
  */
 export function openState(file, migrations) {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -50,16 +58,16 @@ export function openState(file, migrations) {
   database.exec('PRAGMA journal_mode = WAL');
   database.exec('PRAGMA foreign_keys = ON');
   database.exec('PRAGMA busy_timeout = 5000');
-  const applied = database.prepare('PRAGMA user_version').get().user_version;
+  const applied = Number(database.prepare('PRAGMA user_version').get()?.user_version ?? 0);
   if (applied > migrations.length) {
     database.close();
     throw new Error(`${file} was written by a newer schema (${applied}).`);
   }
   for (let index = applied; index < migrations.length; index += 1) {
     const migration = migrations[index];
-    if (migration && typeof migration === 'object' && migration.rebuild) {
+    if (typeof migration === 'object' && 'rebuild' in migration) {
       runRebuildMigration(database, migration, index);
-    } else if (migration && typeof migration === 'object' && typeof migration.run === 'function') {
+    } else if (typeof migration === 'object') {
       transact(database, () => {
         migration.run(database);
         database.exec(`PRAGMA user_version = ${index + 1}`);
@@ -98,6 +106,16 @@ function runRebuildMigration(database, migration, index) {
   } finally {
     database.exec('PRAGMA foreign_keys = ON');
   }
+}
+
+/**
+ * The `n` of a `SELECT COUNT(*) AS n …` query, as a number.
+ * @param {DatabaseSync} database
+ * @param {string} sql
+ * @param {...import('node:sqlite').SQLInputValue} params
+ */
+export function countRows(database, sql, ...params) {
+  return Number(database.prepare(sql).get(...params)?.n ?? 0);
 }
 
 /** Run `work` in one transaction. Rolls back on any throw. */

@@ -1,7 +1,18 @@
+// @ts-check
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
+/** `error.message` for an Error, else the thrown value as text: what a `catch` can report. */
+export function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class HttpError extends Error {
+  /**
+   * @param {number} status
+   * @param {string} message
+   * @param {Record<string, unknown> | null} [details] extra fields copied onto the error (and its JSON body)
+   */
   constructor(status, message, details = null) {
     super(message);
     this.status = status;

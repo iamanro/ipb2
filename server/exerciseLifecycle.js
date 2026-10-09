@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * The exercise lifecycle (C6, docs/phase1-access.md): archive, reset and
  * restore the current exercise's ipb/exercise/orbat state, and the
@@ -17,7 +18,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { archiveRoot, integrityCheck } from './dbArchive.js';
-import { HttpError } from './http.js';
+import { errorMessage, HttpError } from './http.js';
 import { publish } from './live.js';
 import { EXERCISE_DATABASES } from './stateDatabases.js';
 
@@ -44,7 +45,7 @@ function safeIntegrityCheck(file) {
   try {
     return integrityCheck(file);
   } catch (error) {
-    return error.message;
+    return errorMessage(error);
   }
 }
 
@@ -96,6 +97,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
     lockMessage = null;
   }
 
+  /** @param {{ note?: string | null }} [options] */
   async function performArchive({ note = null } = {}) {
     const store = getAuthStore();
     const exercise = store.getExercise();
@@ -134,6 +136,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
      * lock at the WAL checkpoint, never a long one — see
      * `server/dbArchive.js`), so an on-demand archive never needs the
      * reset/restore lock: it never mutates anything this app reads. */
+    /** @param {{ note?: string | null }} [options] */
     async archive({ note } = {}) {
       return performArchive({ note: note ?? null });
     },

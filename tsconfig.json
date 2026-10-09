@@ -1,0 +1,21 @@
+{
+  // Type checking for the JavaScript sources, run by `vp check` (Oxlint's
+  // type-aware path, tsgolint). Opt-in per file: only files that start with
+  // `// @ts-check` are checked, so modules join one at a time as they are
+  // split or touched (docs: tech debt review, "No real type checking").
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "target": "es2024",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true
+  },
+  "include": ["server/**/*.js", "src/**/*.js", "modules/**/*.js", "e2e/**/*.js", "deploy/**/*.mjs"],
+  "exclude": ["node_modules", "dist", "modules/*/data", "modules/*/state"]
+}
