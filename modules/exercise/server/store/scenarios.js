@@ -1,6 +1,6 @@
 // Exercise scenarios: fictional countries and renamed places over Czechia.
 
-import { HttpError } from '../../../../server/http.js';
+import { HttpError } from '../../../../server/http.ts';
 import {
   AFFILIATIONS,
   DEFAULT_COLORS,

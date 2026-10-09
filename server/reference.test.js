@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterEach, beforeEach, expect, test } from 'vitest';
 
-import { referenceFile } from './reference.js';
+import { referenceFile } from './reference.ts';
 
 let file;
 let reference;

@@ -1,12 +1,11 @@
-// @ts-check
 /**
  * Every writable state database, for the exercise lifecycle, backup and
  * restore. Only the small `state.js` declarations are imported, never route
  * code, so the backup container can load this with no reference data.
- * `stateDatabases.test.js` fails if a module's `server/state.js` is missing
+ * `stateDatabases.test.js` fails if a module's `server/state.ts` is missing
  * here, so a new module can't be silently left out of backups.
  */
-import authState from './authState.js';
+import authState from './authState.ts';
 import equipmentState from '../modules/equipment/server/state.js';
 import exerciseState from '../modules/exercise/server/state.js';
 import ipbState from '../modules/ipb/server/state.js';

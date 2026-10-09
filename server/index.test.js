@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
 
 // Same ordering constraint as `api.test.js`: `IPB_STATE_ROOT` has to be set
-// before anything imports `./api.js` (directly or via `./index.js`), so a
+// before anything imports `./api.ts` (directly or via `./index.ts`), so a
 // dynamic import after setting it is what makes that happen at the right
 // time — this suite never touches a real `modules/*/state/*.db`.
 let stateRoot;
@@ -48,7 +48,7 @@ beforeAll(async () => {
   process.env.IPB_STATE_ROOT = stateRoot;
   process.env.IPB_DATA_ROOT = dataRoot;
   writeIndexHtml();
-  ({ createRequestListener } = await import('./index.js'));
+  ({ createRequestListener } = await import('./index.ts'));
 });
 
 afterAll(() => {

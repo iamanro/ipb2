@@ -2,7 +2,7 @@
 
 import { formatDtg } from '../../../../src/dtg.js';
 import { formatMgrs } from '../../../../src/geo.js';
-import { HttpError } from '../../../../server/http.js';
+import { HttpError } from '../../../../server/http.ts';
 
 import { database } from './connection.js';
 import { requirementFulfillment } from './requirements.js';

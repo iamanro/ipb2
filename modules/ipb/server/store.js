@@ -1,9 +1,9 @@
 /**
  * IPB state store. Item-scoped requests (docs/adr/0002-item-scoped-requests.md):
- * `server/dispatch.js` resolves the study (and, for a part route, the part)
+ * `server/dispatch.ts` resolves the study (and, for a part route, the part)
  * named in the URL, checks the member's role and cell access, and only then
  * calls in here with the resolved id(s) and the domain input. Nothing in
- * this file sees the requesting user, imports `server/policy.js`, or
+ * this file sees the requesting user, imports `server/policy.ts`, or
  * composes an ownership check: a study/child id that reaches a function
  * below is already known to exist for a route that needs no further access
  * decision (see/change), or the dispatcher wants a plain 404 for "unknown"
@@ -23,8 +23,8 @@ import {
 } from '../../../src/symbols/sidc.js';
 import { unitPropertiesProblem } from '../../../src/symbols/unitProperties.js';
 import { areaPolygonProblem } from '../../../src/areaPolygon.js';
-import { HttpError } from '../../../server/http.js';
-import { openState, transact } from '../../../server/state.js';
+import { HttpError } from '../../../server/http.ts';
+import { openState, transact } from '../../../server/state.ts';
 import { sanitizeFilename, toGeoJson, toKml } from './export.js';
 import { MIGRATIONS } from './schema.js';
 
@@ -61,7 +61,7 @@ const STUDY_PATCH_FIELDS = new Set([
   'weather_thresholds',
   'checked',
 ]);
-/** A study create body may carry the ownership fields `server/dispatch.js`
+/** A study create body may carry the ownership fields `server/dispatch.ts`
  * itself reads (`owner_cell`, `releasable_to`) — resolved into `owner`
  * before this module ever sees them, so they're recognized here but never
  * read off `body`. */
@@ -955,7 +955,7 @@ function deleteStudy(id) {
 }
 
 /**
- * Runs inside `server/dispatch.js`'s own release/reassign transaction (it
+ * Runs inside `server/dispatch.ts`'s own release/reassign transaction (it
  * has already written `owner_cell`/`releasable_to`): bumps the study's
  * revision/`updated_at` — mutating `after` in place, since that's the exact
  * object the dispatcher shapes into its response — and appends one activity

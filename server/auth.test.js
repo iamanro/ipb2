@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { SESSION_ABSOLUTE_TTL_MS, SESSION_TTL_MS, openAuthStore } from './auth.js';
+import { SESSION_ABSOLUTE_TTL_MS, SESSION_TTL_MS, openAuthStore } from './auth.ts';
 
 function tempFile() {
   return path.join(

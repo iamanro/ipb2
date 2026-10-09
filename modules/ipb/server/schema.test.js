@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { openState } from '../../../server/state.js';
+import { openState } from '../../../server/state.ts';
 import { MIGRATIONS } from './schema.js';
 
 function tempFile(label) {

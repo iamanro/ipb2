@@ -1,4 +1,3 @@
-// @ts-check
 /**
  * `/api/*` entry point: a Vite plugin middleware. Handles `/api/live` (SSE,
  * C2) and `/api/auth/*` (C3) directly, authenticates and authorises every
@@ -11,19 +10,19 @@ import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { SESSION_TTL_MS, hashToken, openAuthStore } from './auth.js';
-import { createDispatcher } from './dispatch.js';
-import { createExerciseLifecycle } from './exerciseLifecycle.js';
-import { HttpError, readJson, sendJson } from './http.js';
+import { SESSION_TTL_MS, hashToken, openAuthStore } from './auth.ts';
+import { createDispatcher } from './dispatch.ts';
+import { createExerciseLifecycle } from './exerciseLifecycle.ts';
+import { HttpError, readJson, sendJson } from './http.ts';
 import {
   closeAllSubscribers,
   closeStreamsForToken,
   closeStreamsForUser,
   handleLive,
   publish,
-} from './live.js';
-import { modules } from './modules.js';
-import { roleAtLeast } from './policy.js';
+} from './live.ts';
+import { modules } from './modules.ts';
+import { roleAtLeast } from './policy.ts';
 
 const byId = new Map(modules.map((module) => [module.id, module]));
 
@@ -296,8 +295,7 @@ export function createApiMiddleware(mode) {
    * users, so it never overwrites an admin created since. Never logs the
    * password.
    */
-  /** @type {Promise<void> | null} */
-  let bootstrapPromise = null;
+  let bootstrapPromise: Promise<void> | null = null;
   function ensureBootstrapped() {
     bootstrapPromise ??= (async () => {
       const store = ensureAuthStore();
@@ -544,8 +542,7 @@ export function createApiMiddleware(mode) {
    * admin set) may only sign in, change it or sign out: the browser's forced
    * change screen is a courtesy, this is the rule.
    */
-  /** @param {string | null} [authRoute] */
-  function requirePasswordChanged(request, authRoute = null) {
+  function requirePasswordChanged(request, authRoute: string | null = null) {
     if (!request.user?.must_change_password) return;
     if (authRoute !== null && PASSWORD_CHANGE_ROUTES.has(authRoute)) return;
     throw new HttpError(403, 'Change your temporary password before continuing.');

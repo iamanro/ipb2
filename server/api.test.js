@@ -5,10 +5,10 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
-// `IPB_STATE_ROOT` must be set before anything imports `./api.js` (directly
-// or transitively, e.g. via `./modules.js` or `./auth.js`): each of those
+// `IPB_STATE_ROOT` must be set before anything imports `./api.ts` (directly
+// or transitively, e.g. via `./modules.ts` or `./auth.ts`): each of those
 // computes its state directory from the env var once, at module load, the
-// same way `server/state.js`'s `stateDirectory` is documented to work. A
+// same way `server/state.ts`'s `stateDirectory` is documented to work. A
 // dynamic `import()` after setting it — rather than a static import at the
 // top of this file — is what makes that load happen at the right time, so
 // this suite never opens a real `modules/*/state/*.db`.
@@ -21,8 +21,8 @@ let openAuthStore;
 beforeAll(async () => {
   stateRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-api-test-'));
   process.env.IPB_STATE_ROOT = stateRoot;
-  ({ resolveAuthMode, createApiMiddleware, isBlockedStaticPath } = await import('./api.js'));
-  ({ openAuthStore } = await import('./auth.js'));
+  ({ resolveAuthMode, createApiMiddleware, isBlockedStaticPath } = await import('./api.ts'));
+  ({ openAuthStore } = await import('./auth.ts'));
 });
 
 afterAll(() => {
@@ -90,8 +90,8 @@ describe('isBlockedStaticPath (IPB-AUTH-001)', () => {
   test('does not block a benign module/server path with no state or data segment', () => {
     expect(isBlockedStaticPath('/modules/equipment/client/view.js')).toBe(false);
     expect(isBlockedStaticPath('/modules/ipb/server/store.js')).toBe(false);
-    expect(isBlockedStaticPath('/server/http.js')).toBe(false);
-    expect(isBlockedStaticPath('/server/modules.js')).toBe(false);
+    expect(isBlockedStaticPath('/server/http.ts')).toBe(false);
+    expect(isBlockedStaticPath('/server/modules.ts')).toBe(false);
   });
 
   test('does not block ordinary app routes, sources or an /api path with a similar extension', () => {
@@ -621,7 +621,7 @@ describe('admin bootstrap', () => {
     bootstrapRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-api-bootstrap-test-'));
     process.env.IPB_STATE_ROOT = bootstrapRoot;
     vi.resetModules();
-    ({ createApiMiddleware: localCreateApiMiddleware } = await import('./api.js'));
+    ({ createApiMiddleware: localCreateApiMiddleware } = await import('./api.ts'));
   });
 
   afterEach(() => {
@@ -853,7 +853,7 @@ describe('admin user management (C1 admin flag)', () => {
       body: { disabled: true },
     });
     expect(disable.status).toBe(200);
-    // The existing session stops working immediately (server/live.js's
+    // The existing session stops working immediately (server/live.ts's
     // per-request session lookup, not just at the next login).
     const afterDisable = await userApi.request('/api/orbat/orbats');
     expect(afterDisable.status).toBe(401);

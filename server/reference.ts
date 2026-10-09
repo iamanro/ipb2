@@ -1,4 +1,3 @@
-// @ts-check
 import { statSync } from 'node:fs';
 
 /**
@@ -18,19 +17,15 @@ import { statSync } from 'node:fs';
  * `open(file)` (or `open(files)`) returns a handle with `close()`. `get()`
  * returns the current handle, or null while the first file does not exist;
  * errors from `open` propagate and the next `get()` tries again.
- *
- * @template {{ close(): void }} H
- * @param {string | string[]} file
- * @param {(file: any) => H} open
- * @returns {{ get(): H | null, close(): void }}
  */
-export function referenceFile(file, open) {
+export function referenceFile<H extends { close(): void }>(
+  file: string | string[],
+  open: (file: any) => H,
+): { get(): H | null; close(): void } {
   const multiple = Array.isArray(file);
   const paths = multiple ? file : [file];
-  /** @type {H | null} */
-  let handle = null;
-  /** @type {string | null} */
-  let identity = null;
+  let handle: H | null = null;
+  let identity: string | null = null;
   function close() {
     handle?.close();
     handle = null;

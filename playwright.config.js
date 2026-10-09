@@ -40,7 +40,7 @@ export default defineConfig({
     },
     {
       // The standalone server with sign-in on, as deployed (minus TLS).
-      command: 'node server/index.js',
+      command: 'node server/index.ts',
       url: `${AUTH_BASE_URL}/ipb/`,
       reuseExistingServer: false,
       env: {

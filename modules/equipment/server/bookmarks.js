@@ -1,5 +1,5 @@
-import { HttpError } from '../../../server/http.js';
-import { openState, transact } from '../../../server/state.js';
+import { HttpError } from '../../../server/http.ts';
+import { openState, transact } from '../../../server/state.ts';
 import { MIGRATIONS } from './schema.js';
 
 const NOTE_MAX_LENGTH = 2000;

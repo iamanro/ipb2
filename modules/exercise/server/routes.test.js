@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
 
-import { createDispatcher } from '../../../server/dispatch.js';
+import { createDispatcher } from '../../../server/dispatch.ts';
 
 let stateRoot;
 let dataRoot;

@@ -1,6 +1,6 @@
 import polygonClipping from 'polygon-clipping';
 
-import { HttpError } from '../../../server/http.js';
+import { HttpError } from '../../../server/http.ts';
 
 /**
  * Pure helpers for the exercise scenario's geography: colour/region/geometry

@@ -1,4 +1,4 @@
-import { HttpError } from '../../../server/http.js';
+import { HttpError } from '../../../server/http.ts';
 
 /**
  * Turns an IPB study's event matrix into the collection requirements it

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { HttpError } from '../../../server/http.js';
+import { HttpError } from '../../../server/http.ts';
 import { formatMgrs } from '../../../src/geo.js';
 import { openStore } from './store.js';
 
@@ -25,7 +25,7 @@ function expectStatus(fn, status) {
 
 // Every store function now takes the resolved item/part (or a dispatcher
 // `owner`), never a user (docs/adr/0002-item-scoped-requests.md): cell
-// visibility/edit gating (404/403 per route) is `server/dispatch.js`'s job
+// visibility/edit gating (404/403 per route) is `server/dispatch.ts`'s job
 // alone, already covered by `dispatch.test.js` and `routes.sweep.test.js`.
 // These tests are about domain behaviour, so a trivial White-sees-and-can-
 // resolve-everything `access` stub — mirroring `accessFor` in dispatch.js,

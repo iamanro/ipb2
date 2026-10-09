@@ -1,4 +1,3 @@
-// @ts-check
 /**
  * Item-scoped requests (docs/adr/0002-item-scoped-requests.md): the one
  * place a request's cell access is decided. A module declares its
@@ -50,7 +49,10 @@
  * injects) gets `connect({ runAs })` once: `runAs(actor, method, route,
  * body)` runs one of its routes without HTTP, announced like any other.
  */
-import { HttpError, sendJson } from './http.js';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
+import { HttpError, sendJson } from './http.ts';
+import type { Actor } from './policy.ts';
 import {
   canEdit,
   canRelease,
@@ -62,8 +64,8 @@ import {
   ownerCellForCreate,
   roleAtLeast,
   visibilitySql,
-} from './policy.js';
-import { transact } from './state.js';
+} from './policy.ts';
+import { transact } from './state.ts';
 
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const VERBS = new Set(['see', 'change', 'create', 'list', 'none']);
@@ -71,23 +73,20 @@ const REACHES = new Set(['everyone', 'white', 'handler']);
 const ANNOUNCE = Symbol('announce');
 const DEFAULT_BODY_LIMIT = 1 << 20;
 
-/**
- * One route a module declares (see the module doc above for each field).
- * @typedef {{
- *   method: string,
- *   path: string | RegExp,
- *   verb: string,
- *   item?: string,
- *   part?: string,
- *   role?: string,
- *   reach?: string,
- *   changes?: boolean,
- *   bodyLimit?: number,
- *   handler?: (context: any) => unknown,
- * }} RouteSpec
- * @typedef {RouteSpec & { match: (path: string) => Record<string, string> | null }} CompiledRoute
- * @typedef {import('./policy.js').Actor} Actor
- */
+/** One route a module declares (see the module doc above for each field). */
+type RouteSpec = {
+  method: string;
+  path: string | RegExp;
+  verb: string;
+  item?: string;
+  part?: string;
+  role?: string;
+  reach?: string;
+  changes?: boolean;
+  bodyLimit?: number;
+  handler?: (context: any) => unknown;
+};
+type CompiledRoute = RouteSpec & { match: (path: string) => Record<string, string> | null };
 
 /** What a `reach: 'handler'` route returns: the body, and the cells that hear about it. */
 export function announce(value, cells) {
@@ -105,11 +104,7 @@ export const EXERCISE_CONTROL = Object.freeze({
   role: 'game-master',
 });
 
-/**
- * @param {string | RegExp} path
- * @returns {(route: string) => Record<string, string> | null}
- */
-function compilePath(path) {
+function compilePath(path: string | RegExp): (route: string) => Record<string, string> | null {
   if (path instanceof RegExp)
     return (route) => path.exec(route)?.groups ?? (path.test(route) ? {} : null);
   const segments = path.split('/');
@@ -148,7 +143,7 @@ function requireRevision(label, item, body) {
 /** Reads a JSON body, or null when there is none (a bodiless POST/DELETE). */
 async function readBody(request, limit) {
   if (!request) return null;
-  const chunks = [];
+  const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
@@ -164,17 +159,17 @@ async function readBody(request, limit) {
 }
 
 /** Validates a module's declaration once, at dispatcher creation, so a typo fails at startup. */
-function compileModule(module) {
-  const items = module.items ?? {};
-  const parts = module.parts ?? {};
+function compileModule(module: any) {
+  // ponytail: module declarations stay untyped (any) until modules/*/module.js are converted.
+  const items: Record<string, any> = module.items ?? {};
+  const parts: Record<string, any> = module.parts ?? {};
   for (const [kind, part] of Object.entries(parts)) {
     if (!items[part.item])
       throw new Error(`${module.id}: part "${kind}" names unknown item "${part.item}".`);
     if (!part.table || !part.column)
       throw new Error(`${module.id}: part "${kind}" needs table and column.`);
   }
-  /** @type {CompiledRoute[]} */
-  const routes = [];
+  const routes: CompiledRoute[] = [];
   for (const route of module.routes ?? []) {
     if (!VERBS.has(route.verb))
       throw new Error(`${module.id}: ${route.method} ${route.path} has no valid verb.`);
@@ -232,11 +227,13 @@ function compileModule(module) {
   return { module, items, parts, routes };
 }
 
-/**
- * @param {any[]} modules
- * @param {{ publish?: (event: object) => void, audit?: (entry: object) => void }} [options]
- */
-export function createDispatcher(modules, { publish = () => {}, audit = () => {} } = {}) {
+export function createDispatcher(
+  modules: any[],
+  {
+    publish = () => {},
+    audit = () => {},
+  }: { publish?: (event: object) => void; audit?: (entry: object) => void } = {},
+) {
   const compiled = new Map(modules.map((module) => [module.id, compileModule(module)]));
 
   function fetchRow(entry, table, id) {
@@ -324,17 +321,6 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
    * Runs one request. `route` is the path after `/api/<moduleId>/`. `request`
    * and `response` may be null for an internal call (see `runAs`), in which
    * case `body` is given directly and the value is returned, not sent.
-   *
-   * @param {{
-   *   moduleId: string,
-   *   method: string,
-   *   route: string,
-   *   url?: URL,
-   *   actor: Actor,
-   *   request?: import('node:http').IncomingMessage | null,
-   *   response?: import('node:http').ServerResponse | null,
-   *   body?: unknown,
-   * }} options
    */
   async function run({
     moduleId,
@@ -345,13 +331,20 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
     request = null,
     response = null,
     body: givenBody,
+  }: {
+    moduleId: string;
+    method: string;
+    route: string;
+    url?: URL;
+    actor: Actor;
+    request?: IncomingMessage | null;
+    response?: ServerResponse | null;
+    body?: unknown;
   }) {
     const entry = compiled.get(moduleId);
     if (!entry) throw new HttpError(404, 'Unknown module.');
-    /** @type {CompiledRoute | null} */
-    let route = null;
-    /** @type {Record<string, string> | null} */
-    let params = null;
+    let route: CompiledRoute | null = null;
+    let params: Record<string, string> | null = null;
     let pathMatched = false;
     for (const candidate of entry.routes) {
       const found = candidate.match(path);
@@ -457,7 +450,7 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
     return { value, changes, cells: audience };
   }
 
-  /** The HTTP entry point, called by server/api.js after authentication. */
+  /** The HTTP entry point, called by server/api.ts after authentication. */
   async function handle({ moduleId, route, url, request, response, actor, client, rawClient }) {
     const result = await run({
       moduleId,

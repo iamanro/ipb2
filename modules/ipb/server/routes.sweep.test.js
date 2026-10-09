@@ -1,6 +1,6 @@
 /**
  * The generated guard (docs/adr/0002-item-scoped-requests.md,
- * `server/routeSweep.js`): every route naming a study (or one of its parts)
+ * `server/routeSweep.ts`): every route naming a study (or one of its parts)
  * must answer 404 for a member who cannot see the study, and 403 (reads
  * excepted) for one who can see it only because it was released to their
  * cell. `IPB_STATE_ROOT` is read once, at module load, by `stateDirectory` —
@@ -13,8 +13,8 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, expect, test } from 'vitest';
 
-import { createDispatcher } from '../../../server/dispatch.js';
-import { sweepRoutes } from '../../../server/routeSweep.js';
+import { createDispatcher } from '../../../server/dispatch.ts';
+import { sweepRoutes } from '../../../server/routeSweep.ts';
 
 const WHITE = { name: 'white-gm', admin: false, cell: 'white', role: 'game-master' };
 const RED = { name: 'red-analyst', admin: false, cell: 'red', role: 'analyst' };

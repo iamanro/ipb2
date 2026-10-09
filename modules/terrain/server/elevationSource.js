@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 
-import { HttpError } from '../../../server/http.js';
-import { referenceFile } from '../../../server/reference.js';
+import { HttpError } from '../../../server/http.ts';
+import { referenceFile } from '../../../server/reference.ts';
 import { openElevation, openTerrain } from './dem.js';
 import { DETAIL_DATABASE, DETAIL_TILE_CACHE_LIMIT, ELEVATION_DATABASE } from './paths.js';
 

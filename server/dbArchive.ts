@@ -1,4 +1,3 @@
-// @ts-check
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -25,8 +24,8 @@ export function integrityCheck(file) {
  * A consistent, checkpoint-safe copy of the SQLite database at `source`
  * into `dest` via `VACUUM INTO`: safe against a live writer (a brief read
  * lock at the WAL checkpoint, never a long one) — it never blocks writers
- * for the whole copy. Used through `server/stateDatabase.js` (`copyInto`) for dated backups
- * and `server/exerciseLifecycle.js`'s archive step, so there is one
+ * for the whole copy. Used through `server/stateDatabase.ts` (`copyInto`) for dated backups
+ * and `server/exerciseLifecycle.ts`'s archive step, so there is one
  * implementation of "copy a database file safely", not two silently
  * drifting apart.
  */

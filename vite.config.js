@@ -1,12 +1,12 @@
 import { defineConfig } from 'vite-plus';
 
-import ipbApi from './server/api.js';
+import ipbApi from './server/api.ts';
 
 // Vite's default `fs.deny` only covers secrets-style files (.env, keys,
 // .git); the app's own module state (`server/state/`, `modules/*/state/`,
 // `modules/*/data/`) sits inside the project root too, and without this it
 // is otherwise servable straight off disk by the static/raw-fs middleware —
-// defence in depth alongside `server/api.js`'s own `isBlockedStaticPath`
+// defence in depth alongside `server/api.ts`'s own `isBlockedStaticPath`
 // guard, which runs first and covers every mode (IPB-AUTH-001, critical).
 const FS_DENY = [
   '.env',

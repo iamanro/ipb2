@@ -7,7 +7,7 @@
 # Base image: Node 24 (Debian "bookworm" slim). The project targets Node's
 # `node:sqlite` module; 24 LTS carries every option the code uses
 # (`readOnly`, migrations via `PRAGMA user_version`) as a stable API, and
-# `npx vp test run` / `node server/index.js` both pass against it (see
+# `npx vp test run` / `node server/index.ts` both pass against it (see
 # README "Deployment" verification log). arm64: the same Dockerfile builds
 # on `linux/arm64` unmodified — `node:24-bookworm-slim` and every npm
 # dependency here ship arm64 binaries — only untested on real arm64
@@ -49,4 +49,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.IPB_PORT||8000)+'/healthz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
 
-CMD ["node", "server/index.js"]
+CMD ["node", "server/index.ts"]

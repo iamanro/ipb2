@@ -13,8 +13,8 @@
  * `--password-stdin` reads the password from stdin's first line (for
  * scripting); otherwise the terminal prompts twice, without echo.
  */
-import { CELLS, ROLES } from '../policy.js';
-import { openAuthStore } from '../auth.js';
+import { CELLS, ROLES } from '../policy.ts';
+import { openAuthStore } from '../auth.ts';
 
 const MEMBERSHIP_ROLES = ROLES.filter((role) => role !== 'admin');
 

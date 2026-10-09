@@ -1,4 +1,4 @@
-import { HttpError } from '../../../server/http.js';
+import { HttpError } from '../../../server/http.ts';
 import state from './state.js';
 import { MAX_DISTANCE_KM, nearestMeasurements } from './chmi.js';
 import { nearestStation } from './station.js';

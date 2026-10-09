@@ -34,7 +34,7 @@ graph LR
 
 ## Requirements
 
-- Node **22.5+** (`node:sqlite`'s `DatabaseSync` needs it — check with `node -v`).
+- Node **22.18+** (`node:sqlite`'s `DatabaseSync`, and running the server's `.ts` files without a build step — check with `node -v`).
 - Python **3.11+** for the equipment import tools. Standard library only, no
   `pip install` required.
 - ~2.5 GB free disk for the equipment reference database (cards + images),
@@ -1068,7 +1068,7 @@ parent's visibility.
 own cell) sees and controls everything. Blue and Red each see their own
 cell's items plus whatever's been released to them — never the other's
 unreleased items, through any endpoint: list, get, a child route, an
-export, activity/audit, drafts/products, or a live update. `server/policy.js`
+export, activity/audit, drafts/products, or a live update. `server/policy.ts`
 is the single place this is decided (`isWhite`, `canSee`, `visibilitySql`,
 `ownerCellForCreate`, `canRelease`, `normalizeRelease`, `liveCellsFor`);
 every module's store uses it, not its own copy of the rule.
@@ -1089,7 +1089,7 @@ colour alone.
 **One decision per request** ([ADR 0002](docs/adr/0002-item-scoped-requests.md)).
 Every route that touches cell-owned data names its item in the URL
 (`/api/exercise/requirements/7/indicators/42`, `/api/orbat/orbats/3/units/12`),
-and `server/dispatch.js` decides before any module code runs: a hidden item
+and `server/dispatch.ts` decides before any module code runs: a hidden item
 (or a part addressed through the wrong item) is 404, a change to an item
 merely released to your cell is 403 "Released to your cell for reading
 only", and the change is announced live to exactly that item's cells. Stores
@@ -1099,7 +1099,7 @@ route about no item declares who hears of its changes (`reach: 'everyone'`
 for the scenario clock, scenario geography and equipment bookmarks; White
 only otherwise), and a search sent as POST is neither announced nor
 audited. Each module has a sweep test generated from its route table
-(`server/routeSweep.js`): as Blue, every route of a hidden Red item must
+(`server/routeSweep.ts`): as Blue, every route of a hidden Red item must
 answer 404 and every change to a released one 403, so a new route is
 covered the day it's added.
 
@@ -1240,9 +1240,9 @@ matching tool above.
 
 A module with working state declares its database in
 `modules/<id>/server/state.js` (file name, and whether it belongs to the
-exercise) and is listed in `server/stateDatabases.js`; a test fails if a
+exercise) and is listed in `server/stateDatabases.ts`; a test fails if a
 declared module is missing there. That one declaration is what backup,
-restore and the exercise archive/reset/restore use (`server/stateDatabase.js`
+restore and the exercise archive/reset/restore use (`server/stateDatabase.ts`
 owns copying, emptying and replacing the file, closing the module's store
 first), so a new module is backed up and reset without touching those tools.
 
@@ -1271,7 +1271,7 @@ Runs the same app as `npm start`, but as a container behind a TLS-terminating
 reverse proxy, for a shared LAN server instead of one analyst's machine —
 `https://ac.lan` reachable from up to ~30 users' browsers, local accounts
 only (no LDAP/SSO), SQLite state as before. `compose.yaml` runs two
-containers: `app` (this repo, `node server/index.js`, not reachable from the
+containers: `app` (this repo, `node server/index.ts`, not reachable from the
 host directly) and `caddy` (TLS + reverse proxy, the only published ports).
 
 Day-to-day operation (accounts, exercise day, reset between exercises,
@@ -1384,7 +1384,7 @@ IPB_DATA_DIR=/srv/ipb-data docker compose up -d --build
 Rebuilds the `app` image (Caddy's image is pulled, not built — `docker
 compose pull caddy` picks up a new Caddy release) and recreates only the
 containers whose image changed; the `state` volume and Caddy's TLS data
-volume are untouched. `node:sqlite`'s migrations (`server/state.js`) run
+volume are untouched. `node:sqlite`'s migrations (`server/state.ts`) run
 automatically on next open, so a schema change needs no separate step.
 
 ### Backups and restore

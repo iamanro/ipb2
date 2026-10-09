@@ -1,10 +1,9 @@
-// @ts-check
 /**
  * One writable state database: where it lives, whether it belongs to the
  * current exercise, and every file-level operation on it (archive/backup
  * copy, empty, replace), so the exercise lifecycle, backup and restore never
  * touch a module's files themselves. Each module declares its database in a
- * small `server/state.js` that imports nothing else of the module, which is
+ * small `server/state.ts` that imports nothing else of the module, which is
  * what lets the backup container load the list without any route code.
  *
  * The store that opens the database registers how to drop its connection
@@ -14,14 +13,14 @@
 import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { integrityCheck, vacuumInto } from './dbArchive.js';
-import { errorMessage } from './http.js';
-import { stateDirectory } from './state.js';
+import { integrityCheck, vacuumInto } from './dbArchive.ts';
+import { errorMessage } from './http.ts';
+import { stateDirectory } from './state.ts';
 
 const SIDECARS = ['-wal', '-shm', '-journal'];
 
 export function declareStateDatabase({ id, file, exercise, defaultDir }) {
-  const closers = new Set();
+  const closers = new Set<() => void>();
   const fullPath = () => path.join(stateDirectory(id, defaultDir), file);
 
   function close() {

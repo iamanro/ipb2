@@ -1,19 +1,16 @@
-// @ts-check
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
 /** `error.message` for an Error, else the thrown value as text: what a `catch` can report. */
-export function errorMessage(error) {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 export class HttpError extends Error {
-  /**
-   * @param {number} status
-   * @param {string} message
-   * @param {Record<string, unknown> | null} [details] extra fields copied onto the error (and its JSON body)
-   */
-  constructor(status, message, details = null) {
+  status: number;
+
+  /** `details`: extra fields copied onto the error (and its JSON body). */
+  constructor(status: number, message: string, details: Record<string, unknown> | null = null) {
     super(message);
     this.status = status;
     if (details && typeof details === 'object') Object.assign(this, details);
@@ -58,7 +55,7 @@ export function numberParameter(query, name, fallback, minimum, maximum) {
 
 /** Read a JSON request body. Rejects anything larger than `limit` bytes. */
 export async function readJson(request, limit = 1 << 20) {
-  const chunks = [];
+  const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;

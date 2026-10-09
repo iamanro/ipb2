@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { expect, test } from 'vitest';
 
-import { HttpError } from './http.js';
+import { HttpError } from './http.ts';
 import {
   CELLS,
   canEdit,
@@ -14,7 +14,7 @@ import {
   ownerCellForCreate,
   roleAtLeast,
   visibilitySql,
-} from './policy.js';
+} from './policy.ts';
 
 // -- fixtures --------------------------------------------------------------
 

@@ -1,8 +1,8 @@
 // The scenario clock, scheduled injects (scenario events) and the messages
 // they fire.
 
-import { HttpError } from '../../../../server/http.js';
-import { normalizeRelease } from '../../../../server/policy.js';
+import { HttpError } from '../../../../server/http.ts';
+import { normalizeRelease } from '../../../../server/policy.ts';
 import { dueEvents, reanchor, scenarioNowMs } from '../scenarioClock.js';
 
 import { database } from './connection.js';

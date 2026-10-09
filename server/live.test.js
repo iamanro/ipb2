@@ -9,7 +9,7 @@ import {
   handleLive,
   publish,
   subscriberCount,
-} from './live.js';
+} from './live.ts';
 
 /** A minimal stand-in for `http.IncomingMessage`/`ServerResponse`: just
  * enough event-emitting and header/write bookkeeping for `live.js`. */

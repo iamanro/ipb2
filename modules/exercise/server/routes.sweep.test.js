@@ -4,12 +4,12 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, expect, test } from 'vitest';
 
-import { createDispatcher } from '../../../server/dispatch.js';
-import { sweepRoutes } from '../../../server/routeSweep.js';
+import { createDispatcher } from '../../../server/dispatch.ts';
+import { sweepRoutes } from '../../../server/routeSweep.ts';
 
 /**
  * The generated guard (docs/adr/0002-item-scoped-requests.md,
- * server/routeSweep.js): every route naming an item, called as a member of
+ * server/routeSweep.ts): every route naming an item, called as a member of
  * another cell, 404s on a hidden item and 403s (except plain reads) on one
  * merely released to it. One Red-owned, one Red-owned-released-to-Blue
  * fixture per item kind, every part kind represented on each.

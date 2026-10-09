@@ -5,9 +5,9 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
-// `IPB_STATE_ROOT` must be set before anything imports `./exerciseLifecycle.js`
-// or `./api.js` (directly or transitively): each computes its state
-// directory from the env var once, at module load (`server/state.js`'s
+// `IPB_STATE_ROOT` must be set before anything imports `./exerciseLifecycle.ts`
+// or `./api.ts` (directly or transitively): each computes its state
+// directory from the env var once, at module load (`server/state.ts`'s
 // `stateDirectory`). A dynamic `import()` after setting it is what makes
 // that load happen at the right time, so this suite never touches a real
 // `modules/*/state/*.db`.
@@ -19,9 +19,9 @@ let openAuthStore;
 beforeAll(async () => {
   stateRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-exercise-lifecycle-test-'));
   process.env.IPB_STATE_ROOT = stateRoot;
-  ({ createExerciseLifecycle } = await import('./exerciseLifecycle.js'));
-  ({ createApiMiddleware } = await import('./api.js'));
-  ({ openAuthStore } = await import('./auth.js'));
+  ({ createExerciseLifecycle } = await import('./exerciseLifecycle.ts'));
+  ({ createApiMiddleware } = await import('./api.ts'));
+  ({ openAuthStore } = await import('./auth.ts'));
 });
 
 afterAll(() => {

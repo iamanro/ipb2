@@ -3,7 +3,7 @@
 // exercised without opening the real (multi-gigabyte) elevation model.
 import { parentPort, workerData } from 'node:worker_threads';
 
-import { HttpError } from '../../../server/http.js';
+import { HttpError } from '../../../server/http.ts';
 
 parentPort.on('message', async ({ id, kind, payload }) => {
   try {

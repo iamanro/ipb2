@@ -308,7 +308,7 @@ export const MIGRATIONS = [
   // their own — they inherit the parent's visibility (C3). `messages` holds
   // fired MESSAGE injects, White-owned with `releasable_to` set to the
   // inject's target cells. `roster` is superseded by exercise memberships
-  // (server/auth.js `memberships`, cell + role together) and is dropped —
+  // (server/auth.ts `memberships`, cell + role together) and is dropped —
   // the exercise client now reads/writes members through the admin API.
   `
   ALTER TABLE requirements ADD COLUMN owner_cell TEXT NOT NULL DEFAULT 'white';

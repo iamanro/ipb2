@@ -1,5 +1,4 @@
-// @ts-check
-import { HttpError } from './http.js';
+import { HttpError } from './http.ts';
 
 /**
  * The per-module guard ADR 0002 relies on, generated from the route table so
@@ -20,7 +19,7 @@ import { HttpError } from './http.js';
  *   })
  */
 export async function sweepRoutes({ dispatcher, moduleId, actor, fixtures, params = {} }) {
-  const failures = [];
+  const failures: string[] = [];
   const routes = dispatcher
     .describe()
     .filter((route) => route.module === moduleId && route.item && route.verb !== 'create');
@@ -30,7 +29,7 @@ export async function sweepRoutes({ dispatcher, moduleId, actor, fixtures, param
       failures.push(`${route.method} ${route.path}: no fixture for item kind "${route.item}"`);
       continue;
     }
-    const cases = [['hidden', 404]];
+    const cases: [string, number][] = [['hidden', 404]];
     if (route.method !== 'GET' && route.method !== 'HEAD') cases.push(['released', 403]);
     for (const [variant, expected] of cases) {
       const target = fixture[variant];

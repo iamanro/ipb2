@@ -1,6 +1,6 @@
 // The current situation: tracks and their position history.
 
-import { HttpError } from '../../../../server/http.js';
+import { HttpError } from '../../../../server/http.ts';
 
 import { database } from './connection.js';
 import {

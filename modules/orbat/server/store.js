@@ -1,5 +1,5 @@
-import { HttpError } from '../../../server/http.js';
-import { openState, transact } from '../../../server/state.js';
+import { HttpError } from '../../../server/http.ts';
+import { openState, transact } from '../../../server/state.ts';
 import { MIGRATIONS } from './schema.js';
 
 /** Mirrors `client/sidc.js`'s DEFAULT_SIDC: a friendly land infantry unit, no echelon. */
@@ -13,7 +13,7 @@ let database;
 
 /**
  * Opens (or reopens) this module's state. Cell access is decided entirely
- * by `server/dispatch.js` before any of these functions run: they take an
+ * by `server/dispatch.ts` before any of these functions run: they take an
  * already-resolved orbat/unit row (or, for creation, the `owner` the
  * dispatcher computed) and never see the user.
  */

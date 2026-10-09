@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { dataDirectory } from '../../../server/state.js';
+import { dataDirectory } from '../../../server/state.ts';
 
 export const ID = 'terrain';
 

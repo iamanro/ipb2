@@ -22,8 +22,8 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-import { archiveRoot } from '../dbArchive.js';
-import { STATE_DATABASES } from '../stateDatabases.js';
+import { archiveRoot } from '../dbArchive.ts';
+import { STATE_DATABASES } from '../stateDatabases.ts';
 
 function flagValue(args, flag) {
   const index = args.indexOf(flag);

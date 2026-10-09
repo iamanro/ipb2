@@ -2,7 +2,7 @@ import { parsePlannedTime } from '../../../src/dtg.js';
 
 /**
  * IPB state schema. `MIGRATIONS` is an ordered array consumed by `openState`
- * (see `server/state.js`), which tracks how many have run in
+ * (see `server/state.ts`), which tracks how many have run in
  * `PRAGMA user_version`. Append new migrations; never edit an applied one.
  * Entries are plain SQL strings, `{ sql, rebuild: true }` table rebuilds, or
  * `{ run(database) }` JS-driven migrations — see `openState`'s doc comment.
