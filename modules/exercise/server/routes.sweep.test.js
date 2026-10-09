@@ -83,7 +83,7 @@ beforeAll(async () => {
     path.join(dataRoot, 'exercise', 'regions.json'),
     JSON.stringify({ type: 'FeatureCollection', features: [] }),
   );
-  routes = (await import('./routes.js')).default;
+  routes = (await import('./routes.ts')).default;
   dispatcher = createDispatcher([routes], { publish: () => {} });
 });
 

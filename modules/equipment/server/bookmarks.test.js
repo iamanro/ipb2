@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { openBookmarks } from './bookmarks.js';
+import { openBookmarks } from './bookmarks.ts';
 
 function tempFile() {
   return path.join(

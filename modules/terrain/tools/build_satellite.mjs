@@ -32,7 +32,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 import { dataDirectory, stateDirectory } from '../../../server/state.ts';
-import { tileRange, tmsRow } from '../server/tiles.js';
+import { tileRange, tmsRow } from '../server/tiles.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = dataDirectory('terrain', path.join(HERE, '..', 'data'));

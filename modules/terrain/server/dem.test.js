@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 
-import { openElevation, openTerrain } from './dem.js';
+import { openElevation, openTerrain } from './dem.ts';
 
 const TILE = 256;
 

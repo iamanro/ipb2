@@ -27,7 +27,7 @@ let dispatcher;
 beforeAll(async () => {
   stateRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-routes-sweep-test-'));
   process.env.IPB_STATE_ROOT = stateRoot;
-  ({ default: ipb } = await import('./routes.js'));
+  ({ default: ipb } = await import('./routes.ts'));
   dispatcher = createDispatcher([ipb]);
 });
 

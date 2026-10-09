@@ -5,7 +5,7 @@
  * only `normalizeRelease` to validate a release list they build themselves
  * (an inject's cells, an RFI answer).
  */
-import { HttpError } from './http.ts';
+import { HttpError, type Json } from './http.ts';
 
 /** The three cells an exercise splits into. Order matters nowhere except
  * display; `normalizeRelease` sorts alphabetically regardless. */
@@ -17,6 +17,11 @@ export const ROLES = ['observer', 'analyst', 'collection-manager', 'game-master'
  * The C1 shape a request runs as: name, exercise cell and role, and the
  * global admin flag. Every field may be absent (signed out, no membership).
  */
+/** `releasable_to` as stored (JSON text), or already parsed by a JS caller. */
+export type ReleasableTo = string | string[] | null | undefined;
+/** Any row with the ownership columns every cell-owned table carries. */
+export type OwnedItem = { owner_cell: string; releasable_to?: ReleasableTo };
+
 export type Actor = {
   name?: string;
   cell?: string | null;
@@ -24,14 +29,14 @@ export type Actor = {
   admin?: boolean;
 };
 
-function rank(role) {
-  const index = ROLES.indexOf(role);
+function rank(role: string | null | undefined) {
+  const index = role ? ROLES.indexOf(role) : -1;
   if (index === -1) throw new Error(`Unknown role: ${role}`);
   return index;
 }
 
 /** True when `role` outranks or equals `required` in the hierarchy above. */
-export function roleAtLeast(role, required) {
+export function roleAtLeast(role: string | null | undefined, required: string) {
   return rank(role) >= rank(required);
 }
 
@@ -47,16 +52,18 @@ export function isWhite(user: Actor | null | undefined) {
  * parsed a row) or the raw JSON text SQLite handed back — normalise either
  * to an array, defensively empty for anything else (missing column, NULL,
  * malformed text). */
-function releasableArray(releasableTo) {
+export function releasableArray(releasableTo: ReleasableTo): string[] {
   if (Array.isArray(releasableTo)) return releasableTo;
   if (typeof releasableTo === 'string') {
-    let parsed;
+    let parsed: Json;
     try {
       parsed = JSON.parse(releasableTo);
     } catch {
       return [];
     }
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((cell): cell is string => typeof cell === 'string')
+      : [];
   }
   return [];
 }
@@ -65,7 +72,7 @@ function releasableArray(releasableTo) {
  * cell member sees their own cell's items and anything released to them. A
  * user with no cell (a non-admin, non-member — 403'd upstream in practice,
  * but this stays correct standalone) sees nothing cell-owned. */
-export function canSee(user, item) {
+export function canSee(user: Actor | null | undefined, item: OwnedItem) {
   if (isWhite(user)) return true;
   if (!user?.cell) return false;
   if (item.owner_cell === user.cell) return true;
@@ -96,10 +103,15 @@ export function visibilitySql(user: Actor | null | undefined, { alias }: { alias
  * their own cell — 400 if they ask for a different one, 403 if they have
  * no cell to create anything under.
  */
-export function ownerCellForCreate(user, requested) {
+export function ownerCellForCreate(
+  user: Actor | null | undefined,
+  requested: Json | undefined,
+): string {
   if (isWhite(user)) {
     const cell = requested ?? 'white';
-    if (!CELLS.includes(cell)) throw new HttpError(400, `Unknown cell: ${cell}`);
+    if (typeof cell !== 'string' || !CELLS.includes(cell)) {
+      throw new HttpError(400, `Unknown cell: ${JSON.stringify(cell)}`);
+    }
     return cell;
   }
   if (!user?.cell) throw new HttpError(403, 'You are not assigned to a cell.');
@@ -115,13 +127,13 @@ export function ownerCellForCreate(user, requested) {
  * the route's declared role applies on top (server/dispatch.ts). A visible
  * but not editable item answers 403 (it's already visible, so no 404).
  */
-export function canEdit(user, item) {
-  return isWhite(user) || (Boolean(user?.cell) && user.cell === item.owner_cell);
+export function canEdit(user: Actor | null | undefined, item: OwnedItem) {
+  return isWhite(user) || (Boolean(user?.cell) && user?.cell === item.owner_cell);
 }
 
 /** White (incl. admin), or an `analyst`-or-above member of the owning
  * cell, may release an item (or reassign its owner). */
-export function canRelease(user, item) {
+export function canRelease(user: Actor | null | undefined, item: OwnedItem) {
   if (isWhite(user)) return true;
   if (!user?.cell || user.cell !== item.owner_cell) return false;
   return roleAtLeast(user.role, 'analyst');
@@ -129,11 +141,13 @@ export function canRelease(user, item) {
 
 /** Validates and normalises a release list: drops the owner cell and
  * duplicates, sorts, 400s on anything not a real cell. */
-export function normalizeRelease(cells, owner) {
+export function normalizeRelease(cells: Json | undefined, owner: string): string[] {
   if (!Array.isArray(cells)) throw new HttpError(400, 'cells must be an array.');
   const set = new Set<string>();
   for (const cell of cells) {
-    if (!CELLS.includes(cell)) throw new HttpError(400, `Unknown cell: ${cell}`);
+    if (typeof cell !== 'string' || !CELLS.includes(cell)) {
+      throw new HttpError(400, `Unknown cell: ${JSON.stringify(cell)}`);
+    }
     if (cell === owner) continue;
     set.add(cell);
   }
@@ -142,6 +156,6 @@ export function normalizeRelease(cells, owner) {
 
 /** The cells a live event about `item` should reach: its owner plus
  * whoever it's released to (server/live.ts also always delivers to White). */
-export function liveCellsFor(item) {
+export function liveCellsFor(item: OwnedItem): string[] {
   return [item.owner_cell, ...releasableArray(item.releasable_to)];
 }

@@ -8,12 +8,28 @@
  */
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
+import type { Plugin, PreviewServer, ViteDevServer } from 'vite-plus';
 
-import { SESSION_TTL_MS, hashToken, openAuthStore } from './auth.ts';
+import {
+  SESSION_TTL_MS,
+  hashToken,
+  openAuthStore,
+  type AuthStore,
+  type SessionUser,
+} from './auth.ts';
 import { createDispatcher } from './dispatch.ts';
 import { createExerciseLifecycle } from './exerciseLifecycle.ts';
-import { HttpError, readJson, sendJson } from './http.ts';
+import {
+  errorMessage,
+  fieldsOf,
+  HttpError,
+  readJson,
+  sendJson,
+  type Json,
+  type JsonObject,
+} from './http.ts';
 import {
   closeAllSubscribers,
   closeStreamsForToken,
@@ -26,10 +42,19 @@ import { roleAtLeast } from './policy.ts';
 
 const byId = new Map(modules.map((module) => [module.id, module]));
 
-function errorJson(error) {
-  const body = { error: error.message };
-  for (const key of ['code', 'current_revision']) {
-    if (error[key] !== undefined) body[key] = error[key];
+/** A request after authentication: `user` is who it runs as (null when signed out). */
+export type ApiRequest = IncomingMessage & { user?: SessionUser | null };
+export type AuthMode = 'on' | 'off';
+
+/** The JSON error body for anything a handler threw (the one place errors leave as JSON). */
+function errorJson(error: unknown): JsonObject {
+  const body: JsonObject = { error: errorMessage(error) };
+  if (error instanceof HttpError) {
+    // HttpError details (e.g. a stale revision) are copied onto the error as own fields.
+    for (const key of ['code', 'current_revision']) {
+      const value: Json | undefined = Reflect.get(error, key);
+      if (value !== undefined) body[key] = value;
+    }
   }
   return body;
 }
@@ -39,7 +64,7 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 /** `off` mode: every request acts as this fixed local operator (C1) — White,
  * by cell and by the admin flag both, so it always sees and does everything
  * a real exercise's White game-master could. */
-const LOCAL_USER = {
+const LOCAL_USER: SessionUser = {
   name: 'local',
   admin: true,
   cell: 'white',
@@ -57,7 +82,7 @@ const CLIENT_ID_HASH_LENGTH = 16;
 /** The `/api/auth/*` routes a user with a temporary password may still use. */
 const PASSWORD_CHANGE_ROUTES = new Set(['login', 'logout', 'me', 'password']);
 
-function isLoopbackHost(host) {
+function isLoopbackHost(host: string | boolean | null | undefined) {
   if (host === undefined || host === null) return true;
   // A bare `--host` (no value) resolves to boolean `true`: every interface.
   if (typeof host !== 'string') return false;
@@ -69,13 +94,13 @@ function isLoopbackHost(host) {
  * overrides either way, except `off` on a non-loopback bind, which would be
  * an open LAN: that refuses to start instead.
  */
-export function resolveAuthMode(host) {
+export function resolveAuthMode(host: string | boolean | null | undefined): AuthMode {
   const loopback = isLoopbackHost(host);
   const override = process.env.IPB_AUTH;
   if (override === 'on' || override === 'off') {
     if (override === 'off' && !loopback) {
       throw new Error(
-        `IPB_AUTH=off refuses to bind a non-loopback host ("${host}"): set IPB_AUTH=on, or bind loopback.`,
+        `IPB_AUTH=off refuses to bind a non-loopback host (${JSON.stringify(host)}): set IPB_AUTH=on, or bind loopback.`,
       );
     }
     return override;
@@ -87,7 +112,7 @@ const SENSITIVE_ROOT_SEGMENTS = new Set(['modules', 'server']);
 const SENSITIVE_DIR_SEGMENTS = new Set(['state', 'data']);
 const SENSITIVE_EXTENSION = /\.(db|db-wal|db-shm|mbtiles|pmtiles)$/i;
 
-function isSensitiveNormalizedPath(normalized) {
+function isSensitiveNormalizedPath(normalized: string) {
   // Every real API route is dispatched above this check and never reaches
   // it in practice; excluded here too so the predicate is correct on its
   // own, not merely by where its one caller happens to place it — e.g.
@@ -118,7 +143,7 @@ function isSensitiveNormalizedPath(normalized) {
  * through their own `/api/<module>/...` route, never as a static file, so
  * this has no legitimate path to block.
  */
-export function isBlockedStaticPath(rawUrl) {
+export function isBlockedStaticPath(rawUrl: string) {
   const rawPath = rawUrl.split('?')[0].split('#')[0];
   const forms = new Set([rawPath]);
   try {
@@ -133,8 +158,8 @@ export function isBlockedStaticPath(rawUrl) {
   return false;
 }
 
-function parseCookies(header) {
-  const jar = {};
+function parseCookies(header: string | undefined) {
+  const jar: Record<string, string> = {};
   if (!header) return jar;
   for (const part of header.split(';')) {
     const index = part.indexOf('=');
@@ -160,12 +185,12 @@ function trustProxy() {
   return process.env.IPB_TRUST_PROXY === '1';
 }
 
-function isHttps(request) {
-  if (request.socket?.encrypted) return true;
+function isHttps(request: IncomingMessage) {
+  if ('encrypted' in request.socket && request.socket.encrypted === true) return true;
   return trustProxy() && request.headers['x-forwarded-proto'] === 'https';
 }
 
-function setSessionCookie(response, request, token) {
+function setSessionCookie(response: ServerResponse, request: IncomingMessage, token: string) {
   const parts = [
     `${SESSION_COOKIE}=${token}`,
     'Path=/',
@@ -177,7 +202,7 @@ function setSessionCookie(response, request, token) {
   response.setHeader('Set-Cookie', parts.join('; '));
 }
 
-function clearSessionCookie(response, request) {
+function clearSessionCookie(response: ServerResponse, request: IncomingMessage) {
   const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
   if (isHttps(request)) parts.push('Secure');
   response.setHeader('Set-Cookie', parts.join('; '));
@@ -192,10 +217,10 @@ function clearSessionCookie(response, request) {
  * regardless of what the client sent before it), so it — not the leftmost,
  * client-controlled hop — is the address actually worth rate-limiting.
  */
-function clientIp(request) {
+function clientIp(request: IncomingMessage) {
   if (trustProxy()) {
     const header = request.headers['x-forwarded-for'];
-    if (header) {
+    if (typeof header === 'string' && header) {
       const hops = header.split(',').map((hop) => hop.trim());
       const last = hops[hops.length - 1];
       if (last) return last;
@@ -207,7 +232,7 @@ function clientIp(request) {
 /** A short, one-way stand-in for a tab's raw `X-Client-Id` (IPB-AUTH-006):
  * enough to let every tab recognise its own past events without handing
  * every subscriber a value they could resend as their own. */
-function hashClientId(rawClientId) {
+function hashClientId(rawClientId: string | null) {
   if (!rawClientId) return null;
   return crypto
     .createHash('sha256')
@@ -221,12 +246,16 @@ function hashClientId(rawClientId) {
  * — these bypass that path entirely (handled directly in
  * `handleAuthRoute`), so each one calls this itself, right after its own
  * write succeeds. */
-function auditAuthAction(store, request, requestPath, status) {
-  const rawClientId =
-    String(request.headers['x-client-id'] || '').slice(0, CLIENT_ID_HEADER_MAX) || null;
+function auditAuthAction(
+  store: AuthStore,
+  request: ApiRequest,
+  requestPath: string,
+  status: number,
+) {
+  const rawClientId = headerText(request, 'x-client-id').slice(0, CLIENT_ID_HEADER_MAX) || null;
   store.audit({
-    user: request.user.name,
-    method: request.method,
+    user: request.user?.name,
+    method: request.method ?? 'GET',
     path: requestPath,
     status,
     client: rawClientId,
@@ -234,7 +263,13 @@ function auditAuthAction(store, request, requestPath, status) {
 }
 
 /** C3 CSRF: a mutation needs a JSON (or empty) body, and a same-host Origin if one is sent. */
-function checkCsrf(request) {
+/** A request header as one string ('' when absent; repeated headers joined). */
+function headerText(request: IncomingMessage, name: string): string {
+  const value = request.headers[name];
+  return Array.isArray(value) ? value.join(', ') : (value ?? '');
+}
+
+function checkCsrf(request: IncomingMessage) {
   const { method } = request;
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
   const length = Number(request.headers['content-length'] || 0);
@@ -265,9 +300,9 @@ function checkCsrf(request) {
  * adapter that resolves `mode` from the dev/preview server's bound host;
  * tests call this directly against a plain `http.createServer`.
  */
-export function createApiMiddleware(mode) {
-  let authStore;
-  function ensureAuthStore() {
+export function createApiMiddleware(mode: AuthMode) {
+  let authStore: AuthStore | undefined;
+  function ensureAuthStore(): AuthStore {
     authStore ??= openAuthStore();
     return authStore;
   }
@@ -278,7 +313,7 @@ export function createApiMiddleware(mode) {
     audit: (entry) => ensureAuthStore().audit(entry),
   });
 
-  function sessionToken(request) {
+  function sessionToken(request: IncomingMessage): string | undefined {
     return parseCookies(request.headers.cookie)[SESSION_COOKIE];
   }
 
@@ -312,7 +347,7 @@ export function createApiMiddleware(mode) {
   }
 
   /** `request.user`: fixed in `off` mode, resolved from the session cookie in `on` mode. */
-  async function authenticate(request) {
+  async function authenticate(request: IncomingMessage): Promise<SessionUser | null> {
     if (mode === 'off') return LOCAL_USER;
     await ensureBootstrapped();
     const store = ensureAuthStore();
@@ -322,14 +357,17 @@ export function createApiMiddleware(mode) {
     return store.resolveSession(sessionToken(request));
   }
 
-  async function handleAuthRoute(sub, { request, response, url }) {
+  async function handleAuthRoute(
+    sub: string,
+    { request, response, url }: { request: ApiRequest; response: ServerResponse; url: URL },
+  ) {
     if (mode === 'on') await ensureBootstrapped();
     const store = ensureAuthStore();
     if (sub === 'login' && request.method === 'POST') {
-      const body = await readJson(request);
+      const body = fieldsOf(await readJson(request));
       const { token, user } = await store.login({
-        name: body?.name,
-        password: body?.password,
+        name: body.name,
+        password: body.password,
         ip: clientIp(request),
       });
       setSessionCookie(response, request, token);
@@ -366,15 +404,15 @@ export function createApiMiddleware(mode) {
 
     if (sub === 'password' && request.method === 'POST') {
       if (!request.user) throw new HttpError(401, 'Sign in required.');
-      const body = await readJson(request);
-      if (typeof body?.current !== 'string') {
+      const body = fieldsOf(await readJson(request));
+      if (typeof body.current !== 'string') {
         throw new HttpError(400, 'current is required.');
       }
       const token = sessionToken(request);
-      await store.changePassword(request.user.name, body.current, body?.next, token);
+      await store.changePassword(request.user.name, body.current, body.next, token);
       const refreshed = store.resolveSession(token);
       request.user = refreshed;
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { mode, user: refreshed });
       return;
     }
@@ -397,47 +435,47 @@ export function createApiMiddleware(mode) {
       return;
     }
     if (usersListMatch && request.method === 'POST') {
-      const body = await readJson(request);
+      const body = fieldsOf(await readJson(request));
       // The admin chose this password and handed it over: the user picks their own at first sign-in.
-      await store.createUser(body?.name, body?.password, {
-        admin: Boolean(body?.admin),
+      await store.createUser(body.name, body.password, {
+        admin: Boolean(body.admin),
         mustChangePassword: true,
       });
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { created: true });
       return;
     }
     if (userMatch && request.method === 'PATCH') {
       const name = decodeURIComponent(userMatch[1]);
-      const body = await readJson(request);
-      if (body?.admin !== undefined) store.setAdmin(name, Boolean(body.admin));
-      if (body?.disabled !== undefined) {
-        if (name === request.user.name) {
+      const body = fieldsOf(await readJson(request));
+      if (body.admin !== undefined) store.setAdmin(name, Boolean(body.admin));
+      if (body.disabled !== undefined) {
+        if (name === request.user?.name) {
           throw new HttpError(409, "You can't disable your own account.");
         }
         store.setDisabled(name, Boolean(body.disabled));
         if (body.disabled) closeStreamsForUser(name);
       }
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { updated: true });
       return;
     }
     if (userMatch && request.method === 'DELETE') {
       const name = decodeURIComponent(userMatch[1]);
-      if (name === request.user.name)
+      if (name === request.user?.name)
         throw new HttpError(409, "You can't delete your own account.");
       store.removeUser(name);
       closeStreamsForUser(name);
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { deleted: true });
       return;
     }
     if (userResetMatch && request.method === 'POST') {
       const name = decodeURIComponent(userResetMatch[1]);
-      const body = await readJson(request);
-      await store.resetPassword(name, body?.password);
+      const body = fieldsOf(await readJson(request));
+      await store.resetPassword(name, body.password);
       closeStreamsForUser(name);
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { reset: true });
       return;
     }
@@ -445,7 +483,7 @@ export function createApiMiddleware(mode) {
       const name = decodeURIComponent(userRevokeMatch[1]);
       store.revokeSessions(name);
       closeStreamsForUser(name);
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { revoked: true });
       return;
     }
@@ -481,9 +519,9 @@ export function createApiMiddleware(mode) {
     }
 
     if (exerciseMatch && request.method === 'PATCH') {
-      const body = await readJson(request);
-      const exercise = lifecycle.setExerciseName(body?.name);
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      const body = fieldsOf(await readJson(request));
+      const exercise = lifecycle.setExerciseName(body.name);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, exercise);
       return;
     }
@@ -494,23 +532,25 @@ export function createApiMiddleware(mode) {
     if (exerciseArchiveMatch && request.method === 'POST') {
       // `note` is optional: a bodiless (or malformed-body) request archives
       // with no note, rather than 400ing over an omitted field.
-      const body = await readJson(request).catch(() => ({}));
-      const result = await lifecycle.archive({ note: body?.note ?? null });
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      const body = fieldsOf(await readJson(request).catch((): Json => ({})));
+      const result = await lifecycle.archive({
+        note: typeof body.note === 'string' ? body.note : null,
+      });
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, result);
       return;
     }
     if (exerciseResetMatch && request.method === 'POST') {
-      const body = await readJson(request);
-      const result = await lifecycle.reset({ name: body?.name, confirm: body?.confirm });
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      const body = fieldsOf(await readJson(request));
+      const result = await lifecycle.reset({ name: body.name, confirm: body.confirm });
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, result);
       return;
     }
     if (exerciseRestoreMatch && request.method === 'POST') {
-      const body = await readJson(request);
-      const result = await lifecycle.restore({ archive: body?.archive });
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      const body = fieldsOf(await readJson(request));
+      const result = await lifecycle.restore({ archive: body.archive });
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, result);
       return;
     }
@@ -520,16 +560,16 @@ export function createApiMiddleware(mode) {
     }
     if (memberMatch && request.method === 'PUT') {
       const name = decodeURIComponent(memberMatch[1]);
-      const body = await readJson(request);
-      store.setMembership(name, { cell: body?.cell, role: body?.role });
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      const body = fieldsOf(await readJson(request));
+      store.setMembership(name, { cell: body.cell, role: body.role });
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { updated: true });
       return;
     }
     if (memberMatch && request.method === 'DELETE') {
       const name = decodeURIComponent(memberMatch[1]);
       store.removeMembership(name);
-      auditAuthAction(store, request, `${url.pathname}`, 200);
+      auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { deleted: true });
       return;
     }
@@ -542,14 +582,14 @@ export function createApiMiddleware(mode) {
    * admin set) may only sign in, change it or sign out: the browser's forced
    * change screen is a courtesy, this is the rule.
    */
-  function requirePasswordChanged(request, authRoute: string | null = null) {
+  function requirePasswordChanged(request: ApiRequest, authRoute: string | null = null) {
     if (!request.user?.must_change_password) return;
     if (authRoute !== null && PASSWORD_CHANGE_ROUTES.has(authRoute)) return;
     throw new HttpError(403, 'Change your temporary password before continuing.');
   }
 
-  async function dispatch(request, response, next) {
-    const url = new URL(request.url, 'http://localhost');
+  async function dispatch(request: ApiRequest, response: ServerResponse, next: () => void) {
+    const url = new URL(request.url ?? '/', 'http://localhost');
     const isLiveStream = url.pathname === '/api/live';
     const authMatch = /^\/api\/auth\/(.*)$/.exec(url.pathname);
     const moduleMatch = authMatch ? null : /^\/api\/([^/]+)\/(.*)$/.exec(url.pathname);
@@ -567,15 +607,17 @@ export function createApiMiddleware(mode) {
 
     if (isLiveStream) {
       try {
-        request.user = await authenticate(request);
-        if (mode === 'on' && !request.user) throw new HttpError(401, 'Sign in required.');
+        const user = await authenticate(request);
+        request.user = user;
+        // `off` mode always authenticates as LOCAL_USER, so only `on` can get here with none.
+        if (!user) throw new HttpError(401, 'Sign in required.');
         requirePasswordChanged(request);
         const token = mode === 'on' ? sessionToken(request) : null;
         handleLive(request, response, {
-          user: request.user.name,
-          cell: request.user.cell,
-          role: request.user.role,
-          admin: request.user.admin,
+          user: user.name,
+          cell: user.cell,
+          role: user.role,
+          admin: user.admin,
           tokenHash: token ? hashToken(token) : null,
           // Re-resolving on every keep-alive tick (IPB-AUTH-005) is also
           // what slides the session's expiry while the tab stays open, the
@@ -599,7 +641,7 @@ export function createApiMiddleware(mode) {
       // `/api/<module>/...` route (e.g. `/api/terrain/tiles/vector.pmtiles`,
       // which shares an extension with a blocked path) is routed above,
       // never falls through to this branch, and needs no exemption.
-      if (isBlockedStaticPath(request.url)) {
+      if (isBlockedStaticPath(request.url ?? '/')) {
         sendJson(response, { error: 'Not found.' }, 404);
         return;
       }
@@ -622,27 +664,28 @@ export function createApiMiddleware(mode) {
       const moduleId = moduleMatch[1];
       const route = moduleMatch[2];
       if (!byId.has(moduleId)) throw new HttpError(404, 'Unknown module.');
-      if (mode === 'on' && !request.user) throw new HttpError(401, 'Sign in required.');
+      const user = request.user;
+      // `off` mode always authenticates as LOCAL_USER, so only `on` can get here with none.
+      if (!user) throw new HttpError(401, 'Sign in required.');
       requirePasswordChanged(request);
       // C1: a non-admin with no membership in the current exercise can't
       // use any module route (an admin, cell-blind by their flag alone,
       // always can). `/api/auth/*` is unaffected — handled above.
-      if (!request.user.admin && !request.user.cell) {
+      if (!user.admin && !user.cell) {
         throw new HttpError(403, 'You are not assigned to the current exercise.');
       }
       // Item-scoped requests (docs/adr/0002-item-scoped-requests.md): the
       // dispatcher checks the role, resolves the item, announces and audits.
       // The raw client id is never broadcast (IPB-AUTH-006), only its hash:
       // `src/live.js` hashes its own id the same way to skip its own echo.
-      const rawClientId =
-        String(request.headers['x-client-id'] || '').slice(0, CLIENT_ID_HEADER_MAX) || null;
+      const rawClientId = headerText(request, 'x-client-id').slice(0, CLIENT_ID_HEADER_MAX) || null;
       await dispatcher.handle({
         moduleId,
         route,
         url,
         request,
         response,
-        actor: request.user,
+        actor: user,
         client: hashClientId(rawClientId),
         rawClient: rawClientId,
       });
@@ -657,7 +700,7 @@ export function createApiMiddleware(mode) {
   }
 
   function close() {
-    for (const module of modules) module.close();
+    for (const module of modules) module.close?.();
     authStore?.close();
     authStore = undefined;
     closeAllSubscribers();
@@ -666,16 +709,20 @@ export function createApiMiddleware(mode) {
   return { dispatch, close };
 }
 
-export default function ipbApi() {
-  const attach = (hostOf) => (server) => {
-    const mode = resolveAuthMode(hostOf(server));
-    const { dispatch, close } = createApiMiddleware(mode);
-    server.middlewares.use(dispatch);
-    server.httpServer?.once('close', close);
-  };
+export default function ipbApi(): Plugin {
+  const attach =
+    <S extends ViteDevServer | PreviewServer>(
+      hostOf: (server: S) => string | boolean | undefined,
+    ) =>
+    (server: S) => {
+      const mode = resolveAuthMode(hostOf(server));
+      const { dispatch, close } = createApiMiddleware(mode);
+      server.middlewares.use(dispatch);
+      server.httpServer?.once('close', close);
+    };
   return {
     name: 'ipb-api',
-    configureServer: attach((server) => server.config.server.host),
-    configurePreviewServer: attach((server) => server.config.preview.host),
+    configureServer: attach((server: ViteDevServer) => server.config.server.host),
+    configurePreviewServer: attach((server: PreviewServer) => server.config.preview.host),
   };
 }

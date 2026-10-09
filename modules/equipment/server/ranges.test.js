@@ -5,8 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { describe, expect, test } from 'vitest';
 
-import { showCard } from './db.js';
-import { cardRanges, parseRanges } from './ranges.js';
+import { showCard } from './db.ts';
+import { cardRanges, parseRanges } from './ranges.ts';
 
 const DATABASE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

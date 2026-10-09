@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { toGeoJson, toKml } from '../server/export.js';
+import { toGeoJson, toKml } from '../server/export.ts';
 import {
   DEFAULT_CLASSIFICATION,
   FOREIGN_TARGET_LAYERS,

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import { HttpError } from '../../../server/http.ts';
 import { formatMgrs } from '../../../src/geo.js';
-import { openStore } from './store.js';
+import { openStore } from './store.ts';
 
 function tempFile() {
   return path.join(

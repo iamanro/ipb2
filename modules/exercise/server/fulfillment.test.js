@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { computePirFulfillment } from './fulfillment.js';
+import { computePirFulfillment } from './fulfillment.ts';
 
 describe('computePirFulfillment', () => {
   test('no SIRs: open, 0%, not a divide-by-zero NaN', () => {

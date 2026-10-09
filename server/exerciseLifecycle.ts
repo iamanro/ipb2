@@ -17,22 +17,56 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { archiveRoot, integrityCheck } from './dbArchive.ts';
-import { errorMessage, HttpError } from './http.ts';
+import type { AuthStore } from './auth.ts';
+import { errorMessage, HttpError, isJsonObject, type Json } from './http.ts';
 import { publish } from './live.ts';
 import { EXERCISE_DATABASES } from './stateDatabases.ts';
 
 const EXERCISE_NAME_MAX_LENGTH = 80;
 
+type ArchivedMember = { name: string; cell: string; role: string };
+/** An archive's `meta.json`, as `performArchive` writes it. */
+type ArchiveMeta = {
+  name: string;
+  archived_at: string | null;
+  note: string | null;
+  members: ArchivedMember[];
+};
+
+/** `meta.json` read back from disk: only the fields with the right types count. */
+function readArchiveMeta(json: Json): ArchiveMeta | null {
+  if (!isJsonObject(json) || typeof json.name !== 'string') return null;
+  const members = Array.isArray(json.members) ? json.members : [];
+  return {
+    name: json.name,
+    archived_at: typeof json.archived_at === 'string' ? json.archived_at : null,
+    note: typeof json.note === 'string' ? json.note : null,
+    members: members.flatMap((member) =>
+      isJsonObject(member) &&
+      typeof member.name === 'string' &&
+      typeof member.cell === 'string' &&
+      typeof member.role === 'string'
+        ? [{ name: member.name, cell: member.cell, role: member.role }]
+        : [],
+    ),
+  };
+}
+
+async function readArchiveMetaFile(dir: string): Promise<ArchiveMeta | null> {
+  const parsed: Json = JSON.parse(await fsp.readFile(path.join(dir, 'meta.json'), 'utf8'));
+  return readArchiveMeta(parsed);
+}
+
 function now() {
   return new Date().toISOString();
 }
 
-function dtgStamp(date) {
+function dtgStamp(date: Date) {
   return date.toISOString().replace(/[:.]/g, '-');
 }
 
-function slugify(name) {
-  const slug = String(name ?? '')
+function slugify(name: string) {
+  const slug = name
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -40,7 +74,7 @@ function slugify(name) {
   return slug || 'exercise';
 }
 
-function safeIntegrityCheck(file) {
+function safeIntegrityCheck(file: string) {
   try {
     return integrityCheck(file);
   } catch (error) {
@@ -48,7 +82,7 @@ function safeIntegrityCheck(file) {
   }
 }
 
-async function fileExists(file) {
+async function fileExists(file: string) {
   try {
     await fsp.access(file);
     return true;
@@ -62,10 +96,10 @@ async function fileExists(file) {
  * monopolises it, and so a concurrent request genuinely gets a chance to
  * observe the lock below rather than queueing invisibly behind it. */
 function yieldTick() {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function assertExerciseName(name) {
+function assertExerciseName(name: Json | undefined): asserts name is string {
   if (typeof name !== 'string' || !name.trim() || name.trim().length > EXERCISE_NAME_MAX_LENGTH) {
     throw new HttpError(400, `Exercise name must be 1-${EXERCISE_NAME_MAX_LENGTH} characters.`);
   }
@@ -77,8 +111,8 @@ function assertExerciseName(name) {
  * resetting or restoring shares the exact same connection every other
  * `/api/auth/*` route uses.
  */
-export function createExerciseLifecycle({ getAuthStore }) {
-  let lockMessage = null;
+export function createExerciseLifecycle({ getAuthStore }: { getAuthStore: () => AuthStore }) {
+  let lockMessage: string | null = null;
 
   /** Truthy (the in-progress message) while a reset or restore is running;
    * `server/api.ts`'s `dispatch` 503s every other `/api/*` request while
@@ -87,7 +121,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
     return lockMessage;
   }
 
-  function acquireLock(message) {
+  function acquireLock(message: string) {
     if (lockMessage) throw new HttpError(503, lockMessage);
     lockMessage = message;
   }
@@ -101,19 +135,22 @@ export function createExerciseLifecycle({ getAuthStore }) {
     const exercise = store.getExercise();
     const members = store
       .listMembers()
-      .filter((member) => member.cell)
-      .map((member) => ({ name: member.name, cell: member.cell, role: member.role }));
+      .flatMap((member): ArchivedMember[] =>
+        member.cell && member.role
+          ? [{ name: member.name, cell: member.cell, role: member.role }]
+          : [],
+      );
     const id = `${dtgStamp(new Date())}-${slugify(exercise.name)}`;
     const dir = path.join(archiveRoot(), id);
     await fsp.mkdir(dir, { recursive: true });
-    const sizes = {};
+    const sizes: Record<string, number> = {};
     for (const database of EXERCISE_DATABASES) {
       const size = database.copyInto(dir);
       if (size !== null) sizes[database.id] = size;
       await yieldTick();
     }
     const archivedAt = now();
-    const meta = { name: exercise.name, archived_at: archivedAt, note, members };
+    const meta: ArchiveMeta = { name: exercise.name, archived_at: archivedAt, note, members };
     await fsp.writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2));
     return { id, name: exercise.name, archived_at: archivedAt, note, sizes };
   }
@@ -125,7 +162,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
       return getAuthStore().getExercise();
     },
 
-    setExerciseName(name) {
+    setExerciseName(name: Json | undefined) {
       getAuthStore().setExerciseName(name);
       return getAuthStore().getExercise();
     },
@@ -148,20 +185,21 @@ export function createExerciseLifecycle({ getAuthStore }) {
       }
       const archives: {
         id: string;
-        name: unknown;
-        archived_at: unknown;
-        note: unknown;
+        name: string;
+        archived_at: string | null;
+        note: string | null;
         sizes: Record<string, number>;
       }[] = [];
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         const dir = path.join(root, entry.name);
-        let meta;
+        let meta: ArchiveMeta | null;
         try {
-          meta = JSON.parse(await fsp.readFile(path.join(dir, 'meta.json'), 'utf8'));
+          meta = await readArchiveMetaFile(dir);
         } catch {
           continue; // a malformed/partial archive folder: skip it, don't fail the whole list
         }
+        if (!meta) continue;
         const sizes: Record<string, number> = {};
         for (const db of EXERCISE_DATABASES) {
           try {
@@ -174,7 +212,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
           id: entry.name,
           name: meta.name,
           archived_at: meta.archived_at,
-          note: meta.note ?? null,
+          note: meta.note,
           sizes,
         });
       }
@@ -189,7 +227,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
      * exercise. `confirm` must equal the *current* exercise's name — a
      * typed confirmation, not just a click, before every membership and
      * every study/track/ORBAT in the running exercise is gone. */
-    async reset({ name, confirm }) {
+    async reset({ name, confirm }: { name: Json | undefined; confirm: Json | undefined }) {
       assertExerciseName(name);
       const store = getAuthStore();
       const current = store.getExercise().name;
@@ -218,7 +256,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
      * member whose account no longer exists (or whose archived role/cell
      * somehow no longer validates), so a partly-stale roster never blocks
      * the rest of the restore. */
-    async restore({ archive }) {
+    async restore({ archive }: { archive: Json | undefined }) {
       // Archive ids are generated directory names (timestamp + slug), never paths.
       if (
         typeof archive !== 'string' ||
@@ -234,12 +272,13 @@ export function createExerciseLifecycle({ getAuthStore }) {
       acquireLock('Exercise is being restored.');
       try {
         const archiveDir = path.join(archiveRoot(), archive);
-        let meta;
+        let meta: ArchiveMeta | null;
         try {
-          meta = JSON.parse(await fsp.readFile(path.join(archiveDir, 'meta.json'), 'utf8'));
+          meta = await readArchiveMetaFile(archiveDir);
         } catch {
           throw new HttpError(404, `No archive named "${archive}".`);
         }
+        if (!meta) throw new HttpError(422, `Archive "${archive}" has an unreadable meta.json.`);
         // Every archived file must be sound before anything is swapped, so a
         // damaged archive can never leave the exercise half restored.
         for (const database of EXERCISE_DATABASES) {
@@ -262,7 +301,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
         }
         const store = getAuthStore();
         store.clearMemberships();
-        for (const member of meta.members ?? []) {
+        for (const member of meta.members) {
           try {
             store.setMembership(member.name, { cell: member.cell, role: member.role });
           } catch {

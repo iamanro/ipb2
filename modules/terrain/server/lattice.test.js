@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { METRES_PER_DEGREE_LATITUDE, latticeOf, latticeOver, longitudeScale } from './lattice.js';
+import { METRES_PER_DEGREE_LATITUDE, latticeOf, latticeOver, longitudeScale } from './lattice.ts';
 
 const BOUNDS = [17.45, 49.62, 17.6, 49.72];
 const [WEST, SOUTH, EAST, NORTH] = BOUNDS;

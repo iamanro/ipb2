@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { RFI_STATES, canTransition } from './rfiMachine.js';
+import { RFI_STATES, canTransition } from './rfiMachine.ts';
 
 describe('canTransition', () => {
   test.each([

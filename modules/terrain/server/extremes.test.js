@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { elevationExtremes } from './extremes.js';
+import { elevationExtremes } from './extremes.ts';
 
 // Ground rising to the north-east: the envelope's highest corner is NE.
 const ramp = (lon, lat) => (lon - 17) * 1000 + (lat - 49) * 1000;

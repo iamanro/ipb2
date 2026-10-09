@@ -1,9 +1,49 @@
 import crypto from 'node:crypto';
 
 import authState from './authState.ts';
-import { HttpError } from './http.ts';
+import type { AuditEntry } from './dispatch.ts';
+import { HttpError, type Json } from './http.ts';
 import { CELLS, ROLES } from './policy.ts';
-import { countRows, openState, transact, type Migration } from './state.ts';
+import {
+  countRows,
+  flag,
+  num,
+  openState,
+  text,
+  textOrNull,
+  transact,
+  type Migration,
+  type Row,
+} from './state.ts';
+
+/** `request.user` (C1): who a request runs as, from a live session. */
+export type SessionUser = {
+  name: string;
+  admin: boolean;
+  cell: string | null;
+  role: string | null;
+  must_change_password: boolean;
+  /** An admin with no membership, acting as White's game-master. */
+  effective?: true;
+};
+
+type UserRow = {
+  id: number;
+  name: string;
+  password: string;
+  admin: boolean;
+  disabled: boolean;
+};
+
+function readUser(row: Row): UserRow {
+  return {
+    id: num(row, 'id'),
+    name: text(row, 'name'),
+    password: text(row, 'password'),
+    admin: flag(row, 'admin'),
+    disabled: flag(row, 'disabled'),
+  };
+}
 
 /** A session cookie is valid for this long since it was last used (sliding). */
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -159,14 +199,14 @@ function now() {
 /** Runs on the libuv threadpool, not the event loop — synchronous scrypt
  * under login traffic would otherwise stall every other request and every
  * open SSE stream (IPB-AUTH-003). */
-async function hashPassword(password) {
+async function hashPassword(password: string) {
   const salt = crypto.randomBytes(16);
   const hash = await scrypt(password, salt, SCRYPT_KEYLEN);
   return `${salt.toString('hex')}:${hash.toString('hex')}`;
 }
 
-async function verifyPassword(password, stored) {
-  const [saltHex, hashHex] = String(stored).split(':');
+async function verifyPassword(password: string, stored: string) {
+  const [saltHex, hashHex] = stored.split(':');
   if (!saltHex || !hashHex) return false;
   const salt = Buffer.from(saltHex, 'hex');
   const expected = Buffer.from(hashHex, 'hex');
@@ -181,11 +221,11 @@ async function verifyPassword(password, stored) {
 // which usernames exist).
 const DUMMY_HASH = await hashPassword('this-password-matches-no-account');
 
-export function hashToken(token) {
+export function hashToken(token: string) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-function requireName(name) {
+function requireName(name: Json | undefined): asserts name is string {
   if (typeof name !== 'string' || !NAME_PATTERN.test(name)) {
     throw new HttpError(
       400,
@@ -196,7 +236,7 @@ function requireName(name) {
 
 const PASSWORD_MIN_LENGTH = 12;
 
-function requirePassword(password) {
+function requirePassword(password: Json | undefined): asserts password is string {
   if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
     throw new HttpError(400, `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`);
   }
@@ -205,25 +245,25 @@ function requirePassword(password) {
 /** Looser than `requirePassword`: login only bounds type and length, so a
  * multi-megabyte body can't be used to pin memory (IPB-AUTH-002) or burn
  * scrypt cycles, without rejecting a real (if short) existing password. */
-function requireLoginPassword(password) {
+function requireLoginPassword(password: Json | undefined): asserts password is string {
   if (typeof password !== 'string' || !password || password.length > LOGIN_PASSWORD_MAX_LENGTH) {
     throw new HttpError(400, 'Password is required.');
   }
 }
 
-function requireCell(cell) {
-  if (!CELLS.includes(cell)) {
+function requireCell(cell: Json | undefined): asserts cell is string {
+  if (typeof cell !== 'string' || !CELLS.includes(cell)) {
     throw new HttpError(400, `Cell must be one of: ${CELLS.join(', ')}.`);
   }
 }
 
-function requireMembershipRole(role) {
-  if (!MEMBERSHIP_ROLES.includes(role)) {
+function requireMembershipRole(role: Json | undefined): asserts role is string {
+  if (typeof role !== 'string' || !MEMBERSHIP_ROLES.includes(role)) {
     throw new HttpError(400, `Role must be one of: ${MEMBERSHIP_ROLES.join(', ')}.`);
   }
 }
 
-function requireExerciseName(name) {
+function requireExerciseName(name: Json | undefined): asserts name is string {
   if (typeof name !== 'string' || !name.trim() || name.trim().length > EXERCISE_NAME_MAX_LENGTH) {
     throw new HttpError(400, `Exercise name must be 1-${EXERCISE_NAME_MAX_LENGTH} characters.`);
   }
@@ -232,7 +272,7 @@ function requireExerciseName(name) {
 /** IPv4-mapped IPv6 (`::ffff:10.0.0.5`, common on a dual-stack `::` bind) as
  * its plain IPv4 form; a real IPv6 address expanded to its 8 hextets. `null`
  * for anything that isn't a syntactically plausible IPv6 address. */
-function expandIPv6(address) {
+function expandIPv6(address: string): string[] | null {
   const halves = address.split('::');
   if (halves.length > 2) return null;
   const head = halves[0] ? halves[0].split(':') : [];
@@ -240,7 +280,7 @@ function expandIPv6(address) {
   const tail = halves[1] ? halves[1].split(':') : [];
   const missing = 8 - head.length - tail.length;
   if (missing < 0) return null;
-  return [...head, ...Array(missing).fill('0'), ...tail];
+  return [...head, ...Array<string>(missing).fill('0'), ...tail];
 }
 
 /**
@@ -249,7 +289,7 @@ function expandIPv6(address) {
  * LAN client is typically handed (SLAAC), so rotating addresses within it
  * (IPB-AUTH-003) no longer resets the budget.
  */
-function ipGroup(ip) {
+function ipGroup(ip: string | undefined) {
   if (!ip) return 'unknown';
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
   if (mapped) return mapped[1];
@@ -275,10 +315,11 @@ export function openAuthStore(file = authState.path) {
   // attacker's IP forever, and it keeps `openAuthStore` synchronous and
   // side-effect-free on disk beyond the schema itself. Two maps: one keyed
   // by address-group + name, one by name alone (IPB-AUTH-003).
-  const ipAttempts = new Map();
-  const nameAttempts = new Map();
+  /** key -> timestamps (ms) of recent failed attempts. */
+  const ipAttempts = new Map<string, number[]>();
+  const nameAttempts = new Map<string, number[]>();
 
-  function rateLimitKey(ip, name) {
+  function rateLimitKey(ip: string | undefined, name: string) {
     return `${ipGroup(ip)}::${name}`;
   }
 
@@ -287,14 +328,14 @@ export function openAuthStore(file = authState.path) {
    * can't each pin a Map entry before validation even rejects them
    * (IPB-AUTH-002); only `recordFailure` (after a real failed attempt)
    * writes. */
-  function recentHitCount(map, key) {
+  function recentHitCount(map: Map<string, number[]>, key: string) {
     const hits = map.get(key);
     if (!hits) return 0;
     const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
     return hits.filter((at) => at > cutoff).length;
   }
 
-  function checkRateLimit(ipKey, nameKey) {
+  function checkRateLimit(ipKey: string, nameKey: string) {
     if (recentHitCount(ipAttempts, ipKey) >= IP_NAME_MAX_ATTEMPTS) {
       throw new HttpError(429, 'Too many login attempts. Wait a few minutes and try again.');
     }
@@ -310,7 +351,7 @@ export function openAuthStore(file = authState.path) {
    * (`Map` preserves insertion order) — a full map already means traffic
    * beyond what this limiter can usefully track, so losing precision there
    * is an acceptable trade for bounded memory (IPB-AUTH-002). */
-  function capAttempts(map) {
+  function capAttempts(map: Map<string, number[]>) {
     if (map.size <= ATTEMPTS_MAP_CAP) return;
     let excess = map.size - ATTEMPTS_MAP_CAP;
     for (const key of map.keys()) {
@@ -320,7 +361,7 @@ export function openAuthStore(file = authState.path) {
     }
   }
 
-  function recordOneFailure(map, key) {
+  function recordOneFailure(map: Map<string, number[]>, key: string) {
     const cutoff = Date.now() - RATE_LIMIT_WINDOW_MS;
     const hits = (map.get(key) || []).filter((at) => at > cutoff);
     hits.push(Date.now());
@@ -328,16 +369,17 @@ export function openAuthStore(file = authState.path) {
     capAttempts(map);
   }
 
-  function recordFailure(ipKey, nameKey) {
+  function recordFailure(ipKey: string, nameKey: string) {
     recordOneFailure(ipAttempts, ipKey);
     recordOneFailure(nameAttempts, nameKey);
   }
 
-  function findUser(name) {
-    return database.prepare('SELECT * FROM users WHERE name = ?').get(name) ?? null;
+  function findUser(name: string): UserRow | null {
+    const row = database.prepare('SELECT * FROM users WHERE name = ?').get(name);
+    return row ? readUser(row) : null;
   }
 
-  function deleteUserSessions(userId) {
+  function deleteUserSessions(userId: number) {
     database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
   }
 
@@ -350,7 +392,7 @@ export function openAuthStore(file = authState.path) {
 
   /** Throws if demoting/disabling/deleting `user` would leave zero enabled
    * admins. Only meaningful for a user who currently *is* one. */
-  function guardLastAdmin(user, verb) {
+  function guardLastAdmin(user: UserRow, verb: string) {
     if (!user.admin || user.disabled) return;
     if (countEnabledAdmins() <= 1) {
       throw new HttpError(409, `Cannot ${verb} the last enabled admin.`);
@@ -362,31 +404,21 @@ export function openAuthStore(file = authState.path) {
    * absent) `memberships` row. An admin with no membership acts as White's
    * game-master, `effective: true` marking that this isn't a real
    * membership. */
-  function shapeUser(row) {
-    const admin = Boolean(row.admin);
-    let cell = row.cell ?? null;
-    let role = row.role ?? null;
-    let effective;
-    if (admin && !row.cell) {
-      cell = 'white';
-      role = 'game-master';
-      effective = true;
-    }
-    const shaped: {
-      name: unknown;
-      admin: boolean;
-      cell: unknown;
-      role: unknown;
-      must_change_password: boolean;
-      effective?: true;
-    } = {
-      name: row.name,
+  function shapeUser(row: Row): SessionUser {
+    const admin = flag(row, 'admin');
+    const membershipCell = textOrNull(row, 'cell');
+    const shaped: SessionUser = {
+      name: text(row, 'name'),
       admin,
-      cell,
-      role,
-      must_change_password: Boolean(row.must_change_password),
+      cell: membershipCell,
+      role: textOrNull(row, 'role'),
+      must_change_password: flag(row, 'must_change_password'),
     };
-    if (effective) shaped.effective = true;
+    if (admin && !membershipCell) {
+      shaped.cell = 'white';
+      shaped.role = 'game-master';
+      shaped.effective = true;
+    }
     return shaped;
   }
 
@@ -406,7 +438,11 @@ export function openAuthStore(file = authState.path) {
       return database
         .prepare('SELECT name, admin, created_at FROM users ORDER BY name')
         .all()
-        .map((row) => ({ name: row.name, admin: Boolean(row.admin), created_at: row.created_at }));
+        .map((row) => ({
+          name: text(row, 'name'),
+          admin: flag(row, 'admin'),
+          created_at: text(row, 'created_at'),
+        }));
     },
 
     /** Everything the admin UI's users table shows, including a live count
@@ -424,15 +460,15 @@ export function openAuthStore(file = authState.path) {
         )
         .all()
         .map((row) => ({
-          name: row.name,
-          admin: Boolean(row.admin),
-          cell: row.cell ?? null,
-          role: row.role ?? null,
-          created_at: row.created_at,
-          last_login_at: row.last_login_at,
-          disabled: Boolean(row.disabled),
-          must_change_password: Boolean(row.must_change_password),
-          session_count: row.session_count,
+          name: text(row, 'name'),
+          admin: flag(row, 'admin'),
+          cell: textOrNull(row, 'cell'),
+          role: textOrNull(row, 'role'),
+          created_at: text(row, 'created_at'),
+          last_login_at: textOrNull(row, 'last_login_at'),
+          disabled: flag(row, 'disabled'),
+          must_change_password: flag(row, 'must_change_password'),
+          session_count: num(row, 'session_count'),
         }));
     },
 
@@ -440,7 +476,14 @@ export function openAuthStore(file = authState.path) {
      * the first-admin bootstrap, an admin creating a user in the UI, and
      * `resetPassword`. Only the host CLI (an operator setting up their own
      * account) leaves it unset. */
-    async createUser(name, password, { admin = false, mustChangePassword = false } = {}) {
+    async createUser(
+      name: Json | undefined,
+      password: Json | undefined,
+      {
+        admin = false,
+        mustChangePassword = false,
+      }: { admin?: boolean; mustChangePassword?: boolean } = {},
+    ) {
       requireName(name);
       requirePassword(password);
       if (findUser(name)) throw new HttpError(409, `A user named "${name}" already exists.`);
@@ -456,7 +499,7 @@ export function openAuthStore(file = authState.path) {
     /** Also revokes every existing session of theirs (IPB-AUTH-004): a
      * password change is usually a response to a suspected compromise, and
      * leaving old sessions valid would defeat the point of changing it. */
-    async setPassword(name, password) {
+    async setPassword(name: string, password: Json | undefined) {
       requirePassword(password);
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
@@ -470,7 +513,7 @@ export function openAuthStore(file = authState.path) {
     /** An admin resetting someone else's password: like `setPassword`, but
      * also flags the account so the next sign-in forces a change before
      * anything else — the admin, not the user, chose this password. */
-    async resetPassword(name, password) {
+    async resetPassword(name: string, password: Json | undefined) {
       requirePassword(password);
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
@@ -487,8 +530,16 @@ export function openAuthStore(file = authState.path) {
      * one first, then revokes every *other* session of theirs — `keepToken`
      * (their current session) stays valid so they aren't signed out by their
      * own change. */
-    async changePassword(name, currentPassword, nextPassword, keepToken) {
+    async changePassword(
+      name: string,
+      currentPassword: Json | undefined,
+      nextPassword: Json | undefined,
+      keepToken: string | undefined,
+    ) {
       requirePassword(nextPassword);
+      if (typeof currentPassword !== 'string') {
+        throw new HttpError(401, 'Current password is incorrect.');
+      }
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
       const valid = await verifyPassword(currentPassword, user.password);
@@ -510,7 +561,7 @@ export function openAuthStore(file = authState.path) {
     },
 
     /** Sets the global admin flag. Refuses to demote the last enabled admin. */
-    setAdmin(name, isAdmin) {
+    setAdmin(name: string, isAdmin: boolean) {
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
       if (!isAdmin && user.admin) guardLastAdmin(user, 'demote');
@@ -522,7 +573,7 @@ export function openAuthStore(file = authState.path) {
      * caller's job — `server/live.ts`'s `closeStreamsForUser`, since this
      * store has no reference to them). Re-enabling only flips the flag: it
      * doesn't restore the sessions disabling deleted. */
-    setDisabled(name, disabled) {
+    setDisabled(name: string, disabled: boolean) {
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
       if (disabled) guardLastAdmin(user, 'disable');
@@ -534,7 +585,7 @@ export function openAuthStore(file = authState.path) {
       });
     },
 
-    revokeSessions(name) {
+    revokeSessions(name: string) {
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
       deleteUserSessions(user.id);
@@ -542,7 +593,7 @@ export function openAuthStore(file = authState.path) {
 
     /** Deletes the user and, via `ON DELETE CASCADE`, every session and
      * membership of theirs. */
-    removeUser(name) {
+    removeUser(name: string) {
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
       guardLastAdmin(user, 'delete');
@@ -552,7 +603,10 @@ export function openAuthStore(file = authState.path) {
     // -- current-exercise membership (C2/C6): cell + role, cleared on reset --
 
     /** Assigns or changes `name`'s membership in the current exercise. */
-    setMembership(name, { cell, role }) {
+    setMembership(
+      name: string,
+      { cell, role }: { cell: Json | undefined; role: Json | undefined },
+    ) {
       requireCell(cell);
       requireMembershipRole(role);
       const user = findUser(name);
@@ -566,7 +620,7 @@ export function openAuthStore(file = authState.path) {
     },
 
     /** Idempotent: a user with no membership stays that way. */
-    removeMembership(name) {
+    removeMembership(name: string) {
       const user = findUser(name);
       if (!user) throw new HttpError(404, `No user named "${name}".`);
       database.prepare('DELETE FROM memberships WHERE user_id = ?').run(user.id);
@@ -579,10 +633,10 @@ export function openAuthStore(file = authState.path) {
         .prepare(`${USER_MEMBERSHIP_JOIN} ORDER BY users.name`)
         .all()
         .map((row) => ({
-          name: row.name,
-          admin: Boolean(row.admin),
-          cell: row.cell ?? null,
-          role: row.role ?? null,
+          name: text(row, 'name'),
+          admin: flag(row, 'admin'),
+          cell: textOrNull(row, 'cell'),
+          role: textOrNull(row, 'role'),
         }));
     },
 
@@ -597,10 +651,10 @@ export function openAuthStore(file = authState.path) {
       const row = database.prepare('SELECT name, started_at FROM exercise WHERE id = 1').get();
       if (!row) throw new Error('auth.db has no exercise record; its migrations seed one.');
       const members = countRows(database, 'SELECT COUNT(*) AS n FROM memberships');
-      return { name: row.name, started_at: row.started_at, members };
+      return { name: text(row, 'name'), started_at: text(row, 'started_at'), members };
     },
 
-    setExerciseName(name) {
+    setExerciseName(name: Json | undefined) {
       requireExerciseName(name);
       database.prepare('UPDATE exercise SET name = ? WHERE id = 1').run(name.trim());
     },
@@ -608,14 +662,22 @@ export function openAuthStore(file = authState.path) {
     /** Renames the exercise and restarts its clock — called once the
      * ipb/exercise/orbat databases and the membership roster have already
      * been emptied, so `started_at` reflects when *this* exercise began. */
-    resetExercise(name) {
+    resetExercise(name: Json | undefined) {
       requireExerciseName(name);
       database
         .prepare('UPDATE exercise SET name = ?, started_at = ? WHERE id = 1')
         .run(name.trim(), now());
     },
 
-    async login({ name, password, ip }) {
+    async login({
+      name,
+      password,
+      ip,
+    }: {
+      name: Json | undefined;
+      password: Json | undefined;
+      ip: string | undefined;
+    }) {
       requireName(name);
       requireLoginPassword(password);
       const ipKey = rateLimitKey(ip, name);
@@ -646,10 +708,11 @@ export function openAuthStore(file = authState.path) {
         database.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(created, user.id);
       });
       const full = database.prepare(`${USER_MEMBERSHIP_JOIN} WHERE users.id = ?`).get(user.id);
+      if (!full) throw new Error(`User ${user.id} vanished during login.`);
       return { token, user: shapeUser(full) };
     },
 
-    logout(token) {
+    logout(token: string | undefined) {
       if (!token) return;
       database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
     },
@@ -659,7 +722,7 @@ export function openAuthStore(file = authState.path) {
      * it was created (IPB-AUTH-004) regardless of how recently it slid. A
      * disabled user has no rows left to find here — `setDisabled` deletes
      * them synchronously — so there is no separate check for it. */
-    resolveSession(token) {
+    resolveSession(token: string | undefined): SessionUser | null {
       if (!token) return null;
       const row = database
         .prepare(
@@ -675,8 +738,8 @@ export function openAuthStore(file = authState.path) {
         )
         .get(hashToken(token));
       if (!row) return null;
-      const expired = Date.parse(String(row.expires_at)) <= Date.now();
-      const overAge = Date.parse(String(row.created_at)) + SESSION_ABSOLUTE_TTL_MS <= Date.now();
+      const expired = Date.parse(text(row, 'expires_at')) <= Date.now();
+      const overAge = Date.parse(text(row, 'created_at')) + SESSION_ABSOLUTE_TTL_MS <= Date.now();
       if (expired || overAge) {
         database.prepare('DELETE FROM sessions WHERE id = ?').run(row.sid);
         return null;
@@ -686,7 +749,7 @@ export function openAuthStore(file = authState.path) {
       return shapeUser(row);
     },
 
-    audit({ user, method, path: requestPath, status, client }) {
+    audit({ user, method, path: requestPath, status, client }: AuditEntry) {
       database
         .prepare(
           'INSERT INTO audit (at, user, method, path, status, client) VALUES (?, ?, ?, ?, ?, ?)',
@@ -694,13 +757,21 @@ export function openAuthStore(file = authState.path) {
         .run(now(), user ?? null, method, requestPath, status, client ?? null);
     },
 
-    listAudit({ limit = 50, offset = 0 } = {}) {
+    listAudit({ limit = 50, offset = 0 }: { limit?: number; offset?: number } = {}) {
       const total = countRows(database, 'SELECT COUNT(*) AS n FROM audit');
       const items = database
         .prepare(
           'SELECT at, user, method, path, status, client FROM audit ORDER BY id DESC LIMIT ? OFFSET ?',
         )
-        .all(limit, offset);
+        .all(limit, offset)
+        .map((row) => ({
+          at: text(row, 'at'),
+          user: textOrNull(row, 'user'),
+          method: text(row, 'method'),
+          path: text(row, 'path'),
+          status: num(row, 'status'),
+          client: textOrNull(row, 'client'),
+        }));
       return { items, total };
     },
 
@@ -717,3 +788,5 @@ export function openAuthStore(file = authState.path) {
     },
   };
 }
+
+export type AuthStore = ReturnType<typeof openAuthStore>;

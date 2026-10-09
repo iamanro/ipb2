@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
-import { openStore } from './store.js';
+import { openStore } from './store.ts';
 
 function tempFile() {
   return path.join(

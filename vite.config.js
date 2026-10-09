@@ -89,6 +89,9 @@ export default defineConfig({
       // Type-aware rules with many existing hits, kept visible as warnings
       // until fixed: un-awaited async calls (mostly UI event handlers that
       // report their own errors), and non-string values in template text.
+      // Every value has a declared type: no `any`. `unknown` only where outside
+      // data enters (request JSON, catch, worker messages), narrowed at once.
+      'typescript/no-explicit-any': 'error',
       'typescript/no-floating-promises': 'warn',
       'typescript/restrict-template-expressions': 'warn',
       // Tests assert through expectStatus()/assertNoOverlaps()-style helpers.

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 
-import { keyTerrainCandidates } from './keyTerrain.js';
-import { METRES_PER_DEGREE_LATITUDE, longitudeScale } from './lattice.js';
+import { keyTerrainCandidates } from './keyTerrain.ts';
+import { METRES_PER_DEGREE_LATITUDE, longitudeScale } from './lattice.ts';
 
 const METRES_PER_DEGREE_LONGITUDE = longitudeScale(0); // the fixture sits on the equator
 
