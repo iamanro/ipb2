@@ -1,6 +1,6 @@
 {
-  // Type checking for the JavaScript sources, run by `vp check` (Oxlint's
-  // type-aware path, tsgolint). Opt-in per file: only files that start with
+  // Type checking, run by `bun check` (Bun's built-in tsc-compatible checker);
+  // Oxlint's type-aware rules read it too. For JavaScript, opt-in per file: only files that start with
   // `// @ts-check` are checked, so modules join one at a time as they are
   // split or touched (docs: tech debt review, "No real type checking").
   "compilerOptions": {
@@ -16,7 +16,7 @@
     "lib": ["es2024", "dom", "dom.iterable"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "types": ["node"],
+    "types": ["bun"],
     "strict": true,
     "skipLibCheck": true
   },
@@ -29,7 +29,9 @@
     "modules/**/*.js",
     "modules/**/*.mjs",
     "e2e/**/*.js",
-    "deploy/**/*.mjs"
+    "deploy/**/*.mjs",
+    "build.ts",
+    "dev.ts"
   ],
   "exclude": ["node_modules", "dist", "modules/*/data", "modules/*/state"]
 }

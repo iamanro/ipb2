@@ -17,7 +17,7 @@ import {
 } from './guideTasks.js';
 import { createSituationController } from './situation.js';
 import './styles.css';
-import template from './view.html?raw';
+import template from './view.html' with { type: 'text' };
 import { renderActivityPanel } from './activityPanel.js';
 import { renderDocumentsPanel } from './documentsPanel.js';
 import { destroyGeoMap, onGeoKeydown, renderGeographyPanel } from './geographyPanel.js';

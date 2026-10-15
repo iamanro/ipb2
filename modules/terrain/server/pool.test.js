@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'bun:test';
 
 import { HttpError } from '../../../server/http.ts';
 import { createTerrainPool } from './pool.ts';

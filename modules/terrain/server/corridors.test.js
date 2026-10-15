@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { suggestAvenues } from './corridors.ts';
 import { GO, NO_GO, SLOW_GO } from './landcover.ts';

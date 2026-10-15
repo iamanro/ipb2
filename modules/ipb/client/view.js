@@ -1,6 +1,6 @@
 import './styles.css';
 import './staff.css';
-import template from './view.html?raw';
+import template from './view.html' with { type: 'text' };
 import { formatDtg } from '../../../src/dtg.js';
 import { formatMetres, formatMgrs } from '../../../src/geo.js';
 import { clientId, subscribe } from '../../../src/live.js';
@@ -98,26 +98,26 @@ export const BASEMAPS = [
   {
     id: 'terrain',
     label: 'Terrain',
-    missing: 'No elevation data yet: run node modules/terrain/tools/build_terrain.mjs',
+    missing: 'No elevation data yet: run bun modules/terrain/tools/build_terrain.mjs',
   },
   {
     id: 'topo',
     label: 'Topo',
     title: 'Offline topographic map: land cover, tracks, hillshade, contours and names',
-    missing: 'No elevation data yet: run node modules/terrain/tools/build_terrain.mjs',
+    missing: 'No elevation data yet: run bun modules/terrain/tools/build_terrain.mjs',
     // Drawn as part of this basemap; the Layers panel shows them locked on.
     includes: ['contours', 'places'],
   },
   {
     id: 'satellite',
     label: 'Satellite',
-    missing: 'No imagery yet: run node modules/terrain/tools/build_satellite.mjs',
+    missing: 'No imagery yet: run bun modules/terrain/tools/build_satellite.mjs',
   },
   {
     id: 'aerial',
     label: 'Aerial',
     title: 'Offline ČÚZK aerial orthophoto, sub-metre',
-    missing: 'No imagery yet: run node modules/terrain/tools/build_satellite.mjs --source cuzk',
+    missing: 'No imagery yet: run bun modules/terrain/tools/build_satellite.mjs --source cuzk',
   },
   {
     id: 'topo-online',
@@ -139,7 +139,7 @@ export const BASEMAPS = [
   },
 ];
 
-const NO_ELEVATION = 'No elevation data yet: run node modules/terrain/tools/build_terrain.mjs';
+const NO_ELEVATION = 'No elevation data yet: run bun modules/terrain/tools/build_terrain.mjs';
 
 const OVERLAYS = [
   {

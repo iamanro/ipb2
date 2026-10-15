@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 
 // `IPB_STATE_ROOT` must be set before anything imports `./exerciseLifecycle.ts`
 // or `./api.ts` (directly or transitively): each computes its state

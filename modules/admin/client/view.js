@@ -11,7 +11,7 @@ import { renderCellBadge } from '../../../src/release.js';
 import { can, currentUser, handleUnauthorized, sessionMode } from '../../../src/session.js';
 
 import './styles.css';
-import template from './view.html?raw';
+import template from './view.html' with { type: 'text' };
 
 const CELLS = ['white', 'blue', 'red'];
 const CELL_LABELS = { white: 'White', blue: 'Blue', red: 'Red' };

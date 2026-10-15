@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { showCard } from './db.ts';
 import { cardRanges, parseRanges } from './ranges.ts';

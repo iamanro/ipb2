@@ -1,8 +1,8 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Build `modules/terrain/data/terrain.db` from Copernicus GLO-30 GeoTIFFs.
  *
- *   node modules/terrain/tools/build_terrain.mjs --bounds 17.2,49.5,17.8,49.9
+ *   bun modules/terrain/tools/build_terrain.mjs --bounds 17.2,49.5,17.8,49.9
  *
  * Without `--source`, the 1°×1° GLO-30 tiles covering `--bounds` are
  * downloaded from the public AWS Open Data bucket (no account) into

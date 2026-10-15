@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { NO_GO, SLOW_GO, coverClass } from './landcover.ts';
 

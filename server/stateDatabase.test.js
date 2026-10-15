@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test } from 'bun:test';
 
 import { openState } from './state.ts';
 import { declareStateDatabase } from './stateDatabase.ts';

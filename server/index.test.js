@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 
 // Same ordering constraint as `api.test.js`: `IPB_STATE_ROOT` has to be set
 // before anything imports `./api.ts` (directly or via `./index.ts`), so a
@@ -61,6 +61,8 @@ afterAll(() => {
 
 afterEach(async () => {
   if (server) {
+    // Bun never counts a connection that streamed a file as idle, so close() alone would hang.
+    server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     server = undefined;
   }

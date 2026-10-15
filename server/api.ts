@@ -1,5 +1,6 @@
 /**
- * `/api/*` entry point: a Vite plugin middleware. Handles `/api/live` (SSE,
+ * `/api/*` entry point: connect-style middleware `server/index.ts` mounts
+ * in front of the static build. Handles `/api/live` (SSE,
  * C2) and `/api/auth/*` (C3) directly, authenticates and authorises every
  * other `/api/<module>/...` request, then dispatches to the module registry
  * in `modules.js`. After a successful (status < 400) non-GET module request
@@ -10,7 +11,6 @@ import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
-import type { Plugin, PreviewServer, ViteDevServer } from 'vite-plus';
 
 import {
   SESSION_TTL_MS,
@@ -130,12 +130,13 @@ function isSensitiveNormalizedPath(normalized: string) {
 }
 
 /**
- * True for any request Vite's static/raw-fs middleware would otherwise
- * happily serve straight off disk (IPB-AUTH-001, critical): every module's
+ * True for any request a static file handler could otherwise serve
+ * straight off disk (IPB-AUTH-001, critical): every module's
  * `state/` (working data, including `server/state/auth.db`'s password
  * hashes) and `data/` directory, any `*.db`/`*.db-wal`/`*.db-shm`/
- * `*.mbtiles`/`*.pmtiles` file, Vite's raw-filesystem escape hatch
- * (`/@fs/<abs-path>`), and its editor-launcher endpoint. Checked on both the
+ * `*.mbtiles`/`*.pmtiles` file, and the raw-filesystem and editor-launcher
+ * paths (`/@fs/<abs-path>`) the old Vite dev server exposed — still refused,
+ * as defence in depth. Checked on both the
  * raw request path and its percent-decoded, `..`-resolved form — either one
  * reaching that middleware unmodified would serve the file, so an attacker
  * only needs one representation to work, not both. `vector.pmtiles` and
@@ -296,9 +297,8 @@ function checkCsrf(request: IncomingMessage) {
 
 /**
  * Builds the dispatch middleware and its teardown for one auth `mode`
- * (`'on'` or `'off'`), independent of Vite. `ipbApi()` below is the thin
- * adapter that resolves `mode` from the dev/preview server's bound host;
- * tests call this directly against a plain `http.createServer`.
+ * (`'on'` or `'off'`). `server/index.ts` mounts it in front of the static
+ * `dist/` build; tests call it directly against a plain `http.createServer`.
  */
 export function createApiMiddleware(mode: AuthMode) {
   let authStore: AuthStore | undefined;
@@ -320,7 +320,7 @@ export function createApiMiddleware(mode: AuthMode) {
   const NO_USERS_MESSAGE =
     'No users yet. Set IPB_ADMIN_NAME (default "admin") and IPB_ADMIN_PASSWORD_FILE (or ' +
     'IPB_ADMIN_PASSWORD) before starting the server to bootstrap the first admin, or create ' +
-    'one by hand: node server/tools/users.mjs add <name> --admin';
+    'one by hand: bun server/tools/users.mjs add <name> --admin';
 
   /**
    * Deploy's container sets `IPB_ADMIN_PASSWORD_FILE` (preferred — a mounted
@@ -635,8 +635,8 @@ export function createApiMiddleware(mode: AuthMode) {
     }
 
     if (!authMatch && !moduleMatch) {
-      // IPB-AUTH-001 (critical): a state/data file, or Vite's raw-fs/editor
-      // escape hatches, must never reach the static middleware `next()`
+      // IPB-AUTH-001 (critical): a state/data file, or a raw-fs/editor
+      // escape-hatch path, must never reach the static middleware `next()`
       // calls into — applies in every auth mode, and only here: every real
       // `/api/<module>/...` route (e.g. `/api/terrain/tiles/vector.pmtiles`,
       // which shares an extension with a blocked path) is routed above,
@@ -707,22 +707,4 @@ export function createApiMiddleware(mode: AuthMode) {
   }
 
   return { dispatch, close };
-}
-
-export default function ipbApi(): Plugin {
-  const attach =
-    <S extends ViteDevServer | PreviewServer>(
-      hostOf: (server: S) => string | boolean | undefined,
-    ) =>
-    (server: S) => {
-      const mode = resolveAuthMode(hostOf(server));
-      const { dispatch, close } = createApiMiddleware(mode);
-      server.middlewares.use(dispatch);
-      server.httpServer?.once('close', close);
-    };
-  return {
-    name: 'ipb-api',
-    configureServer: attach((server: ViteDevServer) => server.config.server.host),
-    configurePreviewServer: attach((server: PreviewServer) => server.config.preview.host),
-  };
 }

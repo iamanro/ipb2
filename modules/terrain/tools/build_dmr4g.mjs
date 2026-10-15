@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Build `modules/terrain/data/terrain-dmr4g.db` from ČÚZK's DMR 4G (5 m
  * bare-earth LiDAR DTM, Bpv heights), a detail layer over the coarser GLO-30
  * `terrain.db` (see modules/terrain/server/dem.js's `openElevation`).
  *
- *   node modules/terrain/tools/build_dmr4g.mjs [--bounds west,south,east,north]
+ *   bun modules/terrain/tools/build_dmr4g.mjs [--bounds west,south,east,north]
  *
  * Without `--bounds`, every one of the ~20,300 sheets in ČÚZK's ATOM feed is
  * built — all of Czechia. The feed (cached at `data/dmr4g/feed.xml`, refetch

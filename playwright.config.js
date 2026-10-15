@@ -30,17 +30,16 @@ export default defineConfig({
   // Started in order: the first builds `dist/`, which the second serves.
   webServer: [
     {
-      // The production build, not the dev server: on a cold start Vite's dev
-      // server re-optimises dependencies and reloads the page mid-test.
-      command: `npx vp build && npx vp preview --port ${PORT} --strictPort`,
+      // The production build and server, signed out (loopback: auth off).
+      command: 'bun build.ts && bun server/index.ts',
       url: `http://localhost:${PORT}/ipb/`,
       reuseExistingServer: false,
-      env: { IPB_STATE_ROOT: process.env.IPB_STATE_ROOT },
+      env: { IPB_STATE_ROOT: process.env.IPB_STATE_ROOT, IPB_PORT: String(PORT) },
       timeout: 60_000,
     },
     {
       // The standalone server with sign-in on, as deployed (minus TLS).
-      command: 'node server/index.ts',
+      command: 'bun server/index.ts',
       url: `${AUTH_BASE_URL}/ipb/`,
       reuseExistingServer: false,
       env: {

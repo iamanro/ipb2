@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { METRES_PER_DEGREE_LATITUDE, latticeOf, latticeOver, longitudeScale } from './lattice.ts';
 

@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, expect, test } from 'vitest';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 
 import { createDispatcher } from '../../../server/dispatch.ts';
 import { sweepRoutes } from '../../../server/routeSweep.ts';

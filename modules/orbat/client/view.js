@@ -2,7 +2,7 @@ import './styles.css';
 import { mountBuilder } from './builderView.js';
 import { createElement } from './dom.js';
 import { mountSymbols } from './symbolsView.js';
-import template from './view.html?raw';
+import template from './view.html' with { type: 'text' };
 
 const VIEWS = { symbols: mountSymbols, builder: mountBuilder };
 const DEFAULT_VIEW = 'builder';

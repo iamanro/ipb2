@@ -2,9 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
-import { expect, test } from 'vitest';
+import { expect, test } from 'bun:test';
 
 import { STATE_DATABASES } from './stateDatabases.ts';
 
@@ -12,7 +11,7 @@ const ROOT = path.join(import.meta.dirname, '..');
 
 test('every module that declares a state database is backed up, archived and restored', () => {
   const declared = readdirSync(path.join(ROOT, 'modules')).filter((id) =>
-    existsSync(path.join(ROOT, 'modules', id, 'server', 'state.js')),
+    existsSync(path.join(ROOT, 'modules', id, 'server', 'state.ts')),
   );
   const registered = STATE_DATABASES.map((database) => database.id);
   for (const id of declared) expect(registered).toContain(id);
@@ -23,20 +22,18 @@ test('every module that declares a state database is backed up, archived and res
 test('backup and restore load the database list without any route code', () => {
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'ipb-no-routes-'));
   try {
-    // A loader hook that fails the process the moment any module's routes.js is resolved.
-    const hooks = path.join(scratch, 'hooks.mjs');
+    // A preloaded plugin that fails the process the moment any module's routes.ts loads.
+    const guard = path.join(scratch, 'guard.ts');
     writeFileSync(
-      hooks,
-      `export async function resolve(specifier, context, next) {
-        const result = await next(specifier, context);
-        if (/\\/server\\/routes\\.js$/.test(result.url)) throw new Error('route code loaded: ' + result.url);
-        return result;
-      }`,
-    );
-    const register = path.join(scratch, 'register.mjs');
-    writeFileSync(
-      register,
-      `import { register } from 'node:module'; register(${JSON.stringify(pathToFileURL(hooks).href)});`,
+      guard,
+      `Bun.plugin({
+        name: 'no-routes',
+        setup(build) {
+          build.onLoad({ filter: /\\/server\\/routes\\.ts$/ }, ({ path }) => {
+            throw new Error('route code loaded: ' + path);
+          });
+        },
+      });`,
     );
     const env = {
       ...process.env,
@@ -46,7 +43,7 @@ test('backup and restore load the database list without any route code', () => {
     for (const tool of ['backup.mjs', 'restore.mjs']) {
       const output = execFileSync(
         process.execPath,
-        ['--import', register, path.join(ROOT, 'server', 'tools', tool)],
+        ['--preload', guard, path.join(ROOT, 'server', 'tools', tool)],
         {
           env,
           encoding: 'utf8',
