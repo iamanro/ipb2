@@ -19,6 +19,7 @@ import { createSituationController } from './situation.js';
 import './styles.css';
 import template from './view.html?raw';
 import { renderActivityPanel } from './activityPanel.js';
+import { renderDocumentsPanel } from './documentsPanel.js';
 import { destroyGeoMap, onGeoKeydown, renderGeographyPanel } from './geographyPanel.js';
 import { renderRequirementsPanel } from './requirementsPanel.js';
 import { renderRfiPanel } from './rfiPanel.js';
@@ -32,6 +33,7 @@ const TABS = new Set([
   'reports',
   'situation',
   'rfi',
+  'documents',
   'collection',
   'products',
   'scenario',
@@ -77,6 +79,7 @@ function createState() {
     requirements: [],
     reports: [],
     rfis: [],
+    documents: [],
     messages: [],
     clock: null,
     activity: [],
@@ -158,6 +161,21 @@ export async function requestJson(
   }
   if (method !== 'GET' && !signal.aborted) state.guide.refresh?.();
   return payload;
+}
+
+/** A chosen file's bytes as base64, the form JSON upload bodies carry them in. */
+export function readFileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () =>
+      // readAsDataURL always yields a string: "data:<type>;base64,<bytes>".
+      resolve(typeof reader.result === 'string' ? (reader.result.split(',', 2)[1] ?? '') : ''),
+    );
+    reader.addEventListener('error', () =>
+      reject(reader.error ?? new Error('Could not read the file.')),
+    );
+    reader.readAsDataURL(file);
+  });
 }
 
 export function showError(container, message) {
@@ -250,13 +268,14 @@ function writeLocation() {
 // --- Loading -----------------------------------------------------------------
 
 export async function loadAll() {
-  const [requirements, reports, rfis, messages, clock, activity] = await Promise.all([
+  const [requirements, reports, rfis, messages, clock, activity, documents] = await Promise.all([
     requestJson(`${API}/requirements`),
     requestJson(`${API}/reports`),
     requestJson(`${API}/rfis`),
     requestJson(`${API}/messages`),
     requestJson(`${API}/clock`),
     requestJson(`${API}/activity`),
+    requestJson(`${API}/documents`),
   ]);
   state.requirements = requirements;
   state.reports = reports;
@@ -264,6 +283,7 @@ export async function loadAll() {
   state.messages = messages;
   state.clock = clock;
   state.activity = activity;
+  state.documents = documents;
 }
 
 // --- Tab chrome ----------------------------------------------------------------
@@ -433,6 +453,7 @@ export function renderPanel() {
     requirements: renderRequirementsPanel,
     geography: renderGeographyPanel,
     rfi: renderRfiPanel,
+    documents: renderDocumentsPanel,
     scenario: renderScenarioPanel,
     activity: renderActivityPanel,
   };

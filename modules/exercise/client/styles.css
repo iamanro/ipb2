@@ -561,7 +561,8 @@
       gap: 12px;
     }
 
-    .rfi-row {
+    .rfi-row,
+    .document-row {
       border: 1px solid var(--line);
       border-left: 4px solid var(--line-dark);
       padding: 12px 14px;
@@ -579,6 +580,7 @@
 
     .rfi-header {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 10px;
       margin-bottom: 6px;

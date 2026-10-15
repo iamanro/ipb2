@@ -8,7 +8,13 @@ export type PlannedNai = {
   label: string;
   geometry: Json;
 };
-export type PlannedRequirement = { source: string; text: string };
+export type PlannedRequirement = {
+  source: string;
+  text: string;
+  /** Set only by importers that own these columns too (the ICP); IPB leaves them to the analyst. */
+  priority?: number;
+  decision_point?: string | null;
+};
 export type PlannedSir = {
   source: string;
   requirementSource: string;

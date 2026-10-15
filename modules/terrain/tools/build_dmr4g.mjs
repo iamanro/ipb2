@@ -12,7 +12,7 @@
  * ETRS89/TM33N (EPSG:3045); its data comes from
  * `https://openzu.cuzk.gov.cz/opendata/DMR4G-TIFF/epsg-3045/<name>.zip`, a
  * small zip (a `.tif` and a `.tfw`) this tool unzips itself (no system
- * unzip, no extra dependency: see zip.mjs). Licence per the feed: "žádné
+ * unzip, no extra dependency: see server/zip.ts). Licence per the feed: "žádné
  * podmínky neplatí" (no conditions apply); attributed here as ČÚZK open data
  * (CC BY 4.0), "© ČÚZK".
  *

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-10-12
+
+### Added
+
+- Scenario packages: the Instructor desk exports the story, situations and injects
+  as one `.scenario.json` file and imports it back (validated as a whole; situations
+  added as Planned, injects as Pending).
+- Exercise **Documents**: cell-owned uploaded files (OPLAN, annexes, plans) with
+  release, owner reassignment and in-place new editions.
+- Requirements import from a collection plan workbook (ICP `.xlsx`): PIR/SIR/EEI rows
+  become PIRs, SIRs and indicators; reimport updates them per cell.
+
+### Changed
+
+- The ZIP reader moved from `modules/terrain/tools/zip.mjs` to `server/zip.ts` (now
+  also used for `.xlsx`) and caps each entry's inflated size.
+
 ## 2026-09-29
 
 ### Added

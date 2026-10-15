@@ -135,7 +135,13 @@ test('every route naming an item holds the line: 404 hidden, 403 released-but-no
     period_end: new Date().toISOString(),
   });
 
-  const fixtures = { requirement, report, rfi, track, collector, tasking, intsum };
+  const document = await seedItem('documents', {
+    filename: 'annex.pdf',
+    content_type: 'application/pdf',
+    data: Buffer.from('%PDF-1.4').toString('base64'),
+  });
+
+  const fixtures = { requirement, report, rfi, track, collector, tasking, intsum, document };
   const failures = await sweepRoutes({
     dispatcher,
     moduleId: 'exercise',

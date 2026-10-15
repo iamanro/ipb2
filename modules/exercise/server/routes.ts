@@ -25,6 +25,12 @@ const REGIONS_FILE = path.join(DATA_ROOT, 'regions.json');
 // the dispatcher's default 1 MB body cap would trip first, so these two
 // routes get room for that plus the rest of the body and JSON overhead.
 const COUNTRY_BODY_LIMIT = 3 << 20;
+// A document of up to MAX_DOCUMENT_BYTES, base64-encoded (4/3), plus JSON.
+const DOCUMENT_BODY_LIMIT = 35 << 20;
+// A scenario package is text: story, situations and inject payloads.
+const PACKAGE_BODY_LIMIT = 5 << 20;
+// A collection plan workbook is tens of KB; 5 MB of base64 is generous.
+const ICP_BODY_LIMIT = 5 << 20;
 
 /**
  * The scenario clock fires due injects here, on the server: `connect`
@@ -132,6 +138,13 @@ export default {
       path: 'intsums',
       label: 'INTSUM',
       shape: (row) => ensureStore().shapeIntsum(row),
+      onOwnership,
+    },
+    document: {
+      table: 'documents',
+      path: 'documents',
+      label: 'Document',
+      shape: (row) => ensureStore().shapeDocument(row),
       onOwnership,
     },
     // List-only (docs/adr/0002-item-scoped-requests.md contract): no `path`,
@@ -276,6 +289,14 @@ export default {
       verb: 'create',
       item: 'requirement',
       handler: ({ body, owner }) => ensureStore().importIpbStudy(requireOwner(owner), body),
+    },
+    {
+      method: 'POST',
+      path: 'import/icp',
+      verb: 'create',
+      item: 'requirement',
+      bodyLimit: ICP_BODY_LIMIT,
+      handler: ({ body, owner }) => ensureStore().importIcp(requireOwner(owner), body),
     },
 
     {
@@ -547,6 +568,63 @@ export default {
       handler: ({ access }) => ensureStore().listMessages(access),
     },
 
+    // -- scenario documents (OPLAN, annexes, plans): released like any item ----
+    {
+      method: 'GET',
+      path: 'documents',
+      verb: 'list',
+      handler: ({ access }) => ensureStore().listDocuments(access),
+    },
+    {
+      method: 'POST',
+      path: 'documents',
+      verb: 'create',
+      item: 'document',
+      bodyLimit: DOCUMENT_BODY_LIMIT,
+      handler: ({ body, owner }) => ensureStore().createDocument(requireOwner(owner), body),
+    },
+    {
+      method: 'PATCH',
+      path: 'documents/:item',
+      verb: 'change',
+      item: 'document',
+      bodyLimit: DOCUMENT_BODY_LIMIT,
+      handler: ({ item, body }) => ensureStore().updateDocument(requireItem(item), body),
+    },
+    {
+      method: 'DELETE',
+      path: 'documents/:item',
+      verb: 'change',
+      item: 'document',
+      handler: ({ item }) => {
+        ensureStore().deleteDocument(requireItem(item));
+        return { deleted: true };
+      },
+    },
+    {
+      method: 'GET',
+      path: 'documents/:item/file',
+      verb: 'see',
+      item: 'document',
+      handler: ({ item, response }) => {
+        if (!response) throw new Error('A document file streams to a response.');
+        const file = ensureStore().readDocumentFile(requireItem(item));
+        // Only a PDF opens in the browser; anything else (an uploaded .html
+        // included) downloads as opaque bytes, never rendered on our origin.
+        const pdf = file.content_type === 'application/pdf';
+        const ascii = file.filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
+        response.writeHead(200, {
+          'Content-Type': pdf ? 'application/pdf' : 'application/octet-stream',
+          'Content-Length': file.data.byteLength,
+          'Content-Disposition': `${pdf ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+        });
+        response.end(file.data);
+        return undefined;
+      },
+    },
+
     // -- scenario clock & events (White/game-master control) --------------------
     { method: 'GET', path: 'clock', verb: 'none', handler: () => ensureStore().readClock() },
     {
@@ -647,6 +725,27 @@ export default {
       handler: ({ body, access }) => {
         if (!access.white) throw new HttpError(403, 'Only White may edit the story.');
         return ensureStore().patchStory(body ?? {});
+      },
+    },
+    {
+      method: 'GET',
+      path: 'instructor/package',
+      verb: 'none',
+      role: 'observer',
+      handler: ({ access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may export the scenario package.');
+        return ensureStore().exportPackage();
+      },
+    },
+    {
+      method: 'POST',
+      path: 'instructor/package',
+      verb: 'none',
+      role: 'game-master',
+      bodyLimit: PACKAGE_BODY_LIMIT,
+      handler: ({ body, access }) => {
+        if (!access.white) throw new HttpError(403, 'Only White may import a scenario package.');
+        return ensureStore().importPackage(body);
       },
     },
     {

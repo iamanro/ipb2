@@ -641,6 +641,17 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      White observers can read the desk but cannot author or send.
    - Exercise → Geography still activates the map scenario; story situations
      are narrative developments, separate from the **Situation** track map.
+   - **Scenario package** saves the whole script (story, situations and every
+     inject not cancelled) as one `.scenario.json` file: **Export package**
+     to reuse it in a later exercise or edit it offline, **Import package…** to
+     load it back. Import replaces the story text and adds the situations after
+     the existing ones as Planned, with every inject Pending; one invalid inject
+     rejects the whole file. Trigger times are kept as absolute scenario DTGs.
+   - **Documents** (any cell, analyst+): upload the scenario documents (OPLAN,
+     annexes, plans; up to 25 MB each). A new document is visible only to its
+     cell until **Release…**; **New edition…** replaces the file in place and
+     keeps the release, so Blue always opens the current edition. PDFs open in
+     the browser; other files download.
 2. **IPB** (analyst): each exercise has exactly one automatic IPB study for
    White, Blue and Red. New and reset exercises create the three studies on
    first use; restored or older exercises safely gain any missing cell study
@@ -732,7 +743,14 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
    not grant permissions or certify the analytical quality of completed work.
    **Requirements** (analyst): Exercise → Requirements → Import from IPB turns
    the event matrix into PIRs, SIRs and indicators, with each SIR tied to its
-   NAI/TAI geometry.
+   NAI/TAI geometry. **Import collection plan (.xlsx)** reads an ICP workbook
+   (the PSAF F HQ layout: a `No.` header row, collector codes in the row above
+   it, product references after the last collector): each PIR, SIR and EEI row
+   becomes a PIR (PIR 1 highest priority, decision points from `Decision:`), a
+   SIR and an indicator carrying the EEI's indicators, NAI, window and
+   tasked/capable/request collectors. Importing a revised workbook updates the
+   same rows per cell and never deletes; NAI text stays in the wording because
+   the workbook has no geometry.
 4. **Collection** (collection-manager): collectors and taskings against
    SIR × NAI × time; the **ISR synchronization matrix** shows coverage, the
    scenario "now", LTIOVs, conflicts and uncovered SIRs; each tasking carries a
