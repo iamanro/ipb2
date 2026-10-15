@@ -40,16 +40,16 @@ services:
       test:
         [
           'CMD',
-          'node',
+          'bun',
           '-e',
-          "require('http').get('http://127.0.0.1:8000/healthz',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))",
+          "fetch('http://127.0.0.1:8000/healthz').then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 5s
       start_period: 20s
       retries: 3
     # 8-core / 16 GB host, up to 30 users: the terrain worker pool sizes
-    # itself to clamp(cores - 2, 1, 4) (modules/terrain/server/pool.js), so
+    # itself to clamp(cores - 2, 1, 4) (modules/terrain/server/pool.ts), so
     # 6 CPUs leaves room for Caddy/TLS and the OS page cache that the
     # ~27 GB read-only DEM/imagery mounts ride on.
     deploy:
@@ -96,7 +96,7 @@ services:
     volumes:
       - ${IPB_STATE_DIR:-state}:/state
       - ${IPB_BACKUP_DIR:-./deploy/backups}:/backups
-    entrypoint: ['node', 'server/tools/backup.mjs']
+    entrypoint: ['bun', 'server/tools/backup.mjs']
 
 secrets:
   ipb_admin_password:

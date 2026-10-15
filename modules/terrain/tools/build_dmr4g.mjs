@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Build `modules/terrain/data/terrain-dmr4g.db` from ČÚZK's DMR 4G (5 m
  * bare-earth LiDAR DTM, Bpv heights), a detail layer over the coarser GLO-30
  * `terrain.db` (see modules/terrain/server/dem.js's `openElevation`).
  *
- *   node modules/terrain/tools/build_dmr4g.mjs [--bounds west,south,east,north]
+ *   bun modules/terrain/tools/build_dmr4g.mjs [--bounds west,south,east,north]
  *
  * Without `--bounds`, every one of the ~20,300 sheets in ČÚZK's ATOM feed is
  * built — all of Czechia. The feed (cached at `data/dmr4g/feed.xml`, refetch
@@ -12,7 +12,7 @@
  * ETRS89/TM33N (EPSG:3045); its data comes from
  * `https://openzu.cuzk.gov.cz/opendata/DMR4G-TIFF/epsg-3045/<name>.zip`, a
  * small zip (a `.tif` and a `.tfw`) this tool unzips itself (no system
- * unzip, no extra dependency: see zip.mjs). Licence per the feed: "žádné
+ * unzip, no extra dependency: see server/zip.ts). Licence per the feed: "žádné
  * podmínky neplatí" (no conditions apply); attributed here as ČÚZK open data
  * (CC BY 4.0), "© ČÚZK".
  *

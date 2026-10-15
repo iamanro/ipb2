@@ -6,7 +6,7 @@ import { countRows, numOrNull, type Row } from '../../../../server/state.ts';
 
 import { database } from './connection.ts';
 import { readSituation, readStory as readStoryColumns } from './rows.ts';
-import { listScenarioEvents } from './scenarioEvents.ts';
+import { insertScenarioEvent, listScenarioEvents, planScenarioEvent } from './scenarioEvents.ts';
 import {
   existingRow,
   fetchRow,
@@ -222,6 +222,118 @@ export function deleteSituation(id: number) {
   mutate('situation:delete', String(id), { owner_cell: 'white', releasable_to: [] }, () => {
     database.prepare('DELETE FROM situations WHERE id = ?').run(id);
   });
+}
+
+// -- scenario package: the whole authored story as one reusable file ---------
+
+const PACKAGE_FORMAT = 'ipb-scenario-package';
+const STORY_KEYS = ['title', 'briefing', 'objectives', 'instructor_notes'];
+
+/** Story, situations (in order) and every inject not cancelled, each inject
+ * under the situation it belongs to. Delivery state and situation progress
+ * are left out: a package is a script to run again, not a record of a run. */
+export function exportPackage() {
+  const injects = listScenarioEvents()
+    .filter((event) => event.state !== 'cancelled')
+    .map((event) => ({
+      situation_id: event.situation_id,
+      inject: {
+        trigger_at: event.trigger_at,
+        kind: event.kind,
+        payload: event.payload,
+        delivery_mode: event.delivery_mode,
+      },
+    }));
+  const injectsOf = (situationId: number | null) =>
+    injects.filter((entry) => entry.situation_id === situationId).map((entry) => entry.inject);
+  return {
+    format: PACKAGE_FORMAT,
+    version: 1,
+    exported_at: now(),
+    story: readStory(),
+    situations: listSituations().map((situation) => ({
+      title: situation.title,
+      ground_truth: situation.ground_truth,
+      expected_response: situation.expected_response,
+      injects: injectsOf(situation.id),
+    })),
+    injects: injectsOf(null),
+  };
+}
+
+function packageList(value: Json | undefined, name: string): Json[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new HttpError(400, `${name} must be an array.`);
+  return value;
+}
+
+/** Adds a package's situations and injects after what the desk already
+ * holds (every inject pending, every situation planned) and overwrites the
+ * story fields it carries. Validated in full before anything is written, so
+ * a bad inject anywhere leaves the desk untouched. */
+export function importPackage(input: Json) {
+  const fields = fieldsOf(input);
+  if (fields.format !== PACKAGE_FORMAT) {
+    throw new HttpError(400, 'Not a scenario package (format is not "ipb-scenario-package").');
+  }
+  const story = fieldsOf(fields.story ?? {});
+  const storyPatch: Record<string, string> = {};
+  for (const key of STORY_KEYS) {
+    const value = story[key];
+    if (typeof value === 'string') storyPatch[key] = value;
+  }
+  const situations = packageList(fields.situations, 'situations').map((value, index) => {
+    const situation = fieldsOf(value);
+    return {
+      title: requireBoundedString(situation.title, `situations[${index}].title`, 200),
+      ground_truth: optionalString(situation.ground_truth, 'ground_truth') ?? '',
+      expected_response: optionalString(situation.expected_response, 'expected_response') ?? '',
+      injects: packageList(situation.injects, `situations[${index}].injects`).map(
+        planScenarioEvent,
+      ),
+    };
+  });
+  const loose = packageList(fields.injects, 'injects').map(planScenarioEvent);
+  return mutate(
+    'instructor:import',
+    () => storyPatch.title || 'package',
+    { owner_cell: 'white', releasable_to: [] },
+    () => {
+      readStoryRow();
+      const keys = Object.keys(storyPatch);
+      if (keys.length) {
+        database
+          .prepare(
+            `UPDATE story SET ${keys.map((key) => `${key} = ?`).join(', ')}, updated_at = ? WHERE id = 1`,
+          )
+          .run(...keys.map((key) => storyPatch[key]), now());
+      }
+      let order = nextSituationSortOrder();
+      for (const situation of situations) {
+        const timestamp = now();
+        const { lastInsertRowid } = database
+          .prepare(
+            `INSERT INTO situations (title, ground_truth, expected_response, status, sort_order, created_at, updated_at)
+             VALUES (?, ?, ?, 'planned', ?, ?, ?)`,
+          )
+          .run(
+            situation.title,
+            situation.ground_truth,
+            situation.expected_response,
+            order++,
+            timestamp,
+            timestamp,
+          );
+        for (const inject of situation.injects)
+          insertScenarioEvent(inject, Number(lastInsertRowid));
+      }
+      for (const inject of loose) insertScenarioEvent(inject, null);
+      return {
+        situations: situations.length,
+        injects: loose.length + situations.reduce((total, s) => total + s.injects.length, 0),
+      };
+    },
+  );
 }
 
 export function getInstructorData() {

@@ -102,6 +102,8 @@ export function createInstructorController(ctx) {
   let composer = blankComposerDraft();
   let composerFieldset = null; // the live createReportFieldset() instance, while report-kind is shown
   let composerOpen = false;
+  let packageOpen = false;
+  let packageNote = null;
 
   function request(path, options = {}) {
     if (!requestController || requestController.signal.aborted) {
@@ -238,6 +240,86 @@ export function createInstructorController(ctx) {
       controls.append(toggleButton, rateInput, rateButton, jumpInput, jumpButton, tickButton);
       section.append(controls);
     }
+    return section;
+  }
+
+  // -- scenario package ---------------------------------------------------------
+
+  async function exportPackage(container) {
+    try {
+      const pack = await request(`${api}/instructor/package`);
+      const name = (pack.story.title || 'scenario').replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '');
+      const link = el('a');
+      link.href = URL.createObjectURL(
+        new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' }),
+      );
+      link.download = `${name || 'scenario'}.scenario.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 0);
+    } catch (error) {
+      showError(container, error.message);
+    }
+  }
+
+  async function importPackage(file, container) {
+    try {
+      let pack;
+      try {
+        pack = JSON.parse(await file.text());
+      } catch {
+        throw new Error(`${file.name} is not a scenario package (not JSON).`);
+      }
+      const situations = Array.isArray(pack.situations) ? pack.situations.length : 0;
+      const confirmed = await askConfirm(
+        `Import “${pack.story?.title || file.name}”? Its story text replaces the current one; its ${situations} situation(s) and their injects are added after yours as planned and pending.`,
+        'Import',
+      );
+      if (!confirmed) return;
+      const result = await request(`${api}/instructor/package`, { method: 'POST', body: pack });
+      storyLoaded = false; // reseed the story draft from the imported text
+      packageNote = `Imported ${result.situations} situation(s) and ${result.injects} inject(s) from ${file.name}.`;
+      packageOpen = true;
+      await load();
+      render();
+    } catch (error) {
+      showError(container, error.message);
+    }
+  }
+
+  function renderPackageSection() {
+    const section = el('details', 'field-group');
+    section.open = packageOpen;
+    section.addEventListener('toggle', () => (packageOpen = section.open));
+    section.append(
+      el('summary', 'instructor-story-summary', 'Scenario package — save or load the whole script'),
+      el(
+        'p',
+        'panel-note',
+        'Export saves the story, situations and injects as one file, ready to run again in a later exercise or to edit and load back. Delivery state is not kept: every imported inject is pending.',
+      ),
+    );
+    const row = el('div', 'requirement-form');
+    const exportButton = el('button', 'chip-button', 'Export package');
+    exportButton.type = 'button';
+    exportButton.addEventListener('click', () => exportPackage(section));
+    row.append(exportButton);
+    if (canEdit()) {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.hidden = true;
+      input.addEventListener('change', () => {
+        const [file] = input.files;
+        input.value = '';
+        if (file) importPackage(file, section);
+      });
+      const importButton = el('button', 'chip-button', 'Import package…');
+      importButton.type = 'button';
+      importButton.addEventListener('click', () => input.click());
+      row.append(importButton, input);
+    }
+    section.append(row);
+    if (packageNote) section.append(el('p', 'panel-note', packageNote));
     return section;
   }
 
@@ -1099,6 +1181,7 @@ export function createInstructorController(ctx) {
     }
     panel.append(el('h1', 'instructor-title', 'Instructor desk'));
     panel.append(renderClockSection());
+    panel.append(renderPackageSection());
     panel.append(renderStorySection());
     panel.append(renderSituationsSection());
     panel.append(renderComposer());

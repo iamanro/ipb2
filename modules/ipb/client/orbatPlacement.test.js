@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { affiliationOf } from '../../../src/symbols/sidc.js';
 import { layoutUnits, orbatLinkStatus, orbatUnitProperties } from './orbatPlacement.js';

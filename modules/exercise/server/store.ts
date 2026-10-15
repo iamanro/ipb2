@@ -87,14 +87,24 @@ import { createRfi, deleteRfi, listRfis, shapeRfi, transitionRfi, updateRfi } fr
 import {
   createSituation,
   deleteSituation,
+  exportPackage,
   getInstructorData,
+  importPackage,
   listSituations,
   patchStory,
   readStory,
   updateSituation,
 } from './store/instructor.ts';
-import { importIpbStudy, listNais, shapeNai } from './store/ipbStudy.ts';
+import { importIcp, importIpbStudy, listNais, shapeNai } from './store/ipbStudy.ts';
 import { listActivity } from './store/activity.ts';
+import {
+  createDocument,
+  deleteDocument,
+  listDocuments,
+  readDocumentFile,
+  shapeDocument,
+  updateDocument,
+} from './store/documents.ts';
 import { touchRequirementsForReport } from './store/shared.ts';
 
 export function openStore(file: string, { regionsFile }: { regionsFile?: string } = {}) {
@@ -114,6 +124,15 @@ export function openStore(file: string, { regionsFile }: { regionsFile?: string 
     createEvidenceLink,
     deleteEvidenceLink,
     importIpbStudy,
+    importIcp,
+    exportPackage,
+    importPackage,
+    listDocuments,
+    createDocument,
+    updateDocument,
+    deleteDocument,
+    readDocumentFile,
+    shapeDocument,
     listNais,
     listReports,
     createReport,

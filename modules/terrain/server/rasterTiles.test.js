@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { LEGEND } from './mobility.ts';
 import { renderHillshade, renderSlopeClasses } from './rasterTiles.ts';

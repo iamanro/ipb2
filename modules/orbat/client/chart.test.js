@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { layoutTree } from './chart.js';
 
 /** Deterministic fake measure: no DOM, no milsymbol. */

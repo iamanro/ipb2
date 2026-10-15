@@ -118,9 +118,9 @@ const terrain = openElevationSource();
 const imagery = referenceFile(IMAGERY_DATABASE, openImagery);
 const ortho = referenceFile(ORTHO_DATABASE, openImagery);
 /**
- * Created on the first job, not at import: `vite.config.js` imports this
- * module for every `vp` command (test, lint, build), and live worker threads
- * would keep each of those processes from exiting.
+ * Created on the first job, not at import: tests and the backup/restore
+ * tools import this module, and live worker threads would keep each of
+ * those processes from exiting.
  */
 let pool: ReturnType<typeof createTerrainPool> | null = null;
 

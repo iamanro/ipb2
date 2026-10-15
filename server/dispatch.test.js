@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
 import { announce, createDispatcher, EXERCISE_CONTROL } from './dispatch.ts';
 import { sweepRoutes } from './routeSweep.ts';

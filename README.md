@@ -10,7 +10,7 @@ RFIs, scenario clock, INTSUM products, AAR export), and an ORBAT workbench
 loopback-only by default, with no accounts; an opt-in LAN mode adds logins,
 roles and an audit trail for a classroom of analysts sharing one exercise —
 see [Users, roles and network access](#users-roles-and-network-access).
-Runs as one Node process against local SQLite databases — no Docker, no
+Runs as one Bun process against local SQLite databases — no Docker, no
 external services. (Opt-in exceptions, each needing internet only while
 switched on: the "OpenTopoMap", "Satellite HD" and "ČÚZK Ortho" basemaps, see
 [Basemaps](#basemaps), and the real-time [weather](#weather-online) layers
@@ -21,7 +21,7 @@ evidence](docs/current-backlog.md). Deployment procedures: [Operator runbook](do
 
 ```mermaid
 graph LR
-  A[Browser] --> B[Vite dev/preview server]
+  A[Browser] --> B[Bun server: server/index.ts]
   B --> Z["/api/auth — login, session, audit (LAN mode only)"]
   B --> Y["/api/live — SSE: live updates across tabs"]
   B --> C["/api/ipb — studies, features, threats, COAs, events"]
@@ -34,7 +34,7 @@ graph LR
 
 ## Requirements
 
-- Node **22.18+** (`node:sqlite`'s `DatabaseSync`, and running the server's `.ts` files without a build step — check with `node -v`).
+- Bun **1.4.3+** — package manager, runtime (the server's `.ts` files run as-is; `node:sqlite`'s `DatabaseSync` through Bun's Node compatibility), test runner and client bundler (`build.ts`). Type checking is `bun check`; lint and formatting are Oxlint and Oxfmt. Check with `bun --version`. Node and Vite are not needed.
 - Python **3.11+** for the equipment import tools. Standard library only, no
   `pip install` required.
 - ~2.5 GB free disk for the equipment reference database (cards + images),
@@ -43,8 +43,8 @@ graph LR
 ## Quickstart
 
 ```bash
-npm install
-npm run dev          # http://localhost:5180
+bun install
+bun run dev          # http://localhost:5180
 ```
 
 The app starts, but `equipment` and `terrain` will report their data as
@@ -96,7 +96,7 @@ excluded by name and by section (`Automotive`, `Communications`,
 ### Terrain (elevation + offline basemap)
 
 ```bash
-node modules/terrain/tools/build_terrain.mjs --bounds <west,south,east,north>
+bun modules/terrain/tools/build_terrain.mjs --bounds <west,south,east,north>
 ```
 
 Builds `modules/terrain/data/terrain.db`: a one-arc-second elevation grid
@@ -119,7 +119,7 @@ build offline from GeoTIFFs you already have, pass `--source <dir>`; every
 #### Elevation detail: ČÚZK DMR 4G (5 m, Czechia only)
 
 ```bash
-node modules/terrain/tools/build_dmr4g.mjs
+bun modules/terrain/tools/build_dmr4g.mjs
 ```
 
 Builds `modules/terrain/data/terrain-dmr4g.db`, a 5 m bare-earth grid from
@@ -227,7 +227,7 @@ does not, and the overlay is then greyed out.
 ### Satellite imagery (optional)
 
 ```bash
-node modules/terrain/tools/build_satellite.mjs
+bun modules/terrain/tools/build_satellite.mjs
 ```
 
 Downloads [EOxCloudless](https://cloudless.eox.at) Sentinel-2 imagery (10 m,
@@ -251,7 +251,7 @@ the required attribution.
 ### Aerial imagery (ČÚZK ortho, optional)
 
 ```bash
-node modules/terrain/tools/build_satellite.mjs --source cuzk --study 3
+bun modules/terrain/tools/build_satellite.mjs --source cuzk --study 3
 ```
 
 Downloads [ČÚZK Ortofoto](https://ags.cuzk.gov.cz/arcgis1/rest/services/ORTOFOTO_WM/MapServer)
@@ -277,7 +277,7 @@ you need.
 ### Scenario regions (for Exercise geography)
 
 ```bash
-node modules/exercise/tools/build_regions.mjs
+bun modules/exercise/tools/build_regions.mjs
 ```
 
 Builds `modules/exercise/data/regions.json`: the 14 Czech kraje and 77 okresy
@@ -641,6 +641,17 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      White observers can read the desk but cannot author or send.
    - Exercise → Geography still activates the map scenario; story situations
      are narrative developments, separate from the **Situation** track map.
+   - **Scenario package** saves the whole script (story, situations and every
+     inject not cancelled) as one `.scenario.json` file: **Export package**
+     to reuse it in a later exercise or edit it offline, **Import package…** to
+     load it back. Import replaces the story text and adds the situations after
+     the existing ones as Planned, with every inject Pending; one invalid inject
+     rejects the whole file. Trigger times are kept as absolute scenario DTGs.
+   - **Documents** (any cell, analyst+): upload the scenario documents (OPLAN,
+     annexes, plans; up to 25 MB each). A new document is visible only to its
+     cell until **Release…**; **New edition…** replaces the file in place and
+     keeps the release, so Blue always opens the current edition. PDFs open in
+     the browser; other files download.
 2. **IPB** (analyst): each exercise has exactly one automatic IPB study for
    White, Blue and Red. New and reset exercises create the three studies on
    first use; restored or older exercises safely gain any missing cell study
@@ -732,7 +743,14 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
    not grant permissions or certify the analytical quality of completed work.
    **Requirements** (analyst): Exercise → Requirements → Import from IPB turns
    the event matrix into PIRs, SIRs and indicators, with each SIR tied to its
-   NAI/TAI geometry.
+   NAI/TAI geometry. **Import collection plan (.xlsx)** reads an ICP workbook
+   (the PSAF F HQ layout: a `No.` header row, collector codes in the row above
+   it, product references after the last collector): each PIR, SIR and EEI row
+   becomes a PIR (PIR 1 highest priority, decision points from `Decision:`), a
+   SIR and an indicator carrying the EEI's indicators, NAI, window and
+   tasked/capable/request collectors. Importing a revised workbook updates the
+   same rows per cell and never deletes; NAI text stays in the wording because
+   the workbook has no geometry.
 4. **Collection** (collection-manager): collectors and taskings against
    SIR × NAI × time; the **ISR synchronization matrix** shows coverage, the
    scenario "now", LTIOVs, conflicts and uncovered SIRs; each tasking carries a
@@ -882,12 +900,12 @@ network:
 
 | Mode  | When                                                               | Behaviour                                                                                                                           |
 | ----- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `off` | Bound to `127.0.0.1`, `localhost` or `::1` (`npm run dev`/`start`) | No login; every request acts as White's implicit game-master: `{ name: 'local', admin: true, cell: 'white', role: 'game-master' }`. |
-| `on`  | Bound to any other host (`npm run dev:lan`/`start:lan`, `::`)      | A session cookie is required; roles and cells are enforced on the server.                                                           |
+| `off` | Bound to `127.0.0.1`, `localhost` or `::1` (`bun run dev`/`start`) | No login; every request acts as White's implicit game-master: `{ name: 'local', admin: true, cell: 'white', role: 'game-master' }`. |
+| `on`  | Bound to any other host (`bun run dev:lan`/`start:lan`, `::`)      | A session cookie is required; roles and cells are enforced on the server.                                                           |
 
 `IPB_AUTH=on` / `IPB_AUTH=off` overrides the default either way — except
 `IPB_AUTH=off` on a non-loopback host, which refuses to start rather than
-serve an open LAN. `npm run dev:lan` and `npm run start:lan` bind `::`
+serve an open LAN. `bun run dev:lan` and `bun run start:lan` bind `::`
 (every interface) with `IPB_AUTH=on` set for you.
 
 **`admin` is a global flag, not a role.** An account either has it or
@@ -948,12 +966,12 @@ The same `server/tools/users.mjs` CLI still works, independent of any
 running server:
 
 ```bash
-node server/tools/users.mjs add <name> [--admin]              # prompts for a password
-node server/tools/users.mjs list                              # shows the admin flag + membership
-node server/tools/users.mjs passwd <name>
-node server/tools/users.mjs member <name> --cell <c> --role <r>  # assign/change a membership
-node server/tools/users.mjs unmember <name>
-node server/tools/users.mjs remove <name>                     # also signs them out everywhere
+bun server/tools/users.mjs add <name> [--admin]              # prompts for a password
+bun server/tools/users.mjs list                              # shows the admin flag + membership
+bun server/tools/users.mjs passwd <name>
+bun server/tools/users.mjs member <name> --cell <c> --role <r>  # assign/change a membership
+bun server/tools/users.mjs unmember <name>
+bun server/tools/users.mjs remove <name>                     # also signs them out everywhere
 ```
 
 `--password-stdin` reads the password from stdin instead of prompting
@@ -1045,10 +1063,9 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout server/state/dev-key.pem \
   -out server/state/dev-cert.pem -days 365 -subj "/CN=ipb-lan"
 ```
 
-— and point Vite at it (either export the paths as env vars and read them in
-`vite.config.js`'s `server.https`/`preview.https`, or pass them with
-`vp dev --https`/`vp preview --https` if your `vp` version supports the CLI
-flag; consult `npx vp dev --help`). Every device on the exercise then needs
+— and start the server with it:
+`IPB_TLS_CERT=server/state/dev-cert.pem IPB_TLS_KEY=server/state/dev-key.pem bun run start:lan`
+(or `dev:lan`). Every device on the exercise then needs
 to accept or import that certificate once. `server/state/` is already
 `.gitignore`d and excluded from static serving (see "Users, roles and
 network access" above), so keeping a generated key/cert there never risks
@@ -1115,7 +1132,7 @@ the Admin module's **Members** tab (`GET/PUT/DELETE /api/auth/members*`,
 admin-only) — per-row cell/role selects, a "Remove" per row, and a
 bulk-assign bar (select users, pick one cell and role, apply to all of
 them at once). The **Users** tab shows the same cell/role read-only.
-`node server/tools/users.mjs member <name> --cell <c> --role <r>` and
+`bun server/tools/users.mjs member <name> --cell <c> --role <r>` and
 `unmember <name>` do the same from the CLI. An admin _without_ a
 membership acts as White's game-master for exercise data; one _with_ a
 membership uses it for role checks instead (their White-level visibility
@@ -1248,30 +1265,32 @@ first), so a new module is backed up and reset without touching those tools.
 
 ## Scripts
 
-| Command             | Does                                                                                                                                                                                                                                                                                   |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run dev`       | Vite dev server, `:5180`, loopback, no login                                                                                                                                                                                                                                           |
-| `npm run dev:lan`   | Vite dev server, `:5180`, every interface, login required (see "Users, roles and network access")                                                                                                                                                                                      |
-| `npm run build`     | Production bundle to `dist/`                                                                                                                                                                                                                                                           |
-| `npm start`         | Serve the production build (`dist/`, already built) standalone on `:8000`, loopback, no login — run `npm run build` first                                                                                                                                                              |
-| `npm run start:lan` | Same, every interface, login required (see "Users, roles and network access")                                                                                                                                                                                                          |
-| `npm test`          | Runs `src/geo.test.js` and any other `*.test.js` (Vitest via `vp test`)                                                                                                                                                                                                                |
-| `npm run test:e2e`  | Real-browser tests in `e2e/*.e2e.js` (Playwright) against a production build on :5190, plus the standalone server with sign-in on at :5191 for the White/Blue/Red isolation test (`e2e/cells.e2e.js`), each with its own throwaway state; first run: `npx playwright install chromium` |
-| `npm run check`     | Format check + lint + typecheck; run before committing                                                                                                                                                                                                                                 |
-| `npm run format`    | Auto-format with Prettier conventions (`vp fmt --write`)                                                                                                                                                                                                                               |
+| Command             | Does                                                                                                                                                                                                                                                                                    |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run dev`       | Builds the client unminified and serves it with the API on `:5180`, loopback, no login; client changes rebuild (reload the page), server changes restart                                                                                                                                |
+| `bun run dev:lan`   | Same, every interface, login required (see "Users, roles and network access")                                                                                                                                                                                                           |
+| `bun run build`     | Production bundle to `dist/` (`bun build.ts`)                                                                                                                                                                                                                                           |
+| `bun run start`     | Serve the production build (`dist/`, already built) standalone on `:8000`, loopback, no login — run `bun run build` first                                                                                                                                                               |
+| `bun run start:lan` | Same, every interface, login required (see "Users, roles and network access")                                                                                                                                                                                                           |
+| `bun test`          | Runs `src/geo.test.js` and any other `*.test.js` (Bun's test runner, `bun:test`)                                                                                                                                                                                                        |
+| `bun run test:e2e`  | Real-browser tests in `e2e/*.e2e.js` (Playwright) against a production build on :5190, plus the standalone server with sign-in on at :5191 for the White/Blue/Red isolation test (`e2e/cells.e2e.js`), each with its own throwaway state; first run: `bunx playwright install chromium` |
+| `bun check`         | Type check (Bun's built-in, tsc-compatible)                                                                                                                                                                                                                                             |
+| `bun run lint`      | Lint (Oxlint, with type-aware rules) + format check (Oxfmt)                                                                                                                                                                                                                             |
+| `bun run verify`    | `bun check` + `bun run lint`; run before committing                                                                                                                                                                                                                                     |
+| `bun run format`    | Auto-format (Oxfmt, Prettier-compatible)                                                                                                                                                                                                                                                |
 
 CI (`.github/workflows/ci.yml`, GitHub Actions, every push to `master` and
-every pull request) runs `npm run check`, `npm test` and `npm run test:e2e`
-on Node 24 against a fresh clone (no reference data), and checks that the
+every pull request) runs `bun run verify`, `bun test` and `bun run test:e2e`
+on Bun 1.4.3 against a fresh clone (no reference data), and checks that the
 Docker image builds; nothing is pushed or deployed.
 
 ## Deployment (Docker / Podman)
 
-Runs the same app as `npm start`, but as a container behind a TLS-terminating
+Runs the same app as `bun run start`, but as a container behind a TLS-terminating
 reverse proxy, for a shared LAN server instead of one analyst's machine —
 `https://ac.lan` reachable from up to ~30 users' browsers, local accounts
 only (no LDAP/SSO), SQLite state as before. `compose.yaml` runs two
-containers: `app` (this repo, `node server/index.ts`, not reachable from the
+containers: `app` (this repo, `bun server/index.ts`, not reachable from the
 host directly) and `caddy` (TLS + reverse proxy, the only published ports).
 
 Day-to-day operation (accounts, exercise day, reset between exercises,
@@ -1324,7 +1343,7 @@ an NFS/SMB mount of the NAS target) before `docker compose up`.
    first request bootstraps that one account as an admin (flagged
    must-change-password), only when no users exist yet. Add everyone else on
    the Admin page (Users, then Members for their cell and role), or with
-   `docker compose exec app node server/tools/users.mjs add <name>` and
+   `docker compose exec app bun server/tools/users.mjs add <name>` and
    `... member <name> --cell <white|blue|red> --role <role>`.
 
 2. Point `IPB_DATA_DIR` at the packed data and start the stack:
@@ -1409,8 +1428,8 @@ it replaces to `pre-restore-<time>/` next to the backups):
 
 ```bash
 docker compose stop app
-docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs            # list backups
-docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs <backup> --yes
+docker compose --profile backup run --rm --entrypoint bun backup server/tools/restore.mjs            # list backups
+docker compose --profile backup run --rm --entrypoint bun backup server/tools/restore.mjs <backup> --yes
 docker compose start app
 ```
 

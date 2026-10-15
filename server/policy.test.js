@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 
-import { expect, test } from 'vitest';
+import { expect, test } from 'bun:test';
 
 import { HttpError } from './http.ts';
 import {

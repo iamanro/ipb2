@@ -1,16 +1,16 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Consistent online backup of every state database into a dated folder,
  * with rotation. Safe to run against a live server: `VACUUM INTO` takes a
  * read lock and streams a compacted, checkpoint-consistent copy — it never
  * blocks writers for the whole backup, only briefly at the WAL checkpoint.
  *
- *   node server/tools/backup.mjs [--out <dir>] [--keep <n>]
+ *   bun server/tools/backup.mjs [--out <dir>] [--keep <n>]
  *
  * `--out` defaults to `$IPB_BACKUP_ROOT` or `<state root>/../backups`.
  * `--keep` defaults to `$IPB_BACKUP_KEEP` or 14. Inside the app container:
  *
- *   docker compose exec app node server/tools/backup.mjs
+ *   docker compose exec app bun server/tools/backup.mjs
  *
  * Exercise archives (`$IPB_STATE_ROOT/archives/*`, written by Admin →
  * Exercise → Archive/Reset) are immutable once written, so they're mirrored

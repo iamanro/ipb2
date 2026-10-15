@@ -468,4 +468,26 @@ export const MIGRATIONS: Migration[] = [
   ALTER TABLE requirements ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
   ALTER TABLE reports ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
   `,
+  // Scenario documents (OPLAN, annexes, collection plans): a cell-owned item
+  // released like any other. The bytes live in their own table so listing
+  // and every ownership check never pull megabytes of PDF; replacing the
+  // file bumps `version` and keeps the same id, release and links.
+  `
+  CREATE TABLE documents (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    owner_cell TEXT NOT NULL DEFAULT 'white',
+    releasable_to TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE document_files (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    data BLOB NOT NULL
+  );
+  `,
 ];

@@ -1,12 +1,12 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Standalone production server: the connect-style `/api/*` middleware from
  * `./api.ts` in front of the static `dist/` build, as one plain
- * `node:http` server — no Vite at runtime. Built by `npm run build`, run by
- * `npm start` (or the Docker image's `CMD`).
+ * `node:http` server — no Vite at runtime. Built by `bun run build`, run by
+ * `bun run start` (or the Docker image's `CMD`).
  *
  * Config is env-only (no flags), so the same image works from `compose.yaml`
- * or a bare `node server/index.ts`:
+ * or a bare `bun server/index.ts`:
  *
  *   IPB_HOST              bind address, default 127.0.0.1
  *   IPB_PORT              bind port, default 8000
@@ -17,15 +17,17 @@
  *   IPB_ADMIN_NAME             first-admin bootstrap (see ./api.ts)
  *   IPB_ADMIN_PASSWORD_FILE
  *   IPB_ADMIN_PASSWORD
+ *   IPB_TLS_CERT, IPB_TLS_KEY  PEM paths: serve HTTPS instead of HTTP (both or neither)
  *
  * `createRequestListener` and `createHealthzHandler` are exported for
  * `index.test.js`, which points them at a throwaway `dist/`/state/data tree
  * instead of the real one; `main()` (real paths, real `listen`) only runs
  * when this file is executed directly, not when it's imported.
  */
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -65,7 +67,7 @@ export function contentTypeFor(filePath: string) {
 }
 
 /**
- * Serves the Vite build out of `distDir`: hashed `/assets/*` files get a
+ * Serves the client build (build.ts) out of `distDir`: hashed `/assets/*` files get a
  * one-year immutable cache; everything else (in particular `index.html`) is
  * revalidated on every use, since it names the current asset hashes. A
  * request outside `distDir` — a `..` segment, an encoded slash, a symlink
@@ -73,8 +75,7 @@ export function contentTypeFor(filePath: string) {
  * resolved, decoded path, not the raw URL). A path with no file extension
  * that isn't a real file falls back to `index.html`: the shell owns
  * client-side routing for `/`, `/ipb/`, `/exercise/`, `/orbat/`,
- * `/equipment/`, … (`src/main.js`'s `route()`), the same way `vp
- * dev`/`vp preview` behave.
+ * `/equipment/`, … (`src/main.js`'s `route()`).
  */
 export function createStaticHandler(distDir: string) {
   const indexHtml = path.join(distDir, 'index.html');
@@ -253,7 +254,8 @@ export function createRequestListener({
   return { listener, close };
 }
 
-async function main() {
+/** Builds nothing: serves `dist/` (see build.ts) and the API, until SIGTERM/SIGINT. */
+export async function main() {
   const host = process.env.IPB_HOST || '127.0.0.1';
   const port = Number(process.env.IPB_PORT) || 8000;
   const mode = resolveAuthMode(host);
@@ -263,7 +265,13 @@ async function main() {
     mode,
   });
 
-  const server = http.createServer(listener);
+  const { IPB_TLS_CERT: cert, IPB_TLS_KEY: key } = process.env;
+  if (Boolean(cert) !== Boolean(key))
+    throw new Error('Set both IPB_TLS_CERT and IPB_TLS_KEY, or neither.');
+  const server =
+    cert && key
+      ? https.createServer({ cert: readFileSync(cert), key: readFileSync(key) }, listener)
+      : http.createServer(listener);
   server.on('error', (error) => {
     console.error('[ipb] server error:', error);
     process.exitCode = 1;
@@ -277,6 +285,10 @@ async function main() {
     const timeout = setTimeout(() => process.exit(1), 10_000).unref();
     server.close(() => clearTimeout(timeout));
     close();
+    // Bun (1.4) never marks a keep-alive connection that streamed a file
+    // (createReadStream().pipe) as idle, so close() alone would wait out the
+    // timeout above; give in-flight requests a moment, then drop the rest.
+    setTimeout(() => server.closeAllConnections(), 2000).unref();
     // Let in-flight connections drain; `server.close` alone waits for them.
     await new Promise((resolve) => server.once('close', resolve));
     process.exit(0);
@@ -288,7 +300,9 @@ async function main() {
     server.once('error', reject);
     server.listen(port, host, () => resolve(undefined));
   });
-  console.log(`[ipb] listening on http://${host}:${port} (auth ${mode}, ${os.hostname()})`);
+  console.log(
+    `[ipb] listening on ${cert ? 'https' : 'http'}://${host}:${port} (auth ${mode}, ${os.hostname()})`,
+  );
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Download aerial/satellite imagery into an MBTiles archive for the offline
  * "Satellite" and "Aerial" basemaps.
  *
- *   node modules/terrain/tools/build_satellite.mjs
- *   node modules/terrain/tools/build_satellite.mjs --bounds 17.2,49.5,17.8,49.9 --year 2025
- *   node modules/terrain/tools/build_satellite.mjs --source cuzk --study 3
+ *   bun modules/terrain/tools/build_satellite.mjs
+ *   bun modules/terrain/tools/build_satellite.mjs --bounds 17.2,49.5,17.8,49.9 --year 2025
+ *   bun modules/terrain/tools/build_satellite.mjs --source cuzk --study 3
  *
  * `--source eox` (default) writes `satellite.mbtiles` from EOxCloudless
  * (Sentinel-2 cloudless, 10 m, native around zoom 13-14; the map upscales

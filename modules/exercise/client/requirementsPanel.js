@@ -14,6 +14,7 @@ import {
   formatDate,
   hasCell,
   loadAll,
+  readFileBase64,
   renderPanel,
   requestJson,
   scenarioNow,
@@ -344,6 +345,10 @@ function renderRequirementCard(requirement) {
     badge.title =
       'Derived from an IPB event matrix; re-importing that study refreshes its wording.';
     header.append(badge);
+  } else if (requirement.source?.startsWith('icp:')) {
+    const badge = createElement('span', 'source-badge', 'From ICP');
+    badge.title = 'Imported from a collection plan; importing a revised workbook refreshes it.';
+    header.append(badge);
   }
   if (can('analyst') && canEditClient(requirement)) {
     const deleteButton = createElement('button', 'icon-button danger', 'Delete');
@@ -481,7 +486,7 @@ async function importIpbStudy(studyId, container) {
         })),
       },
     });
-    state.importSummary = { study: study.name, counts, naiCount: nais.length };
+    state.importSummary = { from: 'ipb', study: study.name, counts, naiCount: nais.length };
     await loadAll();
     renderPanel();
   } catch (error) {
@@ -491,10 +496,70 @@ async function importIpbStudy(studyId, container) {
 
 function describeImport({ study, counts, naiCount }) {
   const part = (label, { created, updated, stale }) =>
-    `${label} ${created} new, ${updated} updated${stale.length ? `, ${stale.length} no longer in IPB (kept)` : ''}`;
+    `${label} ${created} new, ${updated} updated${stale.length ? `, ${stale.length} no longer in the source (kept)` : ''}`;
   const naiPart =
     naiCount === undefined ? '' : ` · ${naiCount} NAI/TAI feature${naiCount === 1 ? '' : 's'}`;
   return `Imported “${study}”: ${part('PIRs', counts.requirements)} · ${part('SIRs', counts.sirs)} · ${part('indicators', counts.indicators)}${naiPart}.`;
+}
+
+/** The last import's counts and stale rows, under the section (`from`) that ran it. */
+function appendImportSummary(section, from) {
+  if (state.importSummary?.from !== from) return;
+  section.append(createElement('p', 'panel-note', describeImport(state.importSummary)));
+  const { counts } = state.importSummary;
+  const stale = [...counts.requirements.stale, ...counts.sirs.stale, ...counts.indicators.stale];
+  if (stale.length) {
+    const list = createElement('ul', 'panel-note stale-list');
+    stale.forEach((text) => list.append(createElement('li', null, text)));
+    section.append(
+      createElement('p', 'panel-note', 'No longer in the source — delete below if not needed:'),
+      list,
+    );
+  }
+}
+
+async function importIcp(file, container) {
+  try {
+    const counts = await requestJson(`${API}/import/icp`, {
+      method: 'POST',
+      body: { filename: file.name, data: await readFileBase64(file) },
+    });
+    state.importSummary = { from: 'icp', study: file.name, counts };
+    await loadAll();
+    renderPanel();
+  } catch (error) {
+    showError(container, error.message);
+  }
+}
+
+function renderIcpImport(container) {
+  const section = createElement('section', 'field-group');
+  section.append(
+    createElement('h3', null, 'Import collection plan (.xlsx)'),
+    createElement(
+      'p',
+      'panel-note',
+      'An ICP workbook: each PIR becomes a PIR, each SIR a SIR, each EEI row an indicator with its NAI, window and collectors. Import a revised workbook to update the same rows; nothing is deleted, observations and evidence stay.',
+    ),
+  );
+  if (!can('analyst') || !hasCell()) {
+    section.append(createElement('p', 'panel-note', 'Importing needs the analyst role.'));
+    container.append(section);
+    return;
+  }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  input.setAttribute('aria-label', 'Collection plan workbook');
+  input.addEventListener('change', () => {
+    const [file] = input.files;
+    if (file) importIcp(file, section);
+  });
+  const form = createElement('div', 'requirement-form');
+  form.append(input);
+  section.append(form);
+  appendImportSummary(section, 'icp');
+  container.append(section);
 }
 
 function renderIpbImport(container) {
@@ -523,19 +588,7 @@ function renderIpbImport(container) {
   button.addEventListener('click', () => importIpbStudy(select.value, section));
   form.append(select, button);
   section.append(form);
-  if (state.importSummary) {
-    section.append(createElement('p', 'panel-note', describeImport(state.importSummary)));
-    const { counts } = state.importSummary;
-    const stale = [...counts.requirements.stale, ...counts.sirs.stale, ...counts.indicators.stale];
-    if (stale.length) {
-      const list = createElement('ul', 'panel-note stale-list');
-      stale.forEach((text) => list.append(createElement('li', null, text)));
-      section.append(
-        createElement('p', 'panel-note', 'No longer in IPB — delete below if not needed:'),
-        list,
-      );
-    }
-  }
+  appendImportSummary(section, 'ipb');
   container.append(section);
 
   requestJson(`${IPB_API}/studies`)
@@ -556,6 +609,7 @@ export function renderRequirementsPanel() {
   const container = elements.panel;
   container.append(createElement('h2', null, 'Requirements — CCIR / PIR / FFIR / SIR'));
   renderIpbImport(container);
+  renderIcpImport(container);
 
   if (!can('analyst') || !hasCell()) {
     container.append(

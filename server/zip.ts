@@ -1,20 +1,26 @@
 import zlib from 'node:zlib';
 
 /**
- * Minimal ZIP reader: just enough to pull named entries out of the small
- * (tens of KB) single-directory archives ČÚZK ships each DMR4G sheet in
- * (one `.tif`, one `.tfw`, STORE or DEFLATE, no zip64, no encryption). Node
- * has no built-in unzip; this avoids a dependency for two record types.
+ * Minimal ZIP reader: just enough to pull named entries out of small
+ * archives — the DMR4G sheets ČÚZK ships (one `.tif`, one `.tfw`) and
+ * `.xlsx` workbooks (STORE or DEFLATE, no zip64, no encryption). Node has
+ * no built-in unzip; this avoids a dependency for two record types.
  *
  * Reads the central directory (authoritative for sizes/offsets, unlike the
  * local header when the streaming bit is set) then decompresses each entry
  * named there. Throws on anything that isn't a plain, complete local zip.
  */
-export function readZipEntries(buffer) {
+export function readZipEntries(buffer: Buffer): { name: string; data: Buffer }[] {
   const eocd = findEndOfCentralDirectory(buffer);
   const entryCount = buffer.readUInt16LE(eocd + 10);
   let offset = buffer.readUInt32LE(eocd + 16);
-  const entries = [];
+  const entries: {
+    name: string;
+    method: number;
+    compressedSize: number;
+    uncompressedSize: number;
+    localHeaderOffset: number;
+  }[] = [];
   for (let index = 0; index < entryCount; index += 1) {
     if (buffer.readUInt32LE(offset) !== 0x02014b50) {
       throw new Error(`Bad central directory entry at byte ${offset}`);
@@ -38,9 +44,12 @@ export function readZipEntries(buffer) {
     const extraLength = buffer.readUInt16LE(localHeaderOffset + 28);
     const dataStart = localHeaderOffset + 30 + nameLength + extraLength;
     const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
-    let data;
+    let data: Buffer;
     if (method === 0) data = Buffer.from(compressed);
-    else if (method === 8) data = zlib.inflateRawSync(compressed);
+    // Capped at the declared size: an uploaded .xlsx is untrusted, and an
+    // uncapped inflate of a crafted entry could expand to gigabytes.
+    else if (method === 8)
+      data = zlib.inflateRawSync(compressed, { maxOutputLength: Math.max(uncompressedSize, 1) });
     else throw new Error(`${name}: unsupported zip compression method ${method}`);
     if (data.length !== uncompressedSize) {
       throw new Error(
@@ -52,7 +61,7 @@ export function readZipEntries(buffer) {
 }
 
 /** Scans backward for the end-of-central-directory record (with no comment, it's the last 22 bytes). */
-function findEndOfCentralDirectory(buffer) {
+function findEndOfCentralDirectory(buffer: Buffer) {
   const maxBack = Math.min(buffer.length, 65557); // EOCD size plus the largest possible comment
   for (
     let position = buffer.length - 22;

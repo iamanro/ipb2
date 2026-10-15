@@ -3,10 +3,17 @@
 import type { SQLInputValue } from 'node:sqlite';
 
 import type { Access, Owner } from '../../../../server/dispatch.ts';
-import type { Json } from '../../../../server/http.ts';
+import { fieldsOf, HttpError, type Json } from '../../../../server/http.ts';
 import { releasableArray } from '../../../../server/policy.ts';
 import { num, numOrNull, text, type Row } from '../../../../server/state.ts';
-import { planIpbImport } from '../ipbImport.ts';
+import { planIcpImport, readXlsxRows } from '../icpImport.ts';
+import {
+  planIpbImport,
+  type PlannedIndicator,
+  type PlannedNai,
+  type PlannedRequirement,
+  type PlannedSir,
+} from '../ipbImport.ts';
 
 import { database } from './connection.ts';
 import { readNai } from './rows.ts';
@@ -68,6 +75,36 @@ function upsertBySource(
  */
 export function importIpbStudy(owner: Owner, input: Json) {
   const plan = planIpbImport(input);
+  return applyImportPlan(owner, plan, 'ipb:import', plan.studyName);
+}
+
+/**
+ * Import (or refresh) a collection plan workbook (.xlsx, base64 in `data`)
+ * the same way: keyed per owner cell, so two cells importing the same ICP
+ * each get their own rows instead of overwriting each other's.
+ */
+export function importIcp(owner: Owner, input: Json) {
+  const { data, filename } = fieldsOf(input);
+  if (typeof data !== 'string' || !data)
+    throw new HttpError(400, 'data (base64 .xlsx) is required.');
+  const plan = planIcpImport(readXlsxRows(Buffer.from(data, 'base64')), `icp:${owner.owner_cell}:`);
+  return applyImportPlan(
+    owner,
+    plan,
+    'icp:import',
+    typeof filename === 'string' && filename ? filename : 'collection plan',
+  );
+}
+
+type ImportPlan = {
+  prefix: string;
+  nais: PlannedNai[];
+  requirements: PlannedRequirement[];
+  sirs: PlannedSir[];
+  indicators: PlannedIndicator[];
+};
+
+function applyImportPlan(owner: Owner, plan: ImportPlan, action: string, label: string) {
   const tallyOf = () => ({ created: 0, updated: 0, unchanged: 0, stale: [] as string[] });
   const summary: Record<ImportTable, ReturnType<typeof tallyOf>> = {
     requirements: tallyOf(),
@@ -78,7 +115,7 @@ export function importIpbStudy(owner: Owner, input: Json) {
   const tally = (table: ImportTable, outcome: Outcome) => {
     summary[table][outcome] += 1;
   };
-  return mutate('ipb:import', plan.studyName, cellsOf(owner), () => {
+  return mutate(action, label, cellsOf(owner), () => {
     const naiIds = new Map<string, number>();
     for (const nai of plan.nais) {
       const { id, outcome } = upsertBySource(
@@ -101,10 +138,16 @@ export function importIpbStudy(owner: Owner, input: Json) {
       const { id, outcome } = upsertBySource(
         'requirements',
         requirement.source,
-        { text: requirement.text },
+        {
+          text: requirement.text,
+          ...(requirement.priority === undefined ? {} : { priority: requirement.priority }),
+          ...(requirement.decision_point === undefined
+            ? {}
+            : { decision_point: requirement.decision_point }),
+        },
         {
           kind: 'PIR',
-          priority: 0,
+          ...(requirement.priority === undefined ? { priority: 0 } : {}),
           owner_cell: owner.owner_cell,
           releasable_to: JSON.stringify(owner.releasable_to),
         },

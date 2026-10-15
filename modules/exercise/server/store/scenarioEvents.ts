@@ -146,51 +146,69 @@ function validateEventPayload(kind: string, payload: Json | undefined): JsonObje
   return payload;
 }
 
-export function createScenarioEvent(input: Json) {
+/** A create body's columns, validated: everything an inject row needs but
+ * its situation, which create resolves from the body and a package import
+ * from its own situation list. */
+export function planScenarioEvent(input: Json) {
   const {
     trigger_at: triggerAt,
     kind: kindInput,
     payload: payloadInput,
-    situation_id: situationId,
     delivery_mode: deliveryMode,
   } = fieldsOf(input);
   const triggerMs = timestampMs(triggerAt);
   if (Number.isNaN(triggerMs)) throw new HttpError(400, 'trigger_at must be a valid timestamp.');
   const kind = requireEnum(kindInput, 'kind', SCENARIO_EVENT_KINDS);
   const payload = validateEventPayload(kind, payloadInput);
-  const cleanDeliveryMode =
-    deliveryMode !== undefined
-      ? requireEnum(deliveryMode, 'delivery_mode', DELIVERY_MODES)
-      : 'scheduled';
-  const cleanSituationId = resolveSituationId(situationId);
   // The cells a fired inject reaches: both report and message injects are
   // White-owned (the game-master schedules them), released to `release_to`
   // (defaulting to Blue — the usual training audience) on firing. Scheduling
   // itself is White-only knowledge (no `owner_cell` released to anyone),
   // so nobody else sees "something is coming" in the activity log.
   const releaseTo = injectReleaseTo(payload.release_to);
+  return {
+    trigger_at: new Date(triggerMs).toISOString(),
+    kind,
+    payload: JSON.stringify({ ...payload, release_to: releaseTo }),
+    delivery_mode:
+      deliveryMode !== undefined
+        ? requireEnum(deliveryMode, 'delivery_mode', DELIVERY_MODES)
+        : 'scheduled',
+  };
+}
+
+/** Inserts a planned inject as pending; the caller holds the transaction. */
+export function insertScenarioEvent(
+  plan: ReturnType<typeof planScenarioEvent>,
+  situationId: number | null,
+) {
   const timestamp = now();
+  const { lastInsertRowid } = database
+    .prepare(
+      `INSERT INTO scenario_events (trigger_at, kind, payload, state, situation_id, delivery_mode, created_at, updated_at)
+     VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
+    )
+    .run(
+      plan.trigger_at,
+      plan.kind,
+      plan.payload,
+      situationId,
+      plan.delivery_mode,
+      timestamp,
+      timestamp,
+    );
+  return Number(lastInsertRowid);
+}
+
+export function createScenarioEvent(input: Json) {
+  const plan = planScenarioEvent(input);
+  const situationId = resolveSituationId(fieldsOf(input).situation_id);
   return mutate(
     'scenario:schedule',
-    () => kind,
+    () => plan.kind,
     { owner_cell: 'white', releasable_to: [] },
-    () => {
-      const { lastInsertRowid } = database
-        .prepare(
-          `INSERT INTO scenario_events (trigger_at, kind, payload, state, situation_id, delivery_mode, created_at, updated_at)
-         VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
-        )
-        .run(
-          new Date(triggerMs).toISOString(),
-          kind,
-          JSON.stringify({ ...payload, release_to: releaseTo }),
-          cleanSituationId,
-          cleanDeliveryMode,
-          timestamp,
-          timestamp,
-        );
-      return shapeScenarioEvent(existingRow('scenario_events', Number(lastInsertRowid)));
-    },
+    () =>
+      shapeScenarioEvent(existingRow('scenario_events', insertScenarioEvent(plan, situationId))),
   );
 }
 

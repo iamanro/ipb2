@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, expect, test } from 'vitest';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 
 // Same pattern as `server/api.test.js`: `IPB_STATE_ROOT` is read once, at
 // module load, by `stateDirectory` — set before the dynamic import, so this

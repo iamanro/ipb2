@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterEach, expect, test, vi } from 'bun:test';
 
 import {
   closeAllSubscribers,

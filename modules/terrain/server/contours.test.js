@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 import { contourInterval, contourTile } from './contours.ts';
 import { tileXToLon, tileYToLat } from './tiles.ts';
 

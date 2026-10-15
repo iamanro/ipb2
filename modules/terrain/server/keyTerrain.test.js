@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { keyTerrainCandidates } from './keyTerrain.ts';
 import { METRES_PER_DEGREE_LATITUDE, longitudeScale } from './lattice.ts';
