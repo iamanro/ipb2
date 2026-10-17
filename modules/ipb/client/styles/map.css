@@ -83,14 +83,20 @@
       font: 500 var(--t-lg) / 1 var(--body);
     }
 
-    /* -- Map menu: basemap + overlays popover -- */
+    /* -- Map menu: basemap popover + layers popover, side by side -- */
 
-    .map-menu {
+    .map-menu-bar {
       position: absolute;
       z-index: 4;
       top: var(--sheet-gap);
       right: var(--sheet-r);
+      display: flex;
+      gap: 8px;
       transition: right var(--d-slow) var(--ease-out);
+    }
+
+    .map-menu {
+      position: relative;
     }
 
     .map-menu-toggle {
@@ -171,39 +177,6 @@
 
     .overlay-option input {
       accent-color: var(--blue);
-    }
-
-    /* The MGRS grid switch reads as the first overlay row: a box that is
-     * ticked while the grid shows (aria-pressed carries the state). */
-    .grid-switch {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      width: calc(100% - 20px);
-      margin: 0 10px 2px;
-      border: 0;
-      padding: 4px 0;
-      color: var(--ink);
-      background: transparent;
-      font: inherit;
-      text-align: left;
-      cursor: pointer;
-    }
-
-    .grid-switch::before {
-      content: '';
-      width: 13px;
-      height: 13px;
-      border: 1px solid var(--line-dark);
-      border-radius: 2px;
-      background: transparent;
-    }
-
-    .grid-switch[aria-pressed='true']::before {
-      border-color: var(--blue);
-      background: var(--blue)
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6 9.5 3.5' fill='none' stroke='white' stroke-width='1.8'/%3E%3C/svg%3E")
-        center / 11px no-repeat;
     }
 
     .overlay-option.unavailable {
@@ -416,8 +389,6 @@
       flex: 1 1 auto;
       justify-content: center;
       min-width: 0;
-      overflow-x: auto;
-      scrollbar-width: none;
     }
 
     .status-item {

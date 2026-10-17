@@ -23,6 +23,8 @@ test('each IPB step worksheet renders without script errors', async ({ page, req
   for (const step of [1, 2, 3, 4]) {
     await page.goto(`/ipb/?study=${study.id}&step=${step}`);
     await expect(page.locator('#worksheet-study-name')).toHaveText(study.name);
+    // The worksheet shares the left sheet with the steps, one tab away.
+    await page.getByRole('tab', { name: 'Worksheet' }).click();
     const worksheet = page.locator(`#worksheet-${step}`);
     await expect(worksheet).toBeVisible();
     await expect(worksheet.locator('*').first()).toBeAttached();

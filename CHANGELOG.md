@@ -37,6 +37,25 @@
 - The ZIP reader moved from `modules/terrain/tools/zip.mjs` to `server/zip.ts` (now
   also used for `.xlsx`) and caps each entry's inflated size.
 
+## 2026-10-08
+
+### Changed
+
+- IPB: one sheet on the left with **Steps** and **Worksheet** tabs instead of two
+  sheets, so the map gets most of the window.
+- IPB: a **Layers ▾** menu next to **Map ▾** switches the study's own layers (areas,
+  OAKOC, MCOO, viewshed, units, graphics, custom layers) and the map overlays;
+  **Map ▾** keeps only the basemap and symbol size. The MGRS grid starts off.
+- IPB: a **Unit** tool in the status bar places units on any step; units with no
+  COA show on every step.
+- IPB: a saved MCOO, viewshed and line of sight are recomputed when a study opens,
+  so the overlays show again without a re-run.
+- IPB: civil considerations (ASCOPE × PMESII-PT) are a list of filled entries with
+  an add/edit form and a **View matrix** dialog, instead of 48 small text fields.
+- IPB: the study switcher explains what a study is, shows each study's cell, and
+  moves Rename/Delete into the row's **⋯** menu. Overlapping map labels hide
+  instead of printing over each other.
+
 ## 2026-09-29
 
 ### Added

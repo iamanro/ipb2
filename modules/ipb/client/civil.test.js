@@ -4,7 +4,7 @@ import {
   ASCOPE_ROWS,
   PMESII_COLUMNS,
   countFilledCells,
-  countFilledInRow,
+  groupFilledConsiderations,
   indexCivilConsiderations,
 } from './civil.js';
 
@@ -65,10 +65,29 @@ describe('countFilledCells', () => {
   });
 });
 
-describe('countFilledInRow', () => {
-  test('counts only the given ASCOPE row', () => {
-    expect(countFilledInRow(ROWS, 'areas')).toBe(1);
-    expect(countFilledInRow(ROWS, 'people')).toBe(1);
-    expect(countFilledInRow(ROWS, 'structures')).toBe(0);
+describe('groupFilledConsiderations', () => {
+  test('groups filled cells by ASCOPE, in ASCOPE display order, omitting empty groups', () => {
+    const groups = groupFilledConsiderations(ROWS);
+    expect(groups.map((group) => group.ascope)).toEqual(['areas', 'people']);
+    expect(groups[0].label).toBe('Areas');
+    expect(groups[0].entries).toEqual([ROWS[0]]);
+    expect(groups[1].entries).toEqual([ROWS[2]]);
+  });
+
+  test('sorts entries within a group by PMESII-PT column order', () => {
+    const rows = [
+      { ascope: 'areas', pmesii: 'time', text: 'Dry season access only.' },
+      { ascope: 'areas', pmesii: 'military', text: 'Key crossroads.' },
+      { ascope: 'areas', pmesii: 'economic', text: 'Market square.' },
+    ];
+    const [group] = groupFilledConsiderations(rows);
+    expect(group.entries.map((row) => row.pmesii)).toEqual(['military', 'economic', 'time']);
+  });
+
+  test('blank-text rows do not count as filled and empty input yields no groups', () => {
+    expect(groupFilledConsiderations([{ ascope: 'areas', pmesii: 'time', text: '   ' }])).toEqual(
+      [],
+    );
+    expect(groupFilledConsiderations(undefined)).toEqual([]);
   });
 });

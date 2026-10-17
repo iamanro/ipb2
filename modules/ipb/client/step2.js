@@ -10,6 +10,7 @@ import {
   FEATURE_LAYERS,
   OAKOC_LAYERS,
   TERRAIN_API,
+  askConfirm,
   canEditStudy,
   cancelActiveTool,
   createElement,
@@ -18,6 +19,7 @@ import {
   mapController,
   renderFeatureRow,
   renderMapHint,
+  renderRowMenu,
   requestJson,
   showError,
   state,
@@ -62,7 +64,7 @@ function mobilityPalette(legend) {
 }
 
 export function paintMobility() {
-  if (!state.mobility.grid) {
+  if (!state.mobility.grid || !state.layers.mcoo) {
     mapController.clearGrid('mobility');
     return;
   }
@@ -72,8 +74,8 @@ export function paintMobility() {
   });
 }
 
-function paintViewshed() {
-  if (!state.viewshedResult) {
+export function paintViewshed() {
+  if (!state.viewshedResult || !state.layers.viewshed) {
     mapController.clearGrid('viewshed');
     return;
   }
@@ -158,7 +160,13 @@ async function runLineOfSight() {
       method: 'POST',
       body: {
         kind: 'line-of-sight',
-        params: { from, to, observer: state.losForm.observer, target: state.losForm.target },
+        params: {
+          from,
+          to,
+          observer: state.losForm.observer,
+          target: state.losForm.target,
+          bounds: state.study.study.bounds,
+        },
         summary: {
           visible: result.visible,
           distance: result.distance,
@@ -231,7 +239,7 @@ async function runViewshed() {
       method: 'POST',
       body: {
         kind: 'viewshed',
-        params: { observers: posts, ...state.viewshedForm },
+        params: { observers: posts, bounds: state.study.study.bounds, ...state.viewshedForm },
         summary: {
           observers: posts.length,
           cellMetres: grid.cellMetres,
@@ -626,7 +634,7 @@ function renderLosChart(result) {
 }
 
 /** Most recent saved run of a kind, so a reopened study still reports it. */
-function latestAnalysis(kind) {
+export function latestAnalysis(kind) {
   return state.study.analyses.reduce(
     (latest, row) => (row.kind === kind && (!latest || row.id > latest.id) ? row : latest),
     null,
@@ -671,6 +679,25 @@ export function renderStep2Worksheet() {
     mcooSection.append(
       renderMobilityLegend(state.mobility.grid.summary, state.mobility.grid.legend),
     );
+  } else if (state.mobility.restoring) {
+    mcooSection.append(
+      renderMobilityLegend(savedMobility.summary.classes, state.terrainMeta?.legend),
+      createElement('p', 'panel-note', 'Restoring the saved MCOO…'),
+    );
+  } else if (savedMobility && state.mobility.aoiChanged) {
+    mcooSection.append(
+      renderMobilityLegend(savedMobility.summary.classes, state.terrainMeta?.legend),
+      createElement('p', 'panel-note', 'AOI changed since the last run — run MCOO again.'),
+    );
+  } else if (savedMobility && state.mobility.restoreError) {
+    mcooSection.append(
+      renderMobilityLegend(savedMobility.summary.classes, state.terrainMeta?.legend),
+      createElement(
+        'p',
+        'inline-error',
+        `Couldn't restore the saved run: ${state.mobility.restoreError}`,
+      ),
+    );
   } else if (savedMobility) {
     mcooSection.append(
       renderMobilityLegend(savedMobility.summary.classes, state.terrainMeta?.legend),
@@ -690,14 +717,31 @@ export function renderStep2Worksheet() {
   const losSection = createElement('section', 'worksheet-block');
   losSection.append(createElement('h4', null, 'Line of sight'));
   const savedLos = latestAnalysis('line-of-sight');
-  if (!state.losResult && savedLos) {
+  if (!state.losResult && state.losRestoring) {
+    losSection.append(createElement('p', 'panel-note', 'Restoring the saved line of sight…'));
+  } else if (!state.losResult && savedLos && state.losAoiChanged) {
     const summary = savedLos.summary;
     const verdict = summary.visible
       ? `Clear over ${formatMetres(summary.distance)}.`
       : `Blocked at ${formatMetres(summary.blockedAt)} of ${formatMetres(summary.distance)} (worst intrusion ${formatMetres(summary.worstIntrusion)}).`;
     losSection.append(
       createElement('p', `los-verdict ${summary.visible ? 'visible' : 'blocked'}`, verdict),
-      createElement('p', 'panel-note', 'Saved run. Pick two points to plot the profile again.'),
+      createElement('p', 'panel-note', 'AOI changed since the last run — pick two points again.'),
+    );
+  } else if (!state.losResult && savedLos) {
+    const summary = savedLos.summary;
+    const verdict = summary.visible
+      ? `Clear over ${formatMetres(summary.distance)}.`
+      : `Blocked at ${formatMetres(summary.blockedAt)} of ${formatMetres(summary.distance)} (worst intrusion ${formatMetres(summary.worstIntrusion)}).`;
+    losSection.append(
+      createElement('p', `los-verdict ${summary.visible ? 'visible' : 'blocked'}`, verdict),
+      createElement(
+        'p',
+        'panel-note',
+        state.losRestoreError
+          ? `Couldn't restore the saved run: ${state.losRestoreError}`
+          : 'Saved run. Pick two points to plot the profile again.',
+      ),
     );
   } else if (!state.losResult) {
     losSection.append(createElement('p', 'panel-note', 'No line of sight computed yet.'));
@@ -735,10 +779,30 @@ export function renderStep2Worksheet() {
     ]
       .filter(Boolean)
       .join(' · ');
-  if (!state.viewshedResult && savedViewshed) {
+  if (!state.viewshedResult && state.viewshedRestoring) {
     viewshedSection.append(
       createElement('p', null, describeViewshed(savedViewshed.summary)),
-      createElement('p', 'panel-note', 'Saved run. Add observation posts to paint it again.'),
+      createElement('p', 'panel-note', 'Restoring the saved viewshed…'),
+    );
+  } else if (!state.viewshedResult && savedViewshed && state.viewshedAoiChanged) {
+    viewshedSection.append(
+      createElement('p', null, describeViewshed(savedViewshed.summary)),
+      createElement(
+        'p',
+        'panel-note',
+        'AOI changed since the last run — add observation posts again.',
+      ),
+    );
+  } else if (!state.viewshedResult && savedViewshed) {
+    viewshedSection.append(
+      createElement('p', null, describeViewshed(savedViewshed.summary)),
+      createElement(
+        'p',
+        'panel-note',
+        state.viewshedRestoreError
+          ? `Couldn't restore the saved run: ${state.viewshedRestoreError}`
+          : 'Saved run. Add observation posts to paint it again.',
+      ),
     );
   } else if (!state.viewshedResult) {
     viewshedSection.append(createElement('p', 'panel-note', 'No viewshed computed yet.'));
@@ -793,10 +857,157 @@ export function renderStep2Worksheet() {
       createElement,
       requestJson,
       showError,
+      askConfirm,
+      renderRowMenu,
       can: can('analyst') && canEditStudy(),
       study: state.study,
       studyId: state.studyId,
       getStudyId: () => state.studyId,
     }),
   );
+}
+
+/** Whether a saved analysis's AOI bounds still match the study's current
+ * bounds, so recomputing it still makes sense (the user may have redrawn
+ * the AOI since the run was saved). */
+function analysisBoundsMatch(analysis) {
+  const bounds = state.study?.study?.bounds;
+  const saved = analysis?.params?.bounds;
+  // Rows saved before this field existed carry no bounds: assume still valid
+  // rather than wrongly reporting "AOI changed".
+  if (!saved) return true;
+  return (
+    Array.isArray(bounds) &&
+    Array.isArray(saved) &&
+    bounds.length === saved.length &&
+    bounds.every((value, index) => value === saved[index])
+  );
+}
+
+/** Recomputes the saved MCOO, combined viewshed and line-of-sight for a
+ * freshly opened study, so a reload doesn't just show a dead summary row.
+ * Fires in the background: each restore guards itself against the study
+ * having changed again (or AOI having moved) before it resolves, and never
+ * writes a new analyses row — it is only repainting what is already saved. */
+export async function restoreSavedAnalyses(controller) {
+  // One after another: the terrain pool allows two analysis jobs per user,
+  // and parallel restores would make the third one fail.
+  for (const restore of [restoreSavedMobility, restoreSavedViewshed, restoreSavedLineOfSight]) {
+    if (controller.signal.aborted) return;
+    await restore(controller);
+  }
+}
+
+async function restoreSavedMobility(controller) {
+  if (state.mobility.grid) return;
+  const saved = latestAnalysis('mobility');
+  if (!saved) return;
+  if (!analysisBoundsMatch(saved)) {
+    state.mobility.aoiChanged = true;
+    renderStep2Worksheet();
+    return;
+  }
+  state.mobility.restoring = true;
+  renderStep2Worksheet();
+  try {
+    const params = new URLSearchParams({
+      bounds: saved.params.bounds.join(','),
+      cell: String(saved.params.cell),
+    });
+    const grid = await requestJson(`${TERRAIN_API}/mobility?${params}`, {
+      signal: AbortSignal.any([controller.signal, state.session.signal]),
+    });
+    if (controller.signal.aborted) return;
+    state.mobility.cell = saved.params.cell;
+    state.mobility.grid = grid;
+    paintMobility();
+  } catch (error) {
+    if (controller.signal.aborted || error.name === 'AbortError') return;
+    state.mobility.restoreError = error.message;
+  } finally {
+    if (!controller.signal.aborted) {
+      state.mobility.restoring = false;
+      renderStep2Worksheet();
+    }
+  }
+}
+
+async function restoreSavedViewshed(controller) {
+  if (state.viewshedResult) return;
+  const saved = latestAnalysis('viewshed');
+  const posts = saved?.params?.observers;
+  // Older saved rows carry no observer points: nothing to recompute from.
+  if (!Array.isArray(posts) || !posts.length) return;
+  if (!analysisBoundsMatch(saved)) {
+    state.viewshedAoiChanged = true;
+    renderStep2Worksheet();
+    return;
+  }
+  state.viewshedRestoring = true;
+  renderStep2Worksheet();
+  try {
+    const params = new URLSearchParams({
+      at: posts.map(({ lon, lat }) => `${lon},${lat}`).join(';'),
+      radius: String(saved.params.radius),
+      observer: String(saved.params.observer),
+      target: String(saved.params.target),
+      cell: '50',
+    });
+    const grid = await requestJson(`${TERRAIN_API}/viewshed?${params}`, {
+      signal: AbortSignal.any([controller.signal, state.session.signal]),
+    });
+    if (controller.signal.aborted) return;
+    state.viewshedPosts = posts;
+    state.viewshedForm = {
+      radius: saved.params.radius,
+      observer: saved.params.observer,
+      target: saved.params.target,
+    };
+    state.viewshedResult = grid;
+    paintViewshed();
+    syncMapFeatures();
+  } catch (error) {
+    if (controller.signal.aborted || error.name === 'AbortError') return;
+    state.viewshedRestoreError = error.message;
+  } finally {
+    if (!controller.signal.aborted) {
+      state.viewshedRestoring = false;
+      renderStep2Worksheet();
+    }
+  }
+}
+
+async function restoreSavedLineOfSight(controller) {
+  if (state.losResult) return;
+  const saved = latestAnalysis('line-of-sight');
+  if (!saved?.params?.from || !saved?.params?.to) return;
+  if (!analysisBoundsMatch(saved)) {
+    state.losAoiChanged = true;
+    renderStep2Worksheet();
+    return;
+  }
+  state.losRestoring = true;
+  renderStep2Worksheet();
+  try {
+    const { from, to, observer, target } = saved.params;
+    const params = new URLSearchParams({
+      from: `${from.lon},${from.lat}`,
+      to: `${to.lon},${to.lat}`,
+      observer: String(observer),
+      target: String(target),
+    });
+    const result = await requestJson(`${TERRAIN_API}/line-of-sight?${params}`, {
+      signal: AbortSignal.any([controller.signal, state.session.signal]),
+    });
+    if (controller.signal.aborted) return;
+    state.losResult = result;
+  } catch (error) {
+    if (controller.signal.aborted || error.name === 'AbortError') return;
+    state.losRestoreError = error.message;
+  } finally {
+    if (!controller.signal.aborted) {
+      state.losRestoring = false;
+      renderStep2Worksheet();
+    }
+  }
 }

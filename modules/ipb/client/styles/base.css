@@ -6,73 +6,118 @@
   }
 
   [data-module='ipb'] {
-    /* Map-first: the map fills the workspace; tools (left) and worksheet
-     * (right) float over it as sheets the analyst can put away. --sheet-l and
-     * --sheet-r are the map edges left free by the sheets; the map's own
-     * controls follow them. */
+    /* Map-first: the map fills the workspace; one sheet (Steps or Worksheet,
+     * never both) floats over it on the left as a tabbed panel the analyst
+     * can put away. --sheet-l/--sheet-r are the map edges left free by it;
+     * the map's own controls follow them. The right side has no sheet. */
     .workspace {
       --sheet-gap: 12px;
-      --sheet-l: calc(340px + 2 * var(--sheet-gap));
-      --sheet-r: calc(420px + 2 * var(--sheet-gap));
+      --sheet-l: calc(400px + 2 * var(--sheet-gap));
+      --sheet-r: var(--sheet-gap);
       /* Bottom of the map chrome: clear of the status bar and MGRS grid digits. */
       --chrome-b: calc(var(--target) + 2 * var(--sheet-gap));
 
       height: calc(100vh - var(--masthead));
       display: grid;
       grid-template: 'stack' minmax(0, 1fr) / minmax(0, 1fr);
-      /* Put-away sheets slide past the edges. clip, not hidden: a hidden box
+      /* Put-away sheet slides past the edge. clip, not hidden: a hidden box
        * still scrolls when focus or scrollIntoView reaches past its edge. */
       overflow: clip;
     }
 
-    .workspace[data-tools='closed'] {
+    .workspace[data-sheet='none'] {
       --sheet-l: var(--sheet-gap);
-    }
-
-    .workspace[data-worksheet='closed'] {
-      --sheet-r: var(--sheet-gap);
     }
 
     .workspace > * {
       grid-area: stack;
     }
 
-    .control-panel,
-    .detail-panel {
+    .sheet-panel {
       z-index: 5;
+      justify-self: start;
       align-self: start;
+      display: flex;
+      flex-direction: column;
+      width: 400px;
       min-height: 0;
       max-height: calc(100% - 2 * var(--sheet-gap));
       margin: var(--sheet-gap);
-      overflow-y: auto;
       border: 1px solid var(--line);
       background: var(--sheet);
       backdrop-filter: blur(12px) saturate(1.2);
       box-shadow: var(--shadow);
-      scrollbar-color: var(--line-dark) transparent;
-      scrollbar-width: thin;
       transition:
         translate var(--d-slow) var(--ease-out),
         opacity var(--d-slow) var(--ease-out),
         visibility var(--d-slow) allow-discrete;
     }
 
-    .control-panel {
-      justify-self: start;
-      width: 340px;
-      padding: 14px 14px 24px;
-    }
-
-    .workspace[data-tools='closed'] .control-panel {
+    .workspace[data-sheet='none'] .sheet-panel {
       translate: calc(-100% - 2 * var(--sheet-gap)) 0;
       opacity: 0;
       visibility: hidden;
     }
 
-    .workspace[data-worksheet='closed'] .detail-panel {
-      translate: calc(100% + 2 * var(--sheet-gap)) 0;
-      opacity: 0;
-      visibility: hidden;
+    .sheet-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .sheet-tab {
+      min-height: var(--target);
+      border: 0;
+      border-left: 1px solid var(--line-dark);
+      padding: 6px 2px;
+      color: var(--muted);
+      background: transparent;
+      font: 600 var(--t-sm) / 1.1 var(--body);
+      text-align: center;
+      cursor: pointer;
+      transition:
+        background-color var(--d-fast) var(--ease-out),
+        color var(--d-fast) var(--ease-out),
+        box-shadow var(--d-med) var(--ease-out);
+    }
+
+    .sheet-tab:first-child {
+      border-left: 0;
+    }
+
+    .sheet-tab:hover {
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    .sheet-tab[aria-selected='true'] {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: inset 0 -2px 0 var(--signal);
+    }
+
+    .control-panel,
+    .detail-panel {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      scrollbar-color: var(--line-dark) transparent;
+      scrollbar-width: thin;
+    }
+
+    .control-panel {
+      padding: 14px 14px 24px;
+    }
+
+    .workspace[data-sheet='worksheet'] .control-panel,
+    .workspace[data-sheet='none'] .control-panel {
+      display: none;
+    }
+
+    .workspace[data-sheet='tools'] .detail-panel,
+    .workspace[data-sheet='none'] .detail-panel {
+      display: none;
     }
 
     .text-button {
