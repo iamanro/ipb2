@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
-import { openBookmarks } from './bookmarks.js';
+import { openBookmarks } from './bookmarks.ts';
 
 function tempFile() {
   return path.join(

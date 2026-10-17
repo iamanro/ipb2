@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Classroom load test: N simulated users against a running deployment,
  * through Caddy, the way browsers use it. Each user signs in, holds a live
@@ -9,7 +9,7 @@
  * cell live.
  *
  *   IPB_LOADTEST_ADMIN_PASSWORD=... NODE_EXTRA_CA_CERTS=ca.crt \
- *     node deploy/loadtest.mjs --url https://ac.lan [--users 30] [--minutes 5] [--admin admin]
+ *     bun deploy/loadtest.mjs --url https://ac.lan [--users 30] [--minutes 5] [--admin admin]
  *
  * It creates users `load01`..`loadNN` (White/Blue/Red) and their reports,
  * and deletes both at the end. Run it before an exercise, not during one.
@@ -236,6 +236,7 @@ async function simulate(user, deadline, cellSizes) {
   let nextPan = 0;
   let nextReport = Date.now() + jitter(5_000, 30_000);
   let nextViewshed = Date.now() + jitter(10_000, 90_000);
+  // oxlint-disable-next-line eslint/no-unmodified-loop-condition -- set by the SIGINT handler while the loop awaits
   while (Date.now() < deadline && !stopping) {
     const now = Date.now();
     if (now >= nextPan) {

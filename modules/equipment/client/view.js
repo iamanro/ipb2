@@ -2,7 +2,7 @@ import { clientId } from '../../../src/live.js';
 import { handleUnauthorized } from '../../../src/session.js';
 
 import './styles.css';
-import template from './view.html?raw';
+import template from './view.html' with { type: 'text' };
 
 const API = '/api/equipment';
 const PAGE_SIZE = 100;

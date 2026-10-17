@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test } from 'bun:test';
 
 import { lonLatToUtm33, utm33ToLonLat } from './utm33.mjs';
 

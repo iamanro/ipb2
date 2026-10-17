@@ -3,12 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 
-// `IPB_STATE_ROOT` must be set before anything imports `./api.js` (directly
-// or transitively, e.g. via `./modules.js` or `./auth.js`): each of those
+// `IPB_STATE_ROOT` must be set before anything imports `./api.ts` (directly
+// or transitively, e.g. via `./modules.ts` or `./auth.ts`): each of those
 // computes its state directory from the env var once, at module load, the
-// same way `server/state.js`'s `stateDirectory` is documented to work. A
+// same way `server/state.ts`'s `stateDirectory` is documented to work. A
 // dynamic `import()` after setting it — rather than a static import at the
 // top of this file — is what makes that load happen at the right time, so
 // this suite never opens a real `modules/*/state/*.db`.
@@ -21,8 +21,8 @@ let openAuthStore;
 beforeAll(async () => {
   stateRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-api-test-'));
   process.env.IPB_STATE_ROOT = stateRoot;
-  ({ resolveAuthMode, createApiMiddleware, isBlockedStaticPath } = await import('./api.js'));
-  ({ openAuthStore } = await import('./auth.js'));
+  ({ resolveAuthMode, createApiMiddleware, isBlockedStaticPath } = await import('./api.ts'));
+  ({ openAuthStore } = await import('./auth.ts'));
 });
 
 afterAll(() => {
@@ -90,8 +90,8 @@ describe('isBlockedStaticPath (IPB-AUTH-001)', () => {
   test('does not block a benign module/server path with no state or data segment', () => {
     expect(isBlockedStaticPath('/modules/equipment/client/view.js')).toBe(false);
     expect(isBlockedStaticPath('/modules/ipb/server/store.js')).toBe(false);
-    expect(isBlockedStaticPath('/server/http.js')).toBe(false);
-    expect(isBlockedStaticPath('/server/modules.js')).toBe(false);
+    expect(isBlockedStaticPath('/server/http.ts')).toBe(false);
+    expect(isBlockedStaticPath('/server/modules.ts')).toBe(false);
   });
 
   test('does not block ordinary app routes, sources or an /api path with a similar extension', () => {
@@ -118,7 +118,7 @@ function startServer(mode, makeMiddleware = createApiMiddleware) {
     dispatch(request, response, () => {
       // A distinct status from any real response, so a test can tell "our
       // guard blocked this before routing" (404, dispatch's own response)
-      // apart from "this genuinely fell through to Vite's next middleware"
+      // apart from "this genuinely fell through to the static handler"
       // (this stub) — the real static/raw-fs middleware isn't under test
       // here, only whether dispatch hands it a sensitive path at all.
       response.statusCode = 599;
@@ -222,7 +222,7 @@ describe('off mode', () => {
     const blocked = await api.request('/server/state/auth.db');
     expect(blocked.status).toBe(404);
     // Distinguishes "our guard answered" from "genuinely fell through to
-    // Vite's next middleware" (which the test server stubs at 599).
+    // the static handler" (which the test server stubs at 599).
     expect(blocked.status).not.toBe(599);
   });
 
@@ -611,17 +611,17 @@ describe('on mode, with users', () => {
 });
 
 describe('admin bootstrap', () => {
-  // Own state root, re-imported fresh each test: bootstrap only fires when
-  // the store has no users yet, and every other describe in this file
-  // shares one state root that already has users by the time this one runs.
+  // Own state root per test: bootstrap only fires when the store has no
+  // users yet, and every other describe in this file shares one state root
+  // that already has users by the time this one runs. No module reset is
+  // needed: each middleware opens its auth store from IPB_STATE_ROOT lazily.
   let bootstrapRoot;
   let localCreateApiMiddleware;
 
   beforeEach(async () => {
     bootstrapRoot = mkdtempSync(path.join(os.tmpdir(), 'ipb-api-bootstrap-test-'));
     process.env.IPB_STATE_ROOT = bootstrapRoot;
-    vi.resetModules();
-    ({ createApiMiddleware: localCreateApiMiddleware } = await import('./api.js'));
+    ({ createApiMiddleware: localCreateApiMiddleware } = await import('./api.ts'));
   });
 
   afterEach(() => {
@@ -853,7 +853,7 @@ describe('admin user management (C1 admin flag)', () => {
       body: { disabled: true },
     });
     expect(disable.status).toBe(200);
-    // The existing session stops working immediately (server/live.js's
+    // The existing session stops working immediately (server/live.ts's
     // per-request session lookup, not just at the next login).
     const afterDisable = await userApi.request('/api/orbat/orbats');
     expect(afterDisable.status).toBe(401);

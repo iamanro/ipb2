@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { lonLatToUtm } from './geo.js';
 import { buildMgrsGrid, clipPolyline, gridZoneCells, mgrsGridSpacing } from './mgrsGrid.js';

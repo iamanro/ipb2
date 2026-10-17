@@ -2,14 +2,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, expect, test } from 'vitest';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 
-import { createDispatcher } from '../../../server/dispatch.js';
-import { sweepRoutes } from '../../../server/routeSweep.js';
+import { createDispatcher } from '../../../server/dispatch.ts';
+import { sweepRoutes } from '../../../server/routeSweep.ts';
 
 /**
  * The generated guard (docs/adr/0002-item-scoped-requests.md,
- * server/routeSweep.js): every route naming an item, called as a member of
+ * server/routeSweep.ts): every route naming an item, called as a member of
  * another cell, 404s on a hidden item and 403s (except plain reads) on one
  * merely released to it. One Red-owned, one Red-owned-released-to-Blue
  * fixture per item kind, every part kind represented on each.
@@ -83,7 +83,7 @@ beforeAll(async () => {
     path.join(dataRoot, 'exercise', 'regions.json'),
     JSON.stringify({ type: 'FeatureCollection', features: [] }),
   );
-  routes = (await import('./routes.js')).default;
+  routes = (await import('./routes.ts')).default;
   dispatcher = createDispatcher([routes], { publish: () => {} });
 });
 
@@ -135,7 +135,13 @@ test('every route naming an item holds the line: 404 hidden, 403 released-but-no
     period_end: new Date().toISOString(),
   });
 
-  const fixtures = { requirement, report, rfi, track, collector, tasking, intsum };
+  const document = await seedItem('documents', {
+    filename: 'annex.pdf',
+    content_type: 'application/pdf',
+    data: Buffer.from('%PDF-1.4').toString('base64'),
+  });
+
+  const fixtures = { requirement, report, rfi, track, collector, tasking, intsum, document };
   const failures = await sweepRoutes({
     dispatcher,
     moduleId: 'exercise',

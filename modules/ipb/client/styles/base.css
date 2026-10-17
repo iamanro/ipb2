@@ -1,0 +1,151 @@
+/* IPB: Layout: the map-first workspace and its sheets. */
+@layer components {
+  /* The masthead study switcher's wrapper (buildMastheadStatus). */
+  .ipb-masthead-scope {
+    display: contents;
+  }
+
+  [data-module='ipb'] {
+    /* Map-first: the map fills the workspace; one sheet (Steps or Worksheet,
+     * never both) floats over it on the left as a tabbed panel the analyst
+     * can put away. --sheet-l/--sheet-r are the map edges left free by it;
+     * the map's own controls follow them. The right side has no sheet. */
+    .workspace {
+      --sheet-gap: 12px;
+      --sheet-l: calc(400px + 2 * var(--sheet-gap));
+      --sheet-r: var(--sheet-gap);
+      /* Bottom of the map chrome: clear of the status bar and MGRS grid digits. */
+      --chrome-b: calc(var(--target) + 2 * var(--sheet-gap));
+
+      height: calc(100vh - var(--masthead));
+      display: grid;
+      grid-template: 'stack' minmax(0, 1fr) / minmax(0, 1fr);
+      /* Put-away sheet slides past the edge. clip, not hidden: a hidden box
+       * still scrolls when focus or scrollIntoView reaches past its edge. */
+      overflow: clip;
+    }
+
+    .workspace[data-sheet='none'] {
+      --sheet-l: var(--sheet-gap);
+    }
+
+    .workspace > * {
+      grid-area: stack;
+    }
+
+    .sheet-panel {
+      z-index: 5;
+      justify-self: start;
+      align-self: start;
+      display: flex;
+      flex-direction: column;
+      width: 400px;
+      min-height: 0;
+      max-height: calc(100% - 2 * var(--sheet-gap));
+      margin: var(--sheet-gap);
+      border: 1px solid var(--line);
+      background: var(--sheet);
+      backdrop-filter: blur(12px) saturate(1.2);
+      box-shadow: var(--shadow);
+      transition:
+        translate var(--d-slow) var(--ease-out),
+        opacity var(--d-slow) var(--ease-out),
+        visibility var(--d-slow) allow-discrete;
+    }
+
+    .workspace[data-sheet='none'] .sheet-panel {
+      translate: calc(-100% - 2 * var(--sheet-gap)) 0;
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    .sheet-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .sheet-tab {
+      min-height: var(--target);
+      border: 0;
+      border-left: 1px solid var(--line-dark);
+      padding: 6px 2px;
+      color: var(--muted);
+      background: transparent;
+      font: 600 var(--t-sm) / 1.1 var(--body);
+      text-align: center;
+      cursor: pointer;
+      transition:
+        background-color var(--d-fast) var(--ease-out),
+        color var(--d-fast) var(--ease-out),
+        box-shadow var(--d-med) var(--ease-out);
+    }
+
+    .sheet-tab:first-child {
+      border-left: 0;
+    }
+
+    .sheet-tab:hover {
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    .sheet-tab[aria-selected='true'] {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: inset 0 -2px 0 var(--signal);
+    }
+
+    .control-panel,
+    .detail-panel {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      scrollbar-color: var(--line-dark) transparent;
+      scrollbar-width: thin;
+    }
+
+    .control-panel {
+      padding: 14px 14px 24px;
+    }
+
+    .workspace[data-sheet='worksheet'] .control-panel,
+    .workspace[data-sheet='none'] .control-panel {
+      display: none;
+    }
+
+    .workspace[data-sheet='tools'] .detail-panel,
+    .workspace[data-sheet='none'] .detail-panel {
+      display: none;
+    }
+
+    .text-button {
+      flex-shrink: 0;
+      min-height: var(--target);
+      border: 0;
+      padding: 0 2px;
+      color: var(--blue-dark);
+      background: transparent;
+      font: 600 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition: color var(--d-fast) var(--ease-out);
+    }
+
+    .text-button:hover {
+      color: var(--ink);
+    }
+
+    kbd {
+      display: inline-block;
+      margin-left: 4px;
+      border: 1px solid var(--line-dark);
+      border-bottom-width: 2px;
+      padding: 1px 5px 0;
+      color: var(--muted);
+      background: var(--surface);
+      font: 500 var(--t-xs) / 1.3 var(--data);
+      vertical-align: 1px;
+    }
+  }
+}

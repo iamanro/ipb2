@@ -1,8 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 
-import { expect, test } from 'vitest';
+import { expect, test } from 'bun:test';
 
-import { HttpError } from './http.js';
+import { HttpError } from './http.ts';
 import {
   CELLS,
   canEdit,
@@ -14,7 +14,7 @@ import {
   ownerCellForCreate,
   roleAtLeast,
   visibilitySql,
-} from './policy.js';
+} from './policy.ts';
 
 // -- fixtures --------------------------------------------------------------
 
@@ -206,12 +206,9 @@ test('ownerCellForCreate: white may pick any cell, defaults to white', () => {
 
 test('ownerCellForCreate: white requesting an unknown cell is a 400', () => {
   expect(() => ownerCellForCreate(whiteGm, 'purple')).toThrow(HttpError);
-  try {
-    ownerCellForCreate(whiteGm, 'purple');
-    throw new Error('did not throw');
-  } catch (error) {
-    expect(error.status).toBe(400);
-  }
+  expect(() => ownerCellForCreate(whiteGm, 'purple')).toThrow(
+    expect.objectContaining({ status: 400 }),
+  );
 });
 
 test('ownerCellForCreate: a cell member always gets their own cell', () => {
@@ -221,23 +218,17 @@ test('ownerCellForCreate: a cell member always gets their own cell', () => {
 });
 
 test('ownerCellForCreate: a cell member requesting a different cell is a 400', () => {
-  try {
-    ownerCellForCreate(blueAnalyst, 'red');
-    throw new Error('did not throw');
-  } catch (error) {
-    expect(error).toBeInstanceOf(HttpError);
-    expect(error.status).toBe(400);
-  }
+  expect(() => ownerCellForCreate(blueAnalyst, 'red')).toThrow(HttpError);
+  expect(() => ownerCellForCreate(blueAnalyst, 'red')).toThrow(
+    expect.objectContaining({ status: 400 }),
+  );
 });
 
 test('ownerCellForCreate: a user with no cell gets a 403', () => {
-  try {
-    ownerCellForCreate(noCell, undefined);
-    throw new Error('did not throw');
-  } catch (error) {
-    expect(error).toBeInstanceOf(HttpError);
-    expect(error.status).toBe(403);
-  }
+  expect(() => ownerCellForCreate(noCell, undefined)).toThrow(HttpError);
+  expect(() => ownerCellForCreate(noCell, undefined)).toThrow(
+    expect.objectContaining({ status: 403 }),
+  );
 });
 
 // -- canRelease -----------------------------------------------------------
@@ -273,23 +264,15 @@ test('normalizeRelease: drops the owner cell and duplicates, sorts', () => {
 });
 
 test('normalizeRelease: an unknown cell is a 400', () => {
-  try {
-    normalizeRelease(['purple'], 'white');
-    throw new Error('did not throw');
-  } catch (error) {
-    expect(error).toBeInstanceOf(HttpError);
-    expect(error.status).toBe(400);
-  }
+  expect(() => normalizeRelease(['purple'], 'white')).toThrow(HttpError);
+  expect(() => normalizeRelease(['purple'], 'white')).toThrow(
+    expect.objectContaining({ status: 400 }),
+  );
 });
 
 test('normalizeRelease: a non-array is a 400', () => {
-  try {
-    normalizeRelease('blue', 'white');
-    throw new Error('did not throw');
-  } catch (error) {
-    expect(error).toBeInstanceOf(HttpError);
-    expect(error.status).toBe(400);
-  }
+  expect(() => normalizeRelease('blue', 'white')).toThrow(HttpError);
+  expect(() => normalizeRelease('blue', 'white')).toThrow(expect.objectContaining({ status: 400 }));
 });
 
 // -- liveCellsFor -----------------------------------------------------------

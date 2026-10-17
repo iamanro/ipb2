@@ -1,10 +1,10 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Build `modules/exercise/data/regions.json` (GeoJSON, WGS84): the 14 Czech
  * kraje and 77 okresy (Praha counts as an okres too), for composing exercise
  * countries in the Exercise module.
  *
- *   node modules/exercise/tools/build_regions.mjs
+ *   bun modules/exercise/tools/build_regions.mjs
  *
  * Source: the ČÚZK RÚIAN whole-state shapefile (S-JTSK / Krovak East North,
  * EPSG:5514), downloaded once into `data/cache/1.zip` and reused on later
@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 
 import mapshaper from 'mapshaper';
 
-import { dataDirectory } from '../../../server/state.js';
+import { dataDirectory } from '../../../server/state.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MODULE_ROOT = path.join(HERE, '..');

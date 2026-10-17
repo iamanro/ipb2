@@ -48,10 +48,10 @@ IPB_BACKUP_DIR=/srv/ipb-backups   # where backups land
 The same from the shell:
 
 ```bash
-docker compose exec app node server/tools/users.mjs list
-docker compose exec -T app node server/tools/users.mjs add jnovak --password-stdin <<< 'temporary password'
-docker compose exec app node server/tools/users.mjs member jnovak --cell blue --role analyst
-docker compose exec -T app node server/tools/users.mjs passwd jnovak --password-stdin <<< 'new password'
+docker compose exec app bun server/tools/users.mjs list
+docker compose exec -T app bun server/tools/users.mjs add jnovak --password-stdin <<< 'temporary password'
+docker compose exec app bun server/tools/users.mjs member jnovak --cell blue --role analyst
+docker compose exec -T app bun server/tools/users.mjs passwd jnovak --password-stdin <<< 'new password'
 ```
 
 A password or account change made from the shell reaches that user's open browser tabs within 25 s. A change made on the Admin page takes effect immediately.
@@ -117,9 +117,9 @@ WantedBy=timers.target
 
 ```bash
 docker compose stop app
-docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs              # list backups
-docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs <backup>     # dry run: what would change
-docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs <backup> --yes
+docker compose --profile backup run --rm --entrypoint bun backup server/tools/restore.mjs              # list backups
+docker compose --profile backup run --rm --entrypoint bun backup server/tools/restore.mjs <backup>     # dry run: what would change
+docker compose --profile backup run --rm --entrypoint bun backup server/tools/restore.mjs <backup> --yes
 docker compose start app
 ```
 
@@ -146,7 +146,7 @@ With the stack running, from any machine that has Node 22+ and the CA:
 
 ```bash
 IPB_LOADTEST_ADMIN_PASSWORD='<admin password>' NODE_EXTRA_CA_CERTS=ca.crt \
-  node deploy/loadtest.mjs --url https://ac.lan --users 30 --minutes 5
+  bun deploy/loadtest.mjs --url https://ac.lan --users 30 --minutes 5
 ```
 
 It simulates 30 users: live updates, map panning (basemap, satellite and hillshade tiles), list refreshes, a report every 20–45 s per analyst, and a viewshed every 1–2.5 min per analyst. It prints latency per request kind, and removes its users and reports at the end. Run it before an exercise, never during one.

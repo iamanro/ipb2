@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, expect, test } from 'vitest';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 
 // Same pattern as `server/api.test.js`: `IPB_STATE_ROOT` is read once, at
 // module load, by `stateDirectory` — set before the dynamic import, so this
@@ -22,9 +22,9 @@ beforeAll(async () => {
     `ipb-orbat-sweep-test-${process.pid}-${Math.random().toString(36).slice(2)}`,
   );
   process.env.IPB_STATE_ROOT = stateRoot;
-  ({ default: routes } = await import('./routes.js'));
-  ({ createDispatcher } = await import('../../../server/dispatch.js'));
-  ({ sweepRoutes } = await import('../../../server/routeSweep.js'));
+  ({ default: routes } = await import('./routes.ts'));
+  ({ createDispatcher } = await import('../../../server/dispatch.ts'));
+  ({ sweepRoutes } = await import('../../../server/routeSweep.ts'));
   dispatcher = createDispatcher([routes]);
 });
 

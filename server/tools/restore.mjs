@@ -1,11 +1,11 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Restores state databases from a backup made by `backup.mjs`. Run it with
  * the app STOPPED: it refuses while a database looks open (its `-wal`/`-shm`
  * files exist — a running server keeps them; a clean shutdown removes them).
  *
- *   node server/tools/restore.mjs                      # list backups
- *   node server/tools/restore.mjs <backup> [--only auth,ipb,...] [--yes] [--force]
+ *   bun server/tools/restore.mjs                      # list backups
+ *   bun server/tools/restore.mjs <backup> [--only auth,ipb,...] [--yes] [--force]
  *
  * `<backup>` is a folder name under the backup root (`$IPB_BACKUP_ROOT` or
  * `<state root>/../backups`) or a path. Without `--yes` it only prints what
@@ -19,14 +19,14 @@
  * In the compose deployment:
  *
  *   docker compose stop app
- *   docker compose --profile backup run --rm --entrypoint node backup server/tools/restore.mjs <backup> --yes
+ *   docker compose --profile backup run --rm --entrypoint bun backup server/tools/restore.mjs <backup> --yes
  *   docker compose start app
  */
 import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-import { archiveRoot, integrityCheck } from '../dbArchive.js';
-import { STATE_DATABASES } from '../stateDatabases.js';
+import { archiveRoot, integrityCheck } from '../dbArchive.ts';
+import { STATE_DATABASES } from '../stateDatabases.ts';
 
 function flagValue(args, flag) {
   const index = args.indexOf(flag);

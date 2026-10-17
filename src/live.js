@@ -37,10 +37,10 @@ let reconnectTimer = null;
 function connect() {
   if (source || !subscribers.size) return;
   source = new EventSource('/api/live');
-  source.onopen = () => {
+  source.addEventListener('open', () => {
     backoff = MIN_BACKOFF_MS;
-  };
-  source.onmessage = (message) => {
+  });
+  source.addEventListener('message', (message) => {
     let event;
     try {
       event = JSON.parse(message.data);
@@ -51,15 +51,15 @@ function connect() {
     for (const entry of subscribers) {
       if (!entry.filter || entry.filter(event)) entry.handler(event);
     }
-  };
-  source.onerror = () => {
+  });
+  source.addEventListener('error', () => {
     source?.close();
     source = null;
     if (!subscribers.size) return;
     window.clearTimeout(reconnectTimer);
     reconnectTimer = window.setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
-  };
+  });
 }
 
 function disconnectIfIdle() {

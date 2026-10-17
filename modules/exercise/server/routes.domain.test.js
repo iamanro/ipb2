@@ -2,13 +2,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 
-import { createDispatcher, EXERCISE_CONTROL } from '../../../server/dispatch.js';
+import { createDispatcher, EXERCISE_CONTROL } from '../../../server/dispatch.ts';
+import { buildZip } from '../../../server/zipFixture.js';
 
 /**
  * Route-level domain consequences docs/adr/0002-item-scoped-requests.md
- * asks for beyond the generated sweep (server/routeSweep.js, exercised in
+ * asks for beyond the generated sweep (server/routeSweep.ts, exercised in
  * routes.sweep.test.js): evidence links as parts of the requirement they
  * support, withdrawn reports, per-viewer fulfillment, an inject reaching
  * exactly its cells, and White-only RFI answers.
@@ -36,7 +37,7 @@ beforeAll(async () => {
     path.join(dataRoot, 'exercise', 'regions.json'),
     JSON.stringify({ type: 'FeatureCollection', features: [] }),
   );
-  routes = (await import('./routes.js')).default;
+  routes = (await import('./routes.ts')).default;
 });
 
 afterAll(() => {
@@ -315,5 +316,152 @@ describe('RFI answered needs White', () => {
     await expect(call(RED, 'GET', `reports/${answerReport.id}`)).rejects.toMatchObject({
       status: 404,
     });
+  });
+});
+
+describe('scenario package: the authored story as one reusable file', () => {
+  test('export then import appends the situations and their injects as pending', async () => {
+    await call(WHITE, 'PATCH', 'instructor/story', { title: 'Iron Shield', briefing: 'B' });
+    const situation = await call(WHITE, 'POST', 'instructor/situations', { title: 'Crossing' });
+    await call(WHITE, 'POST', 'scenario-events', {
+      trigger_at: '2026-09-28T10:00:00Z',
+      kind: 'message',
+      payload: { text: 'Bridging seen at ODRA', release_to: ['blue'] },
+      situation_id: situation.id,
+    });
+    const exported = await call(WHITE, 'GET', 'instructor/package');
+    expect(exported.situations.at(-1)).toMatchObject({ title: 'Crossing' });
+    expect(exported.situations.at(-1).injects).toHaveLength(1);
+
+    const before = await call(WHITE, 'GET', 'instructor');
+    const result = await call(WHITE, 'POST', 'instructor/package', exported);
+    expect(result.situations).toBe(exported.situations.length);
+    const after = await call(WHITE, 'GET', 'instructor');
+    expect(after.situations).toHaveLength(before.situations.length * 2);
+    const copy = after.situations.at(-1);
+    expect(copy).toMatchObject({ title: 'Crossing', status: 'planned' });
+    expect(after.events.filter((event) => event.situation_id === copy.id)).toMatchObject([
+      { state: 'pending', payload: { text: 'Bridging seen at ODRA', release_to: ['blue'] } },
+    ]);
+  });
+
+  test('a bad inject anywhere rejects the whole package; Blue may not import', async () => {
+    const before = await call(WHITE, 'GET', 'instructor');
+    const bad = {
+      format: 'ipb-scenario-package',
+      situations: [
+        { title: 'ok', injects: [{ trigger_at: 'never', kind: 'message', payload: {} }] },
+      ],
+    };
+    await expect(call(WHITE, 'POST', 'instructor/package', bad)).rejects.toMatchObject({
+      status: 400,
+    });
+    expect((await call(WHITE, 'GET', 'instructor')).situations).toHaveLength(
+      before.situations.length,
+    );
+    await expect(
+      call({ ...BLUE, role: 'game-master' }, 'POST', 'instructor/package', bad),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('documents are released like any item and replaced in place', () => {
+  test('White uploads, releases to Blue, replaces the file; Red never sees it', async () => {
+    const data = (text) => Buffer.from(text).toString('base64');
+    const doc = await call(WHITE, 'POST', 'documents', {
+      filename: 'Annex B.pdf',
+      content_type: 'application/pdf',
+      data: data('%PDF v1'),
+    });
+    expect(doc).toMatchObject({ title: 'Annex B.pdf', version: 1, size: 7 });
+    expect(await call(BLUE, 'GET', 'documents')).toEqual([]);
+    await call(WHITE, 'POST', `documents/${doc.id}/release`, { cells: ['blue'] });
+    expect(await call(BLUE, 'GET', 'documents')).toMatchObject([{ id: doc.id }]);
+    expect(await call(RED, 'GET', 'documents')).toEqual([]);
+
+    const updated = await call(WHITE, 'PATCH', `documents/${doc.id}`, {
+      filename: 'Annex B ed2.pdf',
+      content_type: 'application/pdf',
+      data: data('%PDF version 2'),
+    });
+    expect(updated).toMatchObject({
+      version: 2,
+      filename: 'Annex B ed2.pdf',
+      releasable_to: ['blue'],
+    });
+    await expect(call(BLUE, 'PATCH', `documents/${doc.id}`, { title: 'x' })).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+});
+
+describe('collection plan (ICP .xlsx) import', () => {
+  /** A one-sheet workbook with inline strings: header rows, one PIR, one SIR, two EEIs. */
+  function icpWorkbook(eeiText) {
+    const cell = (ref, value) => `<c r="${ref}" t="inlineStr"><is><t>${value}</t></is></c>`;
+    const row = (n, cells) =>
+      `<row r="${n}">${Object.entries(cells)
+        .map(([column, value]) => cell(`${column}${n}`, value))
+        .join('')}</row>`;
+    const sheet = `<worksheet><sheetData>${[
+      row(6, { J: 'MALE', K: 'GEO' }),
+      row(7, { A: 'No.', B: 'Text' }),
+      row(8, {
+        A: '1.',
+        B: 'PIR 1. Will Donovia attack?',
+        C: '1.1.',
+        D: 'Is the crossing prepared?',
+        E: '1.1.1',
+        F: eeiText,
+        G: 'Bridging; ferries',
+        H: 'JTF NAI 023',
+        J: 'T',
+        K: 'R',
+        L: 'PRIORITY | Decision: DP1; CCIR 1 | LTIOV: NLT H-2',
+      }),
+      row(9, { E: '1.1.2', F: 'Second EEI &amp; more', J: 'C' }),
+      row(10, { A: 'LEGEND AND NOTES' }),
+    ].join('')}</sheetData></worksheet>`;
+    return buildZip(
+      [
+        [
+          'xl/workbook.xml',
+          '<workbook><sheets><sheet name="ICP" sheetId="1" r:id="rId3"/></sheets></workbook>',
+        ],
+        [
+          'xl/_rels/workbook.xml.rels',
+          '<Relationships><Relationship Id="rId3" Type="ws" Target="worksheets/sheet1.xml"/></Relationships>',
+        ],
+        ['xl/worksheets/sheet1.xml', sheet],
+      ].map(([name, text]) => ({ name, data: Buffer.from(text), method: 8 })),
+    ).toString('base64');
+  }
+
+  test('PIR/SIR/EEI rows become a requirement tree; reimport updates in place', async () => {
+    const first = await call(BLUE, 'POST', 'import/icp', { data: icpWorkbook('First wording') });
+    expect(first.requirements.created).toBe(1);
+    expect(first.sirs.created).toBe(1);
+    expect(first.indicators.created).toBe(2);
+    const pir = (await call(BLUE, 'GET', 'requirements')).find((r) =>
+      r.source?.startsWith('icp:blue:'),
+    );
+    expect(pir).toMatchObject({ priority: 1, decision_point: 'DP1' });
+    expect(pir.sirs[0].text).toBe('SIR 1.1 Is the crossing prepared?');
+    expect(pir.sirs[0].indicators.map((i) => i.description)).toEqual([
+      'EEI 1.1.1 — First wording. Indicators: Bridging; ferries. NAI: JTF NAI 023. Collection: tasked MALE; request GEO. Precedence: PRIORITY. LTIOV: NLT H-2',
+      'EEI 1.1.2 — Second EEI & more. Collection: capable MALE',
+    ]);
+
+    const second = await call(BLUE, 'POST', 'import/icp', { data: icpWorkbook('Revised') });
+    expect(second.indicators).toMatchObject({ created: 0, updated: 1, unchanged: 1 });
+    // Red's own import of the same plan is its own rows, not Blue's.
+    const red = await call(RED, 'POST', 'import/icp', { data: icpWorkbook('Revised') });
+    expect(red.requirements.created).toBe(1);
+  });
+
+  test('a file that is not a collection plan is a 400', async () => {
+    await expect(
+      call(BLUE, 'POST', 'import/icp', { data: Buffer.from('nope').toString('base64') }),
+    ).rejects.toMatchObject({ status: 400 });
   });
 });

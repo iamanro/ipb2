@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
 import { withEchelon } from '../../../src/symbols/sidc.js';
 import { ipbEchelonFromSidc } from './threatSymbols.js';

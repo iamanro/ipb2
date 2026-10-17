@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest';
-import { contourInterval, contourTile } from './contours.js';
-import { tileXToLon, tileYToLat } from './tiles.js';
+import { describe, expect, test } from 'bun:test';
+import { contourInterval, contourTile } from './contours.ts';
+import { tileXToLon, tileYToLat } from './tiles.ts';
 
 const Z = 13;
 

@@ -1,0 +1,320 @@
+/**
+ * The exercise lifecycle (C6, docs/phase1-access.md): archive, reset and
+ * restore the current exercise's ipb/exercise/orbat state, and the
+ * current-exercise record itself (name, `/api/auth/members`). `server/api.ts`
+ * instantiates one of these per middleware and routes `/api/auth/exercise*`
+ * and `/api/auth/members*` into it.
+ *
+ * Archiving copies the three module databases (`VACUUM INTO`, via
+ * `server/dbArchive.ts` — the same approach `server/tools/backup.mjs` uses
+ * for its dated backups) plus a `meta.json` (the exercise's name and its
+ * membership roster at archive time) into one dated, slugged folder under
+ * `$IPB_STATE_ROOT/archives` (or `modules/archives` alongside the module
+ * state directories, when that env var is unset). A reset or restore
+ * always archives first, so nothing is ever discarded unrecoverably.
+ */
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+
+import { archiveRoot, integrityCheck } from './dbArchive.ts';
+import type { AuthStore } from './auth.ts';
+import { errorMessage, HttpError, isJsonObject, type Json } from './http.ts';
+import { publish } from './live.ts';
+import { EXERCISE_DATABASES } from './stateDatabases.ts';
+
+const EXERCISE_NAME_MAX_LENGTH = 80;
+
+type ArchivedMember = { name: string; cell: string; role: string };
+/** An archive's `meta.json`, as `performArchive` writes it. */
+type ArchiveMeta = {
+  name: string;
+  archived_at: string | null;
+  note: string | null;
+  members: ArchivedMember[];
+};
+
+/** `meta.json` read back from disk: only the fields with the right types count. */
+function readArchiveMeta(json: Json): ArchiveMeta | null {
+  if (!isJsonObject(json) || typeof json.name !== 'string') return null;
+  const members = Array.isArray(json.members) ? json.members : [];
+  return {
+    name: json.name,
+    archived_at: typeof json.archived_at === 'string' ? json.archived_at : null,
+    note: typeof json.note === 'string' ? json.note : null,
+    members: members.flatMap((member) =>
+      isJsonObject(member) &&
+      typeof member.name === 'string' &&
+      typeof member.cell === 'string' &&
+      typeof member.role === 'string'
+        ? [{ name: member.name, cell: member.cell, role: member.role }]
+        : [],
+    ),
+  };
+}
+
+async function readArchiveMetaFile(dir: string): Promise<ArchiveMeta | null> {
+  const parsed: Json = JSON.parse(await fsp.readFile(path.join(dir, 'meta.json'), 'utf8'));
+  return readArchiveMeta(parsed);
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+function dtgStamp(date: Date) {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+function slugify(name: string) {
+  const slug = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'exercise';
+}
+
+function safeIntegrityCheck(file: string) {
+  try {
+    return integrityCheck(file);
+  } catch (error) {
+    return errorMessage(error);
+  }
+}
+
+async function fileExists(file: string) {
+  try {
+    await fsp.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Yields the event loop for one turn: a reset/restore's several await
+ * points (also real file I/O in between) so a long-running one never
+ * monopolises it, and so a concurrent request genuinely gets a chance to
+ * observe the lock below rather than queueing invisibly behind it. */
+function yieldTick() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function assertExerciseName(name: Json | undefined): asserts name is string {
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > EXERCISE_NAME_MAX_LENGTH) {
+    throw new HttpError(400, `Exercise name must be 1-${EXERCISE_NAME_MAX_LENGTH} characters.`);
+  }
+}
+
+/**
+ * `{ getAuthStore }`: a `server/api.ts`-owned accessor for the (lazily
+ * opened, middleware-lifetime) auth store — not opened here, so archiving,
+ * resetting or restoring shares the exact same connection every other
+ * `/api/auth/*` route uses.
+ */
+export function createExerciseLifecycle({ getAuthStore }: { getAuthStore: () => AuthStore }) {
+  let lockMessage: string | null = null;
+
+  /** Truthy (the in-progress message) while a reset or restore is running;
+   * `server/api.ts`'s `dispatch` 503s every other `/api/*` request while
+   * this holds, so nothing reads or writes a module mid-swap. */
+  function isLocked() {
+    return lockMessage;
+  }
+
+  function acquireLock(message: string) {
+    if (lockMessage) throw new HttpError(503, lockMessage);
+    lockMessage = message;
+  }
+
+  function releaseLock() {
+    lockMessage = null;
+  }
+
+  async function performArchive({ note = null }: { note?: string | null } = {}) {
+    const store = getAuthStore();
+    const exercise = store.getExercise();
+    const members = store
+      .listMembers()
+      .flatMap((member): ArchivedMember[] =>
+        member.cell && member.role
+          ? [{ name: member.name, cell: member.cell, role: member.role }]
+          : [],
+      );
+    const id = `${dtgStamp(new Date())}-${slugify(exercise.name)}`;
+    const dir = path.join(archiveRoot(), id);
+    await fsp.mkdir(dir, { recursive: true });
+    const sizes: Record<string, number> = {};
+    for (const database of EXERCISE_DATABASES) {
+      const size = database.copyInto(dir);
+      if (size !== null) sizes[database.id] = size;
+      await yieldTick();
+    }
+    const archivedAt = now();
+    const meta: ArchiveMeta = { name: exercise.name, archived_at: archivedAt, note, members };
+    await fsp.writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2));
+    return { id, name: exercise.name, archived_at: archivedAt, note, sizes };
+  }
+
+  return {
+    isLocked,
+
+    getExercise() {
+      return getAuthStore().getExercise();
+    },
+
+    setExerciseName(name: Json | undefined) {
+      getAuthStore().setExerciseName(name);
+      return getAuthStore().getExercise();
+    },
+
+    /** `VACUUM INTO` is itself safe against a live writer (a brief read
+     * lock at the WAL checkpoint, never a long one — see
+     * `server/dbArchive.ts`), so an on-demand archive never needs the
+     * reset/restore lock: it never mutates anything this app reads. */
+    async archive({ note }: { note?: string | null } = {}) {
+      return performArchive({ note: note ?? null });
+    },
+
+    async listArchives() {
+      const root = archiveRoot();
+      let entries;
+      try {
+        entries = await fsp.readdir(root, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+      const archives: {
+        id: string;
+        name: string;
+        archived_at: string | null;
+        note: string | null;
+        sizes: Record<string, number>;
+      }[] = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const dir = path.join(root, entry.name);
+        let meta: ArchiveMeta | null;
+        try {
+          meta = await readArchiveMetaFile(dir);
+        } catch {
+          continue; // a malformed/partial archive folder: skip it, don't fail the whole list
+        }
+        if (!meta) continue;
+        const sizes: Record<string, number> = {};
+        for (const db of EXERCISE_DATABASES) {
+          try {
+            sizes[db.id] = (await fsp.stat(path.join(dir, db.file))).size;
+          } catch {
+            // that module had nothing to archive at the time
+          }
+        }
+        archives.push({
+          id: entry.name,
+          name: meta.name,
+          archived_at: meta.archived_at,
+          note: meta.note,
+          sizes,
+        });
+      }
+      // Ids are timestamp-prefixed (`dtgStamp`), so lexical order is
+      // chronological — newest first.
+      archives.sort((a, b) => (a.id < b.id ? 1 : -1));
+      return archives;
+    },
+
+    /** Always archives first, then empties the ipb/exercise/orbat
+     * databases, clears the membership roster, and renames/restarts the
+     * exercise. `confirm` must equal the *current* exercise's name — a
+     * typed confirmation, not just a click, before every membership and
+     * every study/track/ORBAT in the running exercise is gone. */
+    async reset({ name, confirm }: { name: Json | undefined; confirm: Json | undefined }) {
+      assertExerciseName(name);
+      const store = getAuthStore();
+      const current = store.getExercise().name;
+      if (confirm !== current) {
+        throw new HttpError(400, 'Confirmation does not match the current exercise name.');
+      }
+      acquireLock('Exercise is being reset.');
+      try {
+        await yieldTick();
+        const archived = await performArchive({ note: 'auto: before reset' });
+        for (const database of EXERCISE_DATABASES) {
+          database.empty();
+          await yieldTick();
+        }
+        store.clearMemberships();
+        store.resetExercise(name);
+        publish({ module: 'auth', route: 'exercise/reset' });
+        return { ...store.getExercise(), archived };
+      } finally {
+        releaseLock();
+      }
+    },
+
+    /** Archives the current exercise, then swaps `archive`'s ipb/exercise/
+     * orbat files in and reapplies its membership roster — skipping any
+     * member whose account no longer exists (or whose archived role/cell
+     * somehow no longer validates), so a partly-stale roster never blocks
+     * the rest of the restore. */
+    async restore({ archive }: { archive: Json | undefined }) {
+      // Archive ids are generated directory names (timestamp + slug), never paths.
+      if (
+        typeof archive !== 'string' ||
+        !/^[A-Za-z0-9][\w.-]*$/.test(archive) ||
+        archive.includes('..')
+      ) {
+        throw new HttpError(400, 'archive must be an archive id from the archives list.');
+      }
+      // Acquires the lock before the first `await` (matching `reset`), so
+      // a caller that starts a restore and immediately checks `isLocked()`
+      // always observes it, with no window where the operation has begun
+      // but the lock hasn't been set yet.
+      acquireLock('Exercise is being restored.');
+      try {
+        const archiveDir = path.join(archiveRoot(), archive);
+        let meta: ArchiveMeta | null;
+        try {
+          meta = await readArchiveMetaFile(archiveDir);
+        } catch {
+          throw new HttpError(404, `No archive named "${archive}".`);
+        }
+        if (!meta) throw new HttpError(422, `Archive "${archive}" has an unreadable meta.json.`);
+        // Every archived file must be sound before anything is swapped, so a
+        // damaged archive can never leave the exercise half restored.
+        for (const database of EXERCISE_DATABASES) {
+          const archivedFile = path.join(archiveDir, database.file);
+          if (!(await fileExists(archivedFile))) continue;
+          const check = safeIntegrityCheck(archivedFile);
+          if (check !== 'ok')
+            throw new HttpError(
+              422,
+              `Archive "${archive}" is damaged (${database.file}: ${check}).`,
+            );
+        }
+        await yieldTick();
+        await performArchive({ note: 'auto: before restore' });
+        for (const database of EXERCISE_DATABASES) {
+          const archivedFile = path.join(archiveDir, database.file);
+          if (await fileExists(archivedFile)) database.replaceFrom(archivedFile);
+          else database.empty();
+          await yieldTick();
+        }
+        const store = getAuthStore();
+        store.clearMemberships();
+        for (const member of meta.members) {
+          try {
+            store.setMembership(member.name, { cell: member.cell, role: member.role });
+          } catch {
+            // The user no longer exists (or the archived cell/role no
+            // longer validates): C6 says keep only members who still do.
+          }
+        }
+        store.resetExercise(meta.name);
+        publish({ module: 'auth', route: 'exercise/reset' });
+        return store.getExercise();
+      } finally {
+        releaseLock();
+      }
+    },
+  };
+}

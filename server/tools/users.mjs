@@ -1,31 +1,31 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * User and membership administration for `IPB_AUTH=on` (C1/C2/C6). Talks
  * to `auth.js`'s store directly — no server needs to be running.
  *
- *   node server/tools/users.mjs add <name> [--admin] [--password-stdin]
- *   node server/tools/users.mjs list
- *   node server/tools/users.mjs passwd <name> [--password-stdin]
- *   node server/tools/users.mjs member <name> --cell <cell> --role <role>
- *   node server/tools/users.mjs unmember <name>
- *   node server/tools/users.mjs remove <name>
+ *   bun server/tools/users.mjs add <name> [--admin] [--password-stdin]
+ *   bun server/tools/users.mjs list
+ *   bun server/tools/users.mjs passwd <name> [--password-stdin]
+ *   bun server/tools/users.mjs member <name> --cell <cell> --role <role>
+ *   bun server/tools/users.mjs unmember <name>
+ *   bun server/tools/users.mjs remove <name>
  *
  * `--password-stdin` reads the password from stdin's first line (for
  * scripting); otherwise the terminal prompts twice, without echo.
  */
-import { CELLS, ROLES } from '../policy.js';
-import { openAuthStore } from '../auth.js';
+import { CELLS, ROLES } from '../policy.ts';
+import { openAuthStore } from '../auth.ts';
 
 const MEMBERSHIP_ROLES = ROLES.filter((role) => role !== 'admin');
 
 function usage() {
   process.stderr.write(`Usage:
-  node server/tools/users.mjs add <name> [--admin] [--password-stdin]
-  node server/tools/users.mjs list
-  node server/tools/users.mjs passwd <name> [--password-stdin]
-  node server/tools/users.mjs member <name> --cell <cell> --role <role>
-  node server/tools/users.mjs unmember <name>
-  node server/tools/users.mjs remove <name>
+  bun server/tools/users.mjs add <name> [--admin] [--password-stdin]
+  bun server/tools/users.mjs list
+  bun server/tools/users.mjs passwd <name> [--password-stdin]
+  bun server/tools/users.mjs member <name> --cell <cell> --role <role>
+  bun server/tools/users.mjs unmember <name>
+  bun server/tools/users.mjs remove <name>
 
 Cells: ${CELLS.join(', ')}
 Membership roles: ${MEMBERSHIP_ROLES.join(', ')}

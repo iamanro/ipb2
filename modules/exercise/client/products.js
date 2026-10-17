@@ -14,10 +14,44 @@ import { canEditClient, renderCellBadge, renderReleaseControl } from '../../../s
 import { can, currentUser, sessionMode } from '../../../src/session.js';
 
 import { appendOwnerReassign } from './ownerReassign.js';
+import { reportTimeLabel } from './reportTime.js';
 import './staff.css';
 
 const TERRAIN_API = '/api/terrain';
 const CZECHIA_CENTER = [15.47, 49.82];
+/** ~5.5 km N-S: the least ground a graphic INTSUM shows round its tracks. */
+const MIN_EXTENT_DEGREES = 0.05;
+/** Zoom 15 is ~1:18,000 at print size, still readable terrain. */
+const GRAPHIC_MAX_ZOOM = 15;
+/** How long Print preview waits for tiles before giving up rather than printing a blank map. */
+const PRINT_FRAME_TIMEOUT_MS = 15_000;
+
+/** `[w, s, e, n]` grown about its centre to at least `minDegrees` on each axis. */
+export function widenExtent([west, south, east, north], minDegrees) {
+  const halfLon = Math.max(east - west, minDegrees) / 2;
+  const halfLat = Math.max(north - south, minDegrees) / 2;
+  const lon = (west + east) / 2;
+  const lat = (south + north) / 2;
+  return [lon - halfLon, lat - halfLat, lon + halfLon, lat + halfLat];
+}
+
+/** `2.4 m`, `38 m`, `1.2 km`: never rounds a short distance down to `0 m`. */
+export function formatMetres(metres) {
+  if (metres >= 1000) return `${(metres / 1000).toFixed(1)} km`;
+  if (metres >= 10) return `${Math.round(metres)} m`;
+  return `${metres.toFixed(1)} m`;
+}
+
+/** `promise`'s value, or null if it hasn't settled within `ms`. */
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 const INTSUM_SECTIONS = [
   ['situation', 'Situation'],
@@ -72,6 +106,7 @@ export function createProductsController(ctx) {
   /** Print one product: the page's other products are hidden for this print job only. */
   function printProduct(kind) {
     const target = panel;
+    if (!target) return;
     target.dataset.print = kind;
     window.addEventListener('afterprint', () => delete target.dataset.print, { once: true });
     window.print();
@@ -392,12 +427,26 @@ export function createProductsController(ctx) {
 
   // -- Graphic INTSUM -------------------------------------------------------
 
-  function trackExtent() {
-    const points = data.tracks.map((t) => [t.lon, t.lat]);
+  /**
+   * The ground the graphic INTSUM shows: every track and located report,
+   * widened to at least MIN_EXTENT_DEGREES so one track (or a tight cluster)
+   * still shows its terrain context instead of the map's last zoom level.
+   */
+  function situationExtent() {
+    const points = [
+      ...data.tracks.map((t) => [t.lon, t.lat]),
+      ...data.reports.filter((r) => r.lon != null && r.lat != null).map((r) => [r.lon, r.lat]),
+    ];
     if (!points.length) return null;
-    const lons = points.map((p) => p[0]);
-    const lats = points.map((p) => p[1]);
-    return [Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats)];
+    return widenExtent(
+      [
+        Math.min(...points.map((p) => p[0])),
+        Math.min(...points.map((p) => p[1])),
+        Math.max(...points.map((p) => p[0])),
+        Math.max(...points.map((p) => p[1])),
+      ],
+      MIN_EXTENT_DEGREES,
+    );
   }
 
   function ensureMap(target) {
@@ -415,6 +464,35 @@ export function createProductsController(ctx) {
   }
 
   let printMapFigure = null;
+  /** Resolves with the map once the graphic INTSUM has built and framed it. */
+  let graphicMapReady = null;
+
+  /**
+   * Prints the graphic INTSUM only once the map has a settled frame of the
+   * current view (backlog gate 3): printing straight after opening Products
+   * used to snapshot before the map existed and produced a legend-only PDF.
+   */
+  async function printGraphicIntsum(button, status) {
+    button.disabled = true;
+    status.textContent = 'Preparing the map\u2026';
+    try {
+      // One deadline over both waits: in a hidden tab neither the deferred
+      // map build (requestAnimationFrame) nor OL rendering runs at all.
+      const frame = await withTimeout(
+        Promise.resolve(graphicMapReady).then((map) => map?.nextFrame() ?? null),
+        PRINT_FRAME_TIMEOUT_MS,
+      );
+      if (!frame) {
+        status.textContent =
+          'The map did not finish drawing, so nothing was printed. Check the basemap, then try again.';
+        return;
+      }
+      status.textContent = '';
+      printProduct('graphic');
+    } finally {
+      button.disabled = false;
+    }
+  }
 
   /**
    * Snapshots the live map into the print-only figure on `beforeprint`, the
@@ -426,10 +504,23 @@ export function createProductsController(ctx) {
     if (!printMapFigure) return;
     printMapFigure.replaceChildren();
     const frame = mapController?.exportCanvas();
-    if (!frame) return;
+    if (!frame) {
+      // Printed from the browser menu before the map drew: say so on the
+      // page rather than hand out a legend-only "graphic" INTSUM.
+      printMapFigure.append(
+        createElement(
+          'p',
+          'print-map-missing',
+          'MAP NOT RENDERED \u2014 do not use this print. Use "Print preview" in Products.',
+        ),
+      );
+      return;
+    }
     const { canvas, attributions, metresPerPixel } = frame;
     const caption = createElement('figcaption');
-    const scaleNote = metresPerPixel ? `~1 px \u2248 ${Math.round(metresPerPixel)} m` : null;
+    const scaleNote = metresPerPixel
+      ? `scale bar on map \u00b7 1 px \u2248 ${formatMetres(metresPerPixel)}`
+      : null;
     caption.append(
       createElement('strong', null, `Graphic INTSUM — ${classification}`),
       createElement(
@@ -453,8 +544,10 @@ export function createProductsController(ctx) {
     header.append(createElement('h3', null, 'Graphic INTSUM'));
     const printButton = createElement('button', 'chip-button', 'Print preview');
     printButton.type = 'button';
-    printButton.addEventListener('click', () => printProduct('graphic'));
-    header.append(printButton);
+    const printStatus = createElement('span', 'panel-note graphic-intsum-print-status');
+    printStatus.setAttribute('role', 'status');
+    printButton.addEventListener('click', () => printGraphicIntsum(printButton, printStatus));
+    header.append(printButton, printStatus);
     section.append(header);
 
     const classificationField = document.createElement('input');
@@ -476,22 +569,25 @@ export function createProductsController(ctx) {
     container.append(section);
 
     // Deferred: the target must be attached to the DOM before OL measures it.
-    requestAnimationFrame(() => {
-      const map = ensureMap(target);
-      map.setSituation({ tracks: data.tracks, reports: data.reports }, { onSelect: () => {} });
-      map.setFeatures(
-        data.nais.map((nai) => ({
-          id: nai.id,
-          layer: nai.kind,
-          kind: 'polygon',
-          label: nai.label,
-          geometry: nai.geometry,
-          properties: {},
-        })),
-      );
-      const extent = trackExtent();
-      if (extent) map.fitExtent(extent);
-    });
+    graphicMapReady = new Promise((resolve) =>
+      requestAnimationFrame(() => {
+        const map = ensureMap(target);
+        map.setSituation({ tracks: data.tracks, reports: data.reports }, { onSelect: () => {} });
+        map.setFeatures(
+          data.nais.map((nai) => ({
+            id: nai.id,
+            layer: nai.kind,
+            kind: 'polygon',
+            label: nai.label,
+            geometry: nai.geometry,
+            properties: {},
+          })),
+        );
+        const extent = situationExtent();
+        if (extent) map.fitExtent(extent, { maxZoom: GRAPHIC_MAX_ZOOM });
+        resolve(map);
+      }),
+    );
 
     const legend = createElement('div', 'graphic-intsum-legend');
     legend.append(createElement('h4', null, 'Legend'));
@@ -580,7 +676,7 @@ export function createProductsController(ctx) {
         createElement(
           'p',
           'panel-note',
-          `DTG ${formatDtg(new Date(report.occurred_at ?? report.created_at).getTime())} · MGRS ${formatMgrs(report.lon, report.lat)} · Admiralty ${report.reliability}${report.credibility}`,
+          `DTG ${reportTimeLabel(report)} · MGRS ${formatMgrs(report.lon, report.lat)} · Admiralty ${report.reliability}${report.credibility}`,
         ),
       );
       const dl = document.createElement('dl');

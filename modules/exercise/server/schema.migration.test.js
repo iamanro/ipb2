@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'bun:test';
 
-import { openState } from '../../../server/state.js';
-import { MIGRATIONS } from './schema.js';
+import { openState } from '../../../server/state.ts';
+import { MIGRATIONS } from './schema.ts';
 
 const REAL_DB = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,8 +34,9 @@ describe('revision migration', () => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), 'exercise-revision-migration-'));
     const file = path.join(tmpDir, 'exercise.db');
     const now = new Date().toISOString();
-    let database = openState(file, MIGRATIONS.slice(0, -1));
-    expect(database.prepare('PRAGMA user_version').get().user_version).toBe(MIGRATIONS.length - 1);
+    // Everything before the revision migration (later ones run on top of it too).
+    let database = openState(file, MIGRATIONS.slice(0, -2));
+    expect(database.prepare('PRAGMA user_version').get().user_version).toBe(MIGRATIONS.length - 2);
     database.exec(`
       INSERT INTO story (id, title, briefing, objectives, instructor_notes, updated_at)
         VALUES (1, 'Story exists', '', '', '', '${now}');
@@ -117,10 +118,10 @@ describe.skipIf(!existsSync(REAL_DB))(
 
 describe('evidence_links rebuild: orphan handling, re-parenting, and the dropped report_id cascade', () => {
   function seedPreMigrationDatabase(file) {
-    // Every migration except the last four (evidence_links rebuild,
-    // indicators.requirement_id, instructor authoring, and optimistic revisions),
-    // so this seeds pre-migration shape.
-    const database = openState(file, MIGRATIONS.slice(0, MIGRATIONS.length - 4));
+    // Every migration except the last five (evidence_links rebuild,
+    // indicators.requirement_id, instructor authoring, optimistic revisions
+    // and documents), so this seeds pre-migration shape.
+    const database = openState(file, MIGRATIONS.slice(0, MIGRATIONS.length - 5));
     const now = new Date().toISOString();
     database.exec(`
       INSERT INTO requirements (id, kind, text, priority, owner_cell, releasable_to, created_at, updated_at)

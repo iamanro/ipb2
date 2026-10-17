@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist.next/
 modules/*/data/
 modules/*/state/
 server/state/
