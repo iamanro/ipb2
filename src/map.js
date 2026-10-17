@@ -622,6 +622,26 @@ function buildRangeRingStyle(feature, properties, darkBase) {
   return styles;
 }
 
+/** `styles` with any text dropped — for the shape layer, which never declutters
+ * so polygons/lines/icons always render; their labels move to a separate
+ * decluttered layer (see `onlyText`) instead of overlapping each other. */
+function stripText(styles) {
+  return styles.map((style) => {
+    if (!style.getText()) return style;
+    const clone = style.clone();
+    clone.setText(null);
+    return clone;
+  });
+}
+
+/** Just the text component of `styles`, each wrapped in its own `Style` with
+ * the same geometry — for the decluttered label layer. */
+function onlyText(styles) {
+  return styles
+    .filter((style) => style.getText())
+    .map((style) => new Style({ geometry: style.getGeometry(), text: style.getText() }));
+}
+
 function buildFeatureStyle(feature, symbols, darkBase) {
   const layerName = feature.get('layer');
   const kind = feature.get('kind');
@@ -1321,9 +1341,18 @@ export function createMap(options) {
       if (geometry && selectedId !== null && feature.getId() === selectedId) {
         styles.push(buildSelectionHalo(geometry));
       }
-      styles.push(...buildFeatureStyle(feature, symbols, darkBase));
+      styles.push(...stripText(buildFeatureStyle(feature, symbols, darkBase)));
       return styles;
     },
+  });
+
+  // Same source, text only: declutters AO/AOI/minefield/unit/point labels
+  // against each other without ever hiding the shapes/icons above, which
+  // featureLayer always draws regardless of overlap.
+  const featureLabelLayer = new VectorLayer({
+    source: featureSource,
+    declutter: true,
+    style: (feature) => onlyText(buildFeatureStyle(feature, symbols, darkBase)),
   });
 
   // The current situation (setSituation): tracks, their history, and reports —
@@ -1449,6 +1478,7 @@ export function createMap(options) {
       mgrsLayer,
       windLayer,
       featureLayer,
+      featureLabelLayer,
       situationLayer,
       countryEditLayer,
     ],
@@ -2028,6 +2058,7 @@ export function createMap(options) {
     contourLayer.changed();
     windLayer.changed();
     featureLayer.changed();
+    featureLabelLayer.changed();
     if (cloudSpec) applyClouds(cloudSpec);
     if (mgrsLayer.getVisible()) renderMgrsGrid();
   }

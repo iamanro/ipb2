@@ -1,9 +1,13 @@
 /**
- * Civil considerations worksheet (step 2): an ASCOPE (rows) × PMESII-PT
- * (columns) matrix. Each cell is a textarea that autosaves as one upserted
- * `civil_considerations` row (`POST studies/:id/civil-considerations
- * {ascope, pmesii, text}`). Indexing/counting helpers are pure and exported
- * for tests; `renderCivilConsiderationsMatrix` builds the on-screen/print DOM.
+ * Civil considerations worksheet (step 2): an ASCOPE × PMESII-PT grid of 48
+ * cells, each an upserted `civil_considerations` row (`POST
+ * studies/:id/civil-considerations {ascope, pmesii, text}`, `DELETE
+ * studies/:id/civil-considerations/:id` to clear a cell). Rather than 48
+ * always-visible textareas, the worksheet shows only the filled cells as an
+ * entry list grouped by ASCOPE, plus an add/edit form; a "View matrix"
+ * dialog shows the full 6×8 grid read-only for a quick scan and as a way to
+ * jump into editing any pair. Indexing/counting/grouping helpers are pure
+ * and exported for tests; `renderCivilConsiderationsMatrix` builds the DOM.
  */
 import './tools.css';
 
@@ -41,31 +45,57 @@ export function countFilledCells(rows) {
   return (rows ?? []).filter((row) => row.text && row.text.trim()).length;
 }
 
-/** Count of non-blank cells in one ASCOPE row, for the print collapse rule. */
-export function countFilledInRow(rows, ascope) {
-  return (rows ?? []).filter((row) => row.ascope === ascope && row.text && row.text.trim()).length;
+/**
+ * Filled rows grouped by ASCOPE in display order, each group's entries in
+ * PMESII-PT column order — the shape the entry list renders. ASCOPE groups
+ * with no filled cells are omitted entirely; the worksheet shows one empty
+ * state instead when every group comes back empty.
+ */
+export function groupFilledConsiderations(rows) {
+  const pmesiiOrder = new Map(PMESII_COLUMNS.map((column, index) => [column.id, index]));
+  const filled = (rows ?? []).filter((row) => row.text && row.text.trim());
+  return ASCOPE_ROWS.map((ascope) => ({
+    ascope: ascope.id,
+    label: ascope.label,
+    entries: filled
+      .filter((row) => row.ascope === ascope.id)
+      .sort((a, b) => pmesiiOrder.get(a.pmesii) - pmesiiOrder.get(b.pmesii)),
+  })).filter((group) => group.entries.length > 0);
+}
+
+function pmesiiLabel(id) {
+  return PMESII_COLUMNS.find((column) => column.id === id)?.label ?? id;
+}
+
+function ascopeLabel(id) {
+  return ASCOPE_ROWS.find((row) => row.id === id)?.label ?? id;
 }
 
 /**
- * The worksheet block: a heading with the filled-cell count, then the
- * matrix table. `study` is `state.study` (the aggregate payload) — cells are
- * pushed into `study.civil_considerations` in place on save, matching the
- * view's own autosave convention, so the caller never has to re-fetch.
- * `can` gates editing (observers get read-only textareas).
+ * The worksheet block: a heading with the filled-cell count, the entry
+ * list, an add/edit form, and a "View matrix" button that opens the full
+ * grid in a dialog. `study` is `state.study` (the aggregate payload) —
+ * cells are pushed into/removed from `study.civil_considerations` in place
+ * on save/delete, matching the view's own autosave convention, so the
+ * caller never has to re-fetch. `can` gates editing (observers get a
+ * read-only list with no add form or row menus).
  */
 export function renderCivilConsiderationsMatrix({
   createElement,
   requestJson,
   showError,
+  askConfirm,
+  renderRowMenu,
   can,
   study,
   studyId,
   getStudyId,
 }) {
   const rows = study.civil_considerations;
+  const total = ASCOPE_ROWS.length * PMESII_COLUMNS.length;
+
   const block = createElement('section', 'worksheet-block civil-matrix-block');
   block.append(createElement('h4', null, 'Civil considerations (ASCOPE × PMESII-PT)'));
-  const total = ASCOPE_ROWS.length * PMESII_COLUMNS.length;
   const countNote = createElement(
     'p',
     'panel-note',
@@ -73,8 +103,189 @@ export function renderCivilConsiderationsMatrix({
   );
   block.append(countNote);
 
-  const timers = new Map();
-  const wrap = createElement('div', 'civil-matrix-wrap');
+  const actions = createElement('div', 'civil-matrix-actions');
+  const viewMatrixButton = createElement('button', 'text-button', 'View matrix');
+  viewMatrixButton.type = 'button';
+  actions.append(viewMatrixButton);
+  block.append(actions);
+
+  const listWrap = createElement('div', 'civil-groups');
+  block.append(listWrap);
+
+  function cellFor(ascope, pmesii) {
+    return rows.find((row) => row.ascope === ascope && row.pmesii === pmesii);
+  }
+
+  function renderList() {
+    listWrap.replaceChildren();
+    const groups = groupFilledConsiderations(rows);
+    if (!groups.length) {
+      listWrap.append(
+        createElement(
+          'p',
+          'panel-note',
+          'ASCOPE (areas, structures, capabilities, organizations, people, events) crossed ' +
+            'with PMESII-PT (political, military, economic, social, information, infrastructure, ' +
+            'physical environment, time). Add the first consideration below.',
+        ),
+      );
+      return;
+    }
+    groups.forEach((group) => {
+      const groupEl = createElement('div', 'field-group civil-group');
+      groupEl.append(createElement('h5', null, `${group.label} (${group.entries.length})`));
+      const list = createElement('ul', 'civil-considerations-list');
+      group.entries.forEach((row) => list.append(renderEntryRow(row)));
+      groupEl.append(list);
+      listWrap.append(groupEl);
+    });
+  }
+
+  function renderEntryRow(row) {
+    const li = createElement('li', 'civil-row');
+    const text = createElement('div', 'civil-row-text');
+    text.append(createElement('span', 'civil-row-tag', pmesiiLabel(row.pmesii)));
+    text.append(createElement('p', 'civil-row-body', row.text));
+    li.append(text);
+    if (can && renderRowMenu) {
+      const menu = renderRowMenu([
+        { label: 'Edit', action: () => startEdit(row.ascope, row.pmesii) },
+        { label: 'Delete', action: () => deleteRow(row) },
+      ]);
+      if (menu) li.append(menu);
+    }
+    return li;
+  }
+
+  // -- Add/edit form --------------------------------------------------------
+
+  const formGroup = createElement('div', 'field-group civil-add-form');
+  formGroup.append(createElement('h5', null, 'Add consideration'));
+
+  const ascopeLabelEl = createElement('label', 'civil-field');
+  ascopeLabelEl.append(createElement('span', null, 'ASCOPE'));
+  const ascopeSelect = document.createElement('select');
+  ASCOPE_ROWS.forEach((row) => ascopeSelect.append(new Option(row.label, row.id)));
+  ascopeLabelEl.append(ascopeSelect);
+
+  const pmesiiLabelEl = createElement('label', 'civil-field');
+  pmesiiLabelEl.append(createElement('span', null, 'PMESII-PT'));
+  const pmesiiSelect = document.createElement('select');
+  PMESII_COLUMNS.forEach((column) => pmesiiSelect.append(new Option(column.label, column.id)));
+  pmesiiLabelEl.append(pmesiiSelect);
+
+  const selectRow = createElement('div', 'civil-field-row');
+  selectRow.append(ascopeLabelEl, pmesiiLabelEl);
+  formGroup.append(selectRow);
+
+  const replaceNote = createElement('p', 'panel-note civil-replace-note');
+  replaceNote.hidden = true;
+  formGroup.append(replaceNote);
+
+  const textLabelEl = createElement('label', 'civil-field');
+  textLabelEl.append(createElement('span', null, 'Text'));
+  const textarea = document.createElement('textarea');
+  textarea.rows = 4;
+  textarea.disabled = !can;
+  textLabelEl.append(textarea);
+  formGroup.append(textLabelEl);
+
+  const saveButton = createElement('button', 'primary-button', 'Save');
+  saveButton.type = 'button';
+  saveButton.disabled = !can;
+  formGroup.append(saveButton);
+
+  if (!can) {
+    ascopeSelect.disabled = true;
+    pmesiiSelect.disabled = true;
+  }
+
+  function syncFormToSelection() {
+    const existing = cellFor(ascopeSelect.value, pmesiiSelect.value);
+    textarea.value = existing?.text ?? '';
+    if (existing?.text && existing.text.trim()) {
+      replaceNote.hidden = false;
+      replaceNote.textContent =
+        `Editing the saved ${ascopeLabel(ascopeSelect.value)} × ` +
+        `${pmesiiLabel(pmesiiSelect.value)} entry; Save replaces it.`;
+    } else {
+      replaceNote.hidden = true;
+    }
+  }
+  ascopeSelect.addEventListener('change', syncFormToSelection);
+  pmesiiSelect.addEventListener('change', syncFormToSelection);
+  syncFormToSelection();
+
+  function startEdit(ascope, pmesii) {
+    ascopeSelect.value = ascope;
+    pmesiiSelect.value = pmesii;
+    syncFormToSelection();
+    textarea.focus();
+  }
+
+  saveButton.addEventListener('click', async () => {
+    const ascope = ascopeSelect.value;
+    const pmesii = pmesiiSelect.value;
+    const text = textarea.value;
+    try {
+      const saved = await requestJson(`${API}/studies/${studyId}/civil-considerations`, {
+        method: 'POST',
+        body: { ascope, pmesii, text },
+      });
+      if (getStudyId && getStudyId() !== studyId) return;
+      const existingIndex = rows.findIndex((row) => row.ascope === ascope && row.pmesii === pmesii);
+      if (existingIndex === -1) rows.push(saved);
+      else rows[existingIndex] = saved;
+      countNote.textContent = `${countFilledCells(rows)} of ${total} cells filled.`;
+      renderList();
+      syncFormToSelection();
+      refreshMatrixDialog();
+    } catch (error) {
+      if (error.name !== 'AbortError') showError(block, error.message);
+    }
+  });
+
+  async function deleteRow(row) {
+    if (
+      askConfirm &&
+      !(await askConfirm(
+        `Delete this ${ascopeLabel(row.ascope)} × ${pmesiiLabel(row.pmesii)} entry?`,
+      ))
+    ) {
+      return;
+    }
+    try {
+      await requestJson(`${API}/studies/${studyId}/civil-considerations/${row.id}`, {
+        method: 'DELETE',
+      });
+      if (getStudyId && getStudyId() !== studyId) return;
+      const index = rows.findIndex((entry) => entry.id === row.id);
+      if (index !== -1) rows.splice(index, 1);
+      countNote.textContent = `${countFilledCells(rows)} of ${total} cells filled.`;
+      renderList();
+      syncFormToSelection();
+      refreshMatrixDialog();
+    } catch (error) {
+      if (error.name !== 'AbortError') showError(block, error.message);
+    }
+  }
+
+  if (can) block.append(formGroup);
+  renderList();
+
+  // -- "View matrix" dialog --------------------------------------------------
+
+  const dialog = document.createElement('dialog');
+  dialog.className = 'civil-matrix-dialog';
+  const dialogHeader = createElement('div', 'civil-matrix-dialog-header');
+  dialogHeader.append(createElement('h3', null, 'ASCOPE × PMESII-PT matrix'));
+  const closeButton = createElement('button', 'icon-button', '✕');
+  closeButton.type = 'button';
+  closeButton.setAttribute('aria-label', 'Close');
+  closeButton.addEventListener('click', () => dialog.close());
+  dialogHeader.append(closeButton);
+  dialog.append(dialogHeader);
+
   const table = document.createElement('table');
   table.className = 'data-table civil-matrix';
   const head = document.createElement('thead');
@@ -83,56 +294,40 @@ export function renderCivilConsiderationsMatrix({
   PMESII_COLUMNS.forEach((column) => headRow.append(createElement('th', null, column.label)));
   head.append(headRow);
   const body = document.createElement('tbody');
-
-  for (const ascope of ASCOPE_ROWS) {
-    const tr = document.createElement('tr');
-    tr.dataset.filled = String(countFilledInRow(rows, ascope.id));
-    tr.append(createElement('th', 'civil-matrix-row-label', ascope.label));
-    for (const pmesii of PMESII_COLUMNS) {
-      const td = document.createElement('td');
-      const cellRow = rows.find((row) => row.ascope === ascope.id && row.pmesii === pmesii.id);
-      const textarea = document.createElement('textarea');
-      textarea.rows = 3;
-      textarea.value = cellRow?.text ?? '';
-      textarea.disabled = !can;
-      textarea.setAttribute('aria-label', `${ascope.label} × ${pmesii.label}`);
-      // Print hides the textarea (an input control makes no sense on paper)
-      // and shows this plain-text copy instead, the same convention as the
-      // step 1 notes field's `.print-copy`.
-      const printCopy = createElement('div', 'print-copy', textarea.value);
-      const key = `${ascope.id}|${pmesii.id}`;
-      textarea.addEventListener('input', () => {
-        printCopy.textContent = textarea.value;
-        window.clearTimeout(timers.get(key));
-        timers.set(
-          key,
-          window.setTimeout(async () => {
-            try {
-              const saved = await requestJson(`${API}/studies/${studyId}/civil-considerations`, {
-                method: 'POST',
-                body: { ascope: ascope.id, pmesii: pmesii.id, text: textarea.value },
-              });
-              if (getStudyId && getStudyId() !== studyId) return;
-              const existingIndex = rows.findIndex(
-                (row) => row.ascope === ascope.id && row.pmesii === pmesii.id,
-              );
-              if (existingIndex === -1) rows.push(saved);
-              else rows[existingIndex] = saved;
-              countNote.textContent = `${countFilledCells(rows)} of ${total} cells filled.`;
-              tr.dataset.filled = String(countFilledInRow(rows, ascope.id));
-            } catch (error) {
-              if (error.name !== 'AbortError') showError(block, error.message);
-            }
-          }, 180),
-        );
-      });
-      td.append(textarea, printCopy);
-      tr.append(td);
-    }
-    body.append(tr);
-  }
   table.append(head, body);
-  wrap.append(table);
-  block.append(wrap);
+  dialog.append(table);
+  block.append(dialog);
+
+  function refreshMatrixDialog() {
+    body.replaceChildren();
+    for (const ascope of ASCOPE_ROWS) {
+      const tr = document.createElement('tr');
+      tr.append(createElement('th', 'civil-matrix-row-label', ascope.label));
+      for (const pmesii of PMESII_COLUMNS) {
+        const td = document.createElement('td');
+        const cellRow = cellFor(ascope.id, pmesii.id);
+        const text = cellRow?.text?.trim() ? cellRow.text : '';
+        const cellButton = createElement('button', 'civil-matrix-cell');
+        cellButton.append(createElement('span', 'civil-matrix-cell-text', text || '—'));
+        cellButton.type = 'button';
+        cellButton.setAttribute(
+          'aria-label',
+          `${ascope.label} × ${pmesii.label}: ${text || 'empty'}`,
+        );
+        if (cellRow?.text?.trim()) cellButton.title = cellRow.text;
+        cellButton.addEventListener('click', () => {
+          dialog.close();
+          startEdit(ascope.id, pmesii.id);
+        });
+        td.append(cellButton);
+        tr.append(td);
+      }
+      body.append(tr);
+    }
+  }
+  refreshMatrixDialog();
+
+  viewMatrixButton.addEventListener('click', () => dialog.showModal());
+
   return block;
 }

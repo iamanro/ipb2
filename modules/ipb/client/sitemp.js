@@ -31,6 +31,7 @@ import {
   API,
   armFeatureModify,
   cancelActiveTool,
+  cancelOtherTools,
   canEditStudy,
   createElement,
   deleteFeature,
@@ -83,8 +84,11 @@ function unitFeatures() {
   return state.study?.features.filter((feature) => feature.layer === 'unit') ?? [];
 }
 
-/** The COA new units go on: the selected COA, unless "every COA" is chosen or none is selected. */
+/** The COA new units go on: outside step 4 (where there's no COA concept to
+ * place against) units always go on every COA; on step 4, the selected COA
+ * unless "every COA" is chosen or none is selected. */
 function placementCoaId() {
+  if (state.step !== 4) return null;
   return state.unitsOnEveryCoa ? null : (state.selectedCoaId ?? null);
 }
 
@@ -128,7 +132,7 @@ function threatTemplate(threat) {
 /** Arms placement of `template` (`{ label, properties }`): each map click places one. */
 function armPlacement(template, name) {
   if (!canEdit()) return;
-  cancelActiveTool();
+  cancelOtherTools();
   state.tool = { type: 'place-unit', template, name, count: 0 };
   renderMapHint(`Click the map to place ${name} on ${placementTarget()}. Press Escape when done.`);
   renderToolPanel();
@@ -205,7 +209,7 @@ async function startOrbatPlacement() {
   if (!canEdit()) return;
   const choice = await openOrbatPlaceDialog({ root: elements.moduleRoot, requestJson });
   if (!choice) return;
-  cancelActiveTool();
+  cancelOtherTools();
   const queue = choice.units.map((unit) => ({
     unit,
     ...orbatUnitProperties(unit, { orbatId: choice.orbatId, affiliation: choice.affiliation }),
@@ -489,8 +493,56 @@ function renderCoaChoice(container) {
   container.append(label);
 }
 
-/** The tools-panel block: threats to place (click or drag), a custom symbol
- * of any affiliation, a whole ORBAT, and the "show all COAs" toggle. */
+/** Threat chips (click or drag), a custom symbol of any affiliation, a
+ * whole ORBAT, and the current placement's status — shared by the step
+ * 4.2 worksheet block and the map toolbar's Unit panel. */
+function renderPlacementControls(container, { threats, editable }) {
+  const tool = state.tool;
+  if (tool?.type === 'place-orbat') {
+    renderOrbatQueue(container, tool);
+    return;
+  }
+  renderThreatChips(container, threats, editable);
+  if (editable) {
+    container.append(
+      createElement(
+        'p',
+        'tool-hint',
+        'Click a threat, then the map (each click places one); or drag it onto the map.',
+      ),
+    );
+    const custom = createElement('div', 'inline-form');
+    const affiliation = document.createElement('select');
+    affiliation.className = 'text-input';
+    affiliation.setAttribute('aria-label', 'Affiliation of the custom symbol');
+    for (const [value, text] of CUSTOM_AFFILIATIONS) affiliation.append(new Option(text, value));
+    affiliation.value = state.customAffiliation ?? 'hostile';
+    affiliation.addEventListener('change', () => {
+      state.customAffiliation = affiliation.value;
+    });
+    const customButton = createElement('button', 'chip-button', 'Custom symbol…');
+    customButton.type = 'button';
+    customButton.addEventListener('click', () => armPlaceCustom(affiliation.value));
+    const orbatButton = createElement('button', 'chip-button', 'Place ORBAT…');
+    orbatButton.type = 'button';
+    orbatButton.addEventListener('click', startOrbatPlacement);
+    custom.append(affiliation, customButton);
+    container.append(custom, orbatButton);
+  }
+  if (tool?.type === 'place-unit') {
+    const placing = createElement('div', 'unit-placing');
+    placing.setAttribute('role', 'status');
+    placing.append(createElement('span', 'tool-hint', `Placing ${tool.name}.`));
+    const done = createElement('button', 'chip-button', 'Done');
+    done.type = 'button';
+    done.addEventListener('click', () => cancelActiveTool());
+    placing.append(done);
+    container.append(placing);
+  }
+}
+
+/** The step 4.2 worksheet block: `renderPlacementControls` plus the COA
+ * choice and the "show all COAs" map toggle. */
 export function renderSitempTools({ threats, canEdit: editable }) {
   const container = createElement('div', 'field-group');
   container.append(createElement('h3', null, 'Units (SITEMP)'));
@@ -508,48 +560,7 @@ export function renderSitempTools({ threats, canEdit: editable }) {
     }
   }
 
-  const tool = state.tool;
-  if (tool?.type === 'place-orbat') {
-    renderOrbatQueue(container, tool);
-  } else {
-    renderThreatChips(container, threats, editable);
-    if (editable) {
-      container.append(
-        createElement(
-          'p',
-          'tool-hint',
-          'Click a threat, then the map (each click places one); or drag it onto the map.',
-        ),
-      );
-      const custom = createElement('div', 'inline-form');
-      const affiliation = document.createElement('select');
-      affiliation.className = 'text-input';
-      affiliation.setAttribute('aria-label', 'Affiliation of the custom symbol');
-      for (const [value, text] of CUSTOM_AFFILIATIONS) affiliation.append(new Option(text, value));
-      affiliation.value = state.customAffiliation ?? 'hostile';
-      affiliation.addEventListener('change', () => {
-        state.customAffiliation = affiliation.value;
-      });
-      const customButton = createElement('button', 'chip-button', 'Custom symbol…');
-      customButton.type = 'button';
-      customButton.addEventListener('click', () => armPlaceCustom(affiliation.value));
-      const orbatButton = createElement('button', 'chip-button', 'Place ORBAT…');
-      orbatButton.type = 'button';
-      orbatButton.addEventListener('click', startOrbatPlacement);
-      custom.append(affiliation, customButton);
-      container.append(custom, orbatButton);
-    }
-    if (tool?.type === 'place-unit') {
-      const placing = createElement('div', 'unit-placing');
-      placing.setAttribute('role', 'status');
-      placing.append(createElement('span', 'tool-hint', `Placing ${tool.name}.`));
-      const done = createElement('button', 'chip-button', 'Done');
-      done.type = 'button';
-      done.addEventListener('click', () => cancelActiveTool());
-      placing.append(done);
-      container.append(placing);
-    }
-  }
+  renderPlacementControls(container, { threats, editable });
 
   const showAllLabel = createElement('label', 'toggle-field');
   const showAllInput = document.createElement('input');
@@ -564,6 +575,45 @@ export function renderSitempTools({ threats, canEdit: editable }) {
   container.append(showAllLabel);
 
   return container;
+}
+
+/** The map toolbar's Unit panel: usable on every step. Step 4 keeps the
+ * existing COA choice; steps 1–3 always place without a COA (shown on
+ * every step and every COA — see `placementCoaId`). */
+export function renderUnitsPanel() {
+  const panel = createElement('div', 'map-tool-panel');
+  panel.append(createElement('h4', null, 'Unit'));
+  if (!state.study) {
+    panel.append(createElement('p', 'panel-note', 'Open a study first.'));
+    return panel;
+  }
+  const editable = canEdit();
+  if (!editable) {
+    panel.append(createElement('p', 'panel-note', 'Read-only: your role cannot place units.'));
+    return panel;
+  }
+  if (state.step === 4) {
+    renderCoaChoice(panel);
+    if (!state.selectedCoaId) {
+      panel.append(
+        createElement(
+          'p',
+          'tool-hint',
+          'Select a COA in the worksheet to place units on it; until then they show on every COA.',
+        ),
+      );
+    }
+  } else {
+    panel.append(
+      createElement(
+        'p',
+        'tool-hint',
+        'Placed here with no COA: shown on every step, for every COA.',
+      ),
+    );
+  }
+  renderPlacementControls(panel, { threats: state.study.threats ?? [], editable });
+  return panel;
 }
 
 // -- worksheet ----------------------------------------------------------------------

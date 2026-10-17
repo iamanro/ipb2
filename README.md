@@ -290,29 +290,48 @@ gaps. Takes a few seconds after the first download.
 
 ## Workspace
 
-The IPB map fills the window. The step tools (left) and the worksheet (right)
-float over it as sheets; put either away and bring it back with the two panel
-buttons in the status bar, or `[` / `]`. Which sheets are out is remembered in
-the browser. On a narrow screen (≤ 980 px) the sheets dock to the bottom half,
-one at a time, and the status bar rides above them. Zooming to the AOI or a
-feature keeps it clear of the open sheets. Printing always includes the
-worksheet, whether its sheet is out or not.
+The IPB map fills the window. One sheet floats over its left edge with two
+tabs, **Steps** (the step guide and its tools) and **Worksheet**; only one is
+shown at a time, so the rest of the window is map. The two panel buttons in
+the status bar, or `[` / `]`, open that tab or put the sheet away when it is
+already showing. The open tab is remembered in the browser. On a narrow
+screen (≤ 980 px) the sheet docks to the bottom half and the status bar rides
+above it. Zooming to the AOI or a feature keeps it clear of the sheet.
+Printing always includes the worksheet, whichever tab is showing.
 
-The map carries only two controls of its own:
+The map carries three controls of its own:
 
-- **Map ▾** (top right): the basemap, the overlays (MGRS grid first, then
-  contours, slope, roads, place names, weather and the current situation) and
-  a note when a scenario is active. See [Basemaps](#basemaps).
+- **Map ▾** (top right): the basemap, the unit symbol size and a note when a
+  scenario is active. See [Basemaps](#basemaps).
+- **Layers ▾** (next to it): the open study's own layers (areas, OAKOC with
+  NAI/TAI, MCOO, viewshed, units, graphics & range rings, custom layers), then
+  the map overlays (MGRS grid, contours, slope, roads, place names), weather
+  and the Exercise's current situation. Every switch is remembered in the
+  browser; the MGRS grid starts off.
 - **The status bar** along the bottom: the pointer's MGRS reference and the
-  ground elevation under it, a scale bar, the **Measure**, **Graphics** and
-  **Rings** tools (icons only when both sheets leave it narrow; hover for the
-  name), the sheet buttons, zoom, and **ⓘ** for attribution and the elevation
-  dataset.
+  ground elevation under it, a scale bar, the **Measure**, **Graphics**,
+  **Rings** and **Unit** tools (icons only when the bar is narrow; hover for
+  the name), the sheet buttons, zoom, and **ⓘ** for attribution and the
+  elevation dataset.
 
-The masthead holds the open study (click it, or press `/`, to switch; ordinary
-cell members open their cell's exercise study automatically) and the active
-scenario. In worksheet lists, click an item's name to go to it; its other
-actions (rename, move, delete…) are in its **⋯** menu.
+**Unit** places a unit on any step: one of the study's threats (click, then
+click the map, or drag it onto the map), a custom symbol, or a whole ORBAT.
+On steps 1–3 a unit belongs to no COA and shows on every step; on step 4 the
+selected COA's choice applies (see the situation template). Overlapping map
+labels hide rather than print over each other; the areas, lines and symbols
+themselves always draw.
+
+A saved MCOO, viewshed and line of sight are recomputed from their saved
+settings when a study opens, so they show again without a re-run; if the AOI
+has changed since, the worksheet asks for a new run instead.
+
+The masthead holds the open study, with its owner cell (click it, or press
+`/`, to switch; ordinary cell members open their cell's exercise study
+automatically) and the active scenario. A study is one IPB product (area,
+terrain effects, threat and COAs) owned by one cell; in the switcher, a row
+opens the study and its **⋯** menu renames or deletes it. In worksheet lists,
+click an item's name to go to it; its other actions (rename, move, delete…)
+are in its **⋯** menu.
 
 Other keys, when not typing in a field: `1`–`4` switch steps, Escape cancels
 the active map tool and closes an open menu.
@@ -374,8 +393,7 @@ outside service only while selected (the only other online parts are the
 [weather](#weather-online) layers). All three require the on-map attribution;
 none allows bulk-caching its tiles for offline use.
 
-Below the switch, **Layers** adds overlays that work over any basemap, all
-offline:
+The **Layers ▾** menu adds overlays that work over any basemap, all offline:
 
 | Overlay       | Source                                                                                 |
 | ------------- | -------------------------------------------------------------------------------------- |
@@ -700,7 +718,8 @@ cell plus a role, distinct from the global `admin` flag) is managed on the
      and a trace mix: click a few corners, then trace the rest. The context
      menu stays closed while drawing.
    - _Step 2_: OAKOC analyses (MCOO, viewshed, key terrain, avenues) and the
-     **civil considerations** matrix (ASCOPE × PMESII-PT).
+     **civil considerations** (ASCOPE × PMESII-PT): a list of the filled
+     entries with an add/edit form, and **View matrix** for the whole grid.
    - _Step 3_: threats with APP-6 symbols (the symbol picker, or **Import from
      ORBAT**), HVT and HPT lists, and weapon **range rings** from a threat's
      WEG card.

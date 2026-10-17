@@ -5,73 +5,118 @@
   }
 
   [data-module='ipb'] {
-    /* Map-first: the map fills the workspace; tools (left) and worksheet
-     * (right) float over it as sheets the analyst can put away. --sheet-l and
-     * --sheet-r are the map edges left free by the sheets; the map's own
-     * controls follow them. */
+    /* Map-first: the map fills the workspace; one sheet (Steps or Worksheet,
+     * never both) floats over it on the left as a tabbed panel the analyst
+     * can put away. --sheet-l/--sheet-r are the map edges left free by it;
+     * the map's own controls follow them. The right side has no sheet. */
     .workspace {
       --sheet-gap: 12px;
-      --sheet-l: calc(340px + 2 * var(--sheet-gap));
-      --sheet-r: calc(420px + 2 * var(--sheet-gap));
+      --sheet-l: calc(400px + 2 * var(--sheet-gap));
+      --sheet-r: var(--sheet-gap);
       /* Bottom of the map chrome: clear of the status bar and MGRS grid digits. */
       --chrome-b: calc(var(--target) + 2 * var(--sheet-gap));
 
       height: calc(100vh - var(--masthead));
       display: grid;
       grid-template: 'stack' minmax(0, 1fr) / minmax(0, 1fr);
-      /* Put-away sheets slide past the edges. clip, not hidden: a hidden box
+      /* Put-away sheet slides past the edge. clip, not hidden: a hidden box
        * still scrolls when focus or scrollIntoView reaches past its edge. */
       overflow: clip;
     }
 
-    .workspace[data-tools='closed'] {
+    .workspace[data-sheet='none'] {
       --sheet-l: var(--sheet-gap);
-    }
-
-    .workspace[data-worksheet='closed'] {
-      --sheet-r: var(--sheet-gap);
     }
 
     .workspace > * {
       grid-area: stack;
     }
 
-    .control-panel,
-    .detail-panel {
+    .sheet-panel {
       z-index: 5;
+      justify-self: start;
       align-self: start;
+      display: flex;
+      flex-direction: column;
+      width: 400px;
       min-height: 0;
       max-height: calc(100% - 2 * var(--sheet-gap));
       margin: var(--sheet-gap);
-      overflow-y: auto;
       border: 1px solid var(--line);
       background: var(--sheet);
       backdrop-filter: blur(12px) saturate(1.2);
       box-shadow: var(--shadow);
-      scrollbar-color: var(--line-dark) transparent;
-      scrollbar-width: thin;
       transition:
         translate var(--d-slow) var(--ease-out),
         opacity var(--d-slow) var(--ease-out),
         visibility var(--d-slow) allow-discrete;
     }
 
-    .control-panel {
-      justify-self: start;
-      width: 340px;
-      padding: 14px 14px 24px;
-    }
-
-    .workspace[data-tools='closed'] .control-panel {
+    .workspace[data-sheet='none'] .sheet-panel {
       translate: calc(-100% - 2 * var(--sheet-gap)) 0;
       opacity: 0;
       visibility: hidden;
     }
 
-    .workspace[data-worksheet='closed'] .detail-panel {
-      translate: calc(100% + 2 * var(--sheet-gap)) 0;
-      opacity: 0;
-      visibility: hidden;
+    .sheet-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .sheet-tab {
+      min-height: var(--target);
+      border: 0;
+      border-left: 1px solid var(--line-dark);
+      padding: 6px 2px;
+      color: var(--muted);
+      background: transparent;
+      font: 600 var(--t-sm) / 1.1 var(--body);
+      text-align: center;
+      cursor: pointer;
+      transition:
+        background-color var(--d-fast) var(--ease-out),
+        color var(--d-fast) var(--ease-out),
+        box-shadow var(--d-med) var(--ease-out);
+    }
+
+    .sheet-tab:first-child {
+      border-left: 0;
+    }
+
+    .sheet-tab:hover {
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    .sheet-tab[aria-selected='true'] {
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: inset 0 -2px 0 var(--signal);
+    }
+
+    .control-panel,
+    .detail-panel {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      scrollbar-color: var(--line-dark) transparent;
+      scrollbar-width: thin;
+    }
+
+    .control-panel {
+      padding: 14px 14px 24px;
+    }
+
+    .workspace[data-sheet='worksheet'] .control-panel,
+    .workspace[data-sheet='none'] .control-panel {
+      display: none;
+    }
+
+    .workspace[data-sheet='tools'] .detail-panel,
+    .workspace[data-sheet='none'] .detail-panel {
+      display: none;
     }
 
     .text-button {
@@ -142,9 +187,14 @@
       max-width: 220px;
       overflow: hidden;
       color: var(--ink);
-      font: 600 var(--t-sm) / 1.2 var(--display);
+      font: 600 var(--t-base) / 1.2 var(--display);
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .study-toggle-caret {
+      color: var(--muted);
+      font-size: var(--t-xs);
     }
 
     .study-menu {
@@ -152,7 +202,7 @@
       position: absolute;
       top: calc(100% + 8px);
       left: 0;
-      width: 320px;
+      width: min(400px, calc(100vw - 24px));
       max-height: 420px;
       overflow-y: auto;
       border: 1px solid var(--line-dark);
@@ -167,6 +217,12 @@
         opacity: 0;
         translate: 0 -4px;
       }
+    }
+
+    .study-menu-note {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font: var(--t-sm) / 1.4 var(--body);
     }
 
     .search-field {
@@ -216,9 +272,8 @@
     .study-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 8px 4px;
+      gap: 4px;
+      padding: 2px;
       border-bottom: 1px solid var(--line);
     }
 
@@ -227,42 +282,37 @@
       background: var(--surface);
     }
 
-    .study-row-body {
-      min-width: 0;
+    .study-row-open {
       display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .study-row-body .cell-badge {
-      align-self: flex-start;
-    }
-
-    .study-open {
+      align-items: center;
+      min-width: 0;
+      flex: 1;
+      gap: 8px;
       border: 0;
-      padding: 0;
+      padding: 6px 4px;
       color: var(--ink);
       background: transparent;
-      font: 600 var(--t-base) / 1.2 var(--display);
       text-align: left;
       cursor: pointer;
     }
 
-    .study-open:hover {
-      color: var(--blue-dark);
-      text-decoration: underline;
-      text-underline-offset: 3px;
+    .study-row-open:hover,
+    .study-row-open:focus-visible {
+      background: var(--surface-hover);
+    }
+
+    .study-row-name {
+      flex-shrink: 0;
+      font: 600 var(--t-base) / 1.2 var(--display);
     }
 
     .study-row-meta {
+      min-width: 0;
+      overflow: hidden;
       color: var(--muted);
       font: var(--t-xs) / 1.2 var(--data);
-    }
-
-    .study-row-actions {
-      display: flex;
-      gap: 4px;
-      flex-shrink: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .menu-empty {
@@ -866,14 +916,20 @@
       font: 500 var(--t-lg) / 1 var(--body);
     }
 
-    /* -- Map menu: basemap + overlays popover -- */
+    /* -- Map menu: basemap popover + layers popover, side by side -- */
 
-    .map-menu {
+    .map-menu-bar {
       position: absolute;
       z-index: 4;
       top: var(--sheet-gap);
       right: var(--sheet-r);
+      display: flex;
+      gap: 8px;
       transition: right var(--d-slow) var(--ease-out);
+    }
+
+    .map-menu {
+      position: relative;
     }
 
     .map-menu-toggle {
@@ -954,39 +1010,6 @@
 
     .overlay-option input {
       accent-color: var(--blue);
-    }
-
-    /* The MGRS grid switch reads as the first overlay row: a box that is
-     * ticked while the grid shows (aria-pressed carries the state). */
-    .grid-switch {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      width: calc(100% - 20px);
-      margin: 0 10px 2px;
-      border: 0;
-      padding: 4px 0;
-      color: var(--ink);
-      background: transparent;
-      font: inherit;
-      text-align: left;
-      cursor: pointer;
-    }
-
-    .grid-switch::before {
-      content: '';
-      width: 13px;
-      height: 13px;
-      border: 1px solid var(--line-dark);
-      border-radius: 2px;
-      background: transparent;
-    }
-
-    .grid-switch[aria-pressed='true']::before {
-      border-color: var(--blue);
-      background: var(--blue)
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6 9.5 3.5' fill='none' stroke='white' stroke-width='1.8'/%3E%3C/svg%3E")
-        center / 11px no-repeat;
     }
 
     .overlay-option.unavailable {
@@ -1199,8 +1222,6 @@
       flex: 1 1 auto;
       justify-content: center;
       min-width: 0;
-      overflow-x: auto;
-      scrollbar-width: none;
     }
 
     .status-item {
@@ -1416,9 +1437,7 @@
     /* -- detail / worksheet sheet -- */
 
     .detail-panel {
-      justify-self: end;
-      width: 420px;
-      padding: 16px 18px 32px;
+      padding: 16px 18px 24px;
     }
 
     .worksheet-heading {
@@ -2139,21 +2158,16 @@
   [data-module='ipb'] {
     @media (max-width: 1280px) {
       .workspace {
-        --sheet-l: calc(300px + 2 * var(--sheet-gap));
-        --sheet-r: calc(360px + 2 * var(--sheet-gap));
+        --sheet-l: calc(340px + 2 * var(--sheet-gap));
       }
 
-      .control-panel {
-        width: 300px;
-      }
-
-      .detail-panel {
-        width: 360px;
+      .sheet-panel {
+        width: 340px;
       }
     }
 
-    /* Narrow: the sheets dock to the bottom half, one at a time (view.js
-     * closes the other); map chrome rides above whichever is open. */
+    /* Narrow: the sheet docks to the bottom half instead of the left edge;
+     * map chrome rides above it when open. */
     @media (max-width: 980px) {
       .workspace {
         --sheet-l: var(--sheet-gap);
@@ -2163,12 +2177,11 @@
         height: calc(100dvh - var(--masthead));
       }
 
-      .workspace[data-tools='closed'][data-worksheet='closed'] {
+      .workspace[data-sheet='none'] {
         --chrome-b: calc(var(--target) + 2 * var(--sheet-gap));
       }
 
-      .control-panel,
-      .detail-panel {
+      .sheet-panel {
         align-self: end;
         justify-self: stretch;
         width: auto;
@@ -2177,8 +2190,7 @@
         margin: 0 var(--sheet-gap) var(--sheet-gap);
       }
 
-      .workspace[data-tools='closed'] .control-panel,
-      .workspace[data-worksheet='closed'] .detail-panel {
+      .workspace[data-sheet='none'] .sheet-panel {
         translate: 0 calc(100% + 2 * var(--sheet-gap));
       }
 
@@ -2189,12 +2201,13 @@
         transition: bottom var(--d-slow) var(--ease-out);
       }
 
-      .workspace[data-tools='closed'][data-worksheet='closed'] .status-bar {
+      .workspace[data-sheet='none'] .status-bar {
         bottom: var(--sheet-gap);
       }
     }
 
     @media print {
+      .sheet-tabs,
       .control-panel,
       .map-panel {
         display: none;
@@ -2205,8 +2218,26 @@
         height: auto;
       }
 
-      /* The worksheet sheet prints as the page, open or put away. */
-      .detail-panel {
+      /* The worksheet prints as the page whether its tab is active, the
+       * other tab is, or the sheet is put away entirely: equal-specificity
+       * overrides of the data-sheet hide/slide rules, winning by being last. */
+      .workspace[data-sheet] .sheet-panel {
+        display: block;
+        width: auto;
+        max-height: none;
+        margin: 0;
+        overflow: visible;
+        border: 0;
+        background: none;
+        backdrop-filter: none;
+        box-shadow: none;
+        translate: none;
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .workspace[data-sheet] .detail-panel {
+        display: block;
         width: auto;
         max-height: none;
         margin: 0;

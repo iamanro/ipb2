@@ -1,10 +1,14 @@
 /**
  * Map tools toolbar: measure (distance/area/bearing), the tactical graphics
- * palette, and range rings (manual or from a weapon's WEG card). Mounted
- * once near the map's own controls; one active tool at a time, Escape
- * cancels (the host view routes Escape/step-switch through
- * `cancelActiveTool()`, and draw/click completion through
- * `handleDraw`/`handleClick` — see `initMapToolbar`'s return value).
+ * palette, range rings (manual or from a weapon's WEG card), and — when the
+ * host supplies `renderUnitsPanel` — a Unit panel (content owned by
+ * `sitemp.js`, usable on any step). Mounted once near the map's own
+ * controls; one active tool at a time, Escape cancels (the host view routes
+ * Escape/step-switch through `cancelActiveTool()`, and draw/click
+ * completion through `handleDraw`/`handleClick` — see `initMapToolbar`'s
+ * return value). `cancelDrawTools()` stops Measure/Graphics/Rings without
+ * closing an open Unit panel, for the host to call when it arms unit
+ * placement from that panel's own chips.
  *
  * Pure helpers (`parseRadiiInput`, `rangeRingsFromEntries`,
  * `defaultAffiliationFor`, `formatMeasureReadout`) are exported for tests;
@@ -23,6 +27,7 @@ const TOOL_ICONS = {
     '<svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 13.5 10 6"/><path d="M6.5 5.5H10.5V9.5"/><path d="M2.5 3h6"/></svg>',
   'range-ring':
     '<svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><circle cx="8" cy="8" r="3.2"/><circle cx="8" cy="8" r="0.7"/></svg>',
+  unit: '<svg class="status-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="4" width="10" height="7" rx="1"/><path d="M3 7.5h10"/><path d="M8 11v2"/></svg>',
 };
 const API = '/api/ipb';
 const EQUIPMENT_API = '/api/equipment';
@@ -180,11 +185,17 @@ function iconButtonRow(createElement, entries) {
  * (analyst or above); `getStudy`/`getStudyId`/`getSelectedCoaId` are live
  * getters; `onFeaturesChanged(feature)` is told every created/updated/
  * deleted feature so the host can resync the map and worksheets.
+ * `renderUnitsPanel` (optional) returns the Unit panel's content (owned by
+ * `sitemp.js`); omitting it hides the Unit button entirely. `cancelOtherTool`
+ * (optional) is called whenever a different one of this toolbar's own tools
+ * is about to activate, so the host can cancel an unrelated armed tool
+ * (e.g. unit placement started from elsewhere) to keep one tool active.
  *
- * Returns `{ handleDraw, handleClick, cancelActiveTool, destroy }`: the host
- * view's `onMapDraw`/`onMapClick`/`cancelActiveTool` each call the matching
- * method first and only fall through to their own handling when it returns
- * falsy (unclaimed).
+ * Returns `{ handleDraw, handleClick, cancelActiveTool, cancelDrawTools,
+ * destroy }`: the host view's `onMapDraw`/`onMapClick`/`cancelActiveTool`
+ * each call the matching method first and only fall through to their own
+ * handling when it returns falsy (unclaimed); `cancelDrawTools` stops
+ * Measure/Graphics/Rings but leaves an open Unit panel in place.
  */
 export function initMapToolbar({
   root,
@@ -197,6 +208,8 @@ export function initMapToolbar({
   getStudyId,
   getSelectedCoaId,
   onFeaturesChanged,
+  renderUnitsPanel,
+  cancelOtherTool,
 }) {
   root.replaceChildren();
   root.setAttribute('role', 'toolbar');
@@ -204,7 +217,7 @@ export function initMapToolbar({
 
   /** `{ type: 'measure', mode } | { type: 'draw-graphic', ... } | { type: 'place-range-ring', ... } | null` */
   let activeTool = null;
-  let openPanel = null; // 'measure' | 'graphics' | 'range-ring' | null
+  let openPanel = null; // 'measure' | 'graphics' | 'range-ring' | 'unit' | null
   let measureResult = null;
 
   const row = createElement('div', 'map-tools-row');
@@ -234,11 +247,24 @@ export function initMapToolbar({
     renderPanel();
   }
 
+  /** Stops Measure/Graphics/Rings without closing the Unit panel — used
+   * when the host arms unit placement from that same panel's chips, so
+   * starting a placement doesn't close the popover the user is in. */
+  function cancelDrawTools() {
+    stopMapInteraction();
+    if (openPanel && openPanel !== 'unit') {
+      openPanel = null;
+      updateToggleButtons();
+      renderPanel();
+    }
+  }
+
   function setOpenPanel(name) {
     if (openPanel === name) {
       cancelActiveTool();
       return;
     }
+    cancelOtherTool?.();
     stopMapInteraction();
     openPanel = name;
     updateToggleButtons();
@@ -802,17 +828,20 @@ export function initMapToolbar({
     if (openPanel === 'measure') panelHost.append(renderMeasurePanel());
     else if (openPanel === 'graphics') panelHost.append(renderGraphicsPanel());
     else if (openPanel === 'range-ring') panelHost.append(renderRangeRingPanel());
+    else if (openPanel === 'unit') panelHost.append(renderUnitsPanel());
     panelHost.hidden = !openPanel;
   }
 
   // Icon plus word in the status bar; the word collapses (tools.css container
   // query) when the bar is squeezed between both open sheets, and then the
   // title and the visually hidden word still name the button.
-  for (const [name, label, title] of [
+  const tools = [
     ['measure', 'Measure', 'Measure distance, area or bearing'],
     ['graphics', 'Graphics', 'Tactical graphics'],
     ['range-ring', 'Rings', 'Range rings'],
-  ]) {
+  ];
+  if (renderUnitsPanel) tools.push(['unit', 'Unit', 'Place a unit']);
+  for (const [name, label, title] of tools) {
     const button = createElement('button', 'map-tool-button');
     button.type = 'button';
     button.setAttribute('aria-pressed', 'false');
@@ -829,6 +858,7 @@ export function initMapToolbar({
     handleDraw,
     handleClick,
     cancelActiveTool,
+    cancelDrawTools,
     /** Called after the host's own study/COA state changes, so the graphics
      * form's affiliation default and the "From a threat" list stay current. */
     refresh() {
