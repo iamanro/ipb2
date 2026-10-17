@@ -37,6 +37,22 @@
 - The ZIP reader moved from `modules/terrain/tools/zip.mjs` to `server/zip.ts` (now
   also used for `.xlsx`) and caps each entry's inflated size.
 
+## 2026-10-08
+
+### Fixed
+
+- Login rate limit now counts each attempt before the password hash, so parallel
+  guesses hit HTTP 429 like sequential ones instead of all getting through.
+- The audit trail (`GET /api/auth/audit`) is limited to admins and White's
+  game-master; a Blue or Red game-master (and a user without a membership, which
+  used to get HTTP 500) now gets HTTP 403.
+- After the live stream reconnects, every open view reloads its data, so changes
+  made while it was down are no longer missed.
+- The server-wide live stream cap is 256 (was 64), enough for a full classroom
+  with several tabs each.
+- A malformed `%` escape in an API path answers HTTP 404 instead of 500.
+- `POST /api/auth/exercise/archive` no longer hides a too-large or invalid JSON body.
+
 ## 2026-09-29
 
 ### Added

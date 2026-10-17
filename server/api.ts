@@ -390,11 +390,12 @@ export function createApiMiddleware(mode: AuthMode) {
     }
     if (sub === 'audit' && request.method === 'GET') {
       if (!request.user) throw new HttpError(401, 'Sign in required.');
-      // An admin sees the audit trail regardless of their exercise role
-      // (their action rights there follow a real membership when they have
-      // one, per C1 — this system-wide view doesn't).
-      if (!request.user.admin && !roleAtLeast(request.user.role, 'game-master')) {
-        throw new HttpError(403, 'The audit trail needs the game-master role.');
+      // Every cell's activity is in here, so only an admin (whatever their
+      // exercise role) or White's game-master may read it; a Blue or Red
+      // game-master would see the other cell's work.
+      const { admin, cell, role } = request.user;
+      if (!admin && !(cell === 'white' && roleAtLeast(role, 'game-master'))) {
+        throw new HttpError(403, 'The audit trail needs a White game-master or an admin.');
       }
       const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 500);
       const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
@@ -419,6 +420,8 @@ export function createApiMiddleware(mode: AuthMode) {
 
     // -- admin-only user management (C1 admin flag) --------------------------
     const usersListMatch = /^users$/.exec(sub);
+    // A user name is only [a-z0-9._-], so these path segments are used as-is:
+    // decoding could only throw on a stray `%`.
     const userMatch = /^users\/([^/]+)$/.exec(sub);
     const userResetMatch = /^users\/([^/]+)\/reset-password$/.exec(sub);
     const userRevokeMatch = /^users\/([^/]+)\/revoke-sessions$/.exec(sub);
@@ -446,7 +449,7 @@ export function createApiMiddleware(mode: AuthMode) {
       return;
     }
     if (userMatch && request.method === 'PATCH') {
-      const name = decodeURIComponent(userMatch[1]);
+      const name = userMatch[1];
       const body = fieldsOf(await readJson(request));
       if (body.admin !== undefined) store.setAdmin(name, Boolean(body.admin));
       if (body.disabled !== undefined) {
@@ -461,7 +464,7 @@ export function createApiMiddleware(mode: AuthMode) {
       return;
     }
     if (userMatch && request.method === 'DELETE') {
-      const name = decodeURIComponent(userMatch[1]);
+      const name = userMatch[1];
       if (name === request.user?.name)
         throw new HttpError(409, "You can't delete your own account.");
       store.removeUser(name);
@@ -471,7 +474,7 @@ export function createApiMiddleware(mode: AuthMode) {
       return;
     }
     if (userResetMatch && request.method === 'POST') {
-      const name = decodeURIComponent(userResetMatch[1]);
+      const name = userResetMatch[1];
       const body = fieldsOf(await readJson(request));
       await store.resetPassword(name, body.password);
       closeStreamsForUser(name);
@@ -480,7 +483,7 @@ export function createApiMiddleware(mode: AuthMode) {
       return;
     }
     if (userRevokeMatch && request.method === 'POST') {
-      const name = decodeURIComponent(userRevokeMatch[1]);
+      const name = userRevokeMatch[1];
       store.revokeSessions(name);
       closeStreamsForUser(name);
       auditAuthAction(store, request, url.pathname, 200);
@@ -530,9 +533,8 @@ export function createApiMiddleware(mode: AuthMode) {
       return;
     }
     if (exerciseArchiveMatch && request.method === 'POST') {
-      // `note` is optional: a bodiless (or malformed-body) request archives
-      // with no note, rather than 400ing over an omitted field.
-      const body = fieldsOf(await readJson(request).catch((): Json => ({})));
+      // `note` is optional: a bodiless request archives with no note.
+      const body = fieldsOf(await readJson(request, undefined, { optional: true }));
       const result = await lifecycle.archive({
         note: typeof body.note === 'string' ? body.note : null,
       });
@@ -559,7 +561,7 @@ export function createApiMiddleware(mode: AuthMode) {
       return;
     }
     if (memberMatch && request.method === 'PUT') {
-      const name = decodeURIComponent(memberMatch[1]);
+      const name = memberMatch[1];
       const body = fieldsOf(await readJson(request));
       store.setMembership(name, { cell: body.cell, role: body.role });
       auditAuthAction(store, request, url.pathname, 200);
@@ -567,7 +569,7 @@ export function createApiMiddleware(mode: AuthMode) {
       return;
     }
     if (memberMatch && request.method === 'DELETE') {
-      const name = decodeURIComponent(memberMatch[1]);
+      const name = memberMatch[1];
       store.removeMembership(name);
       auditAuthAction(store, request, url.pathname, 200);
       sendJson(response, { deleted: true });

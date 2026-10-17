@@ -1,7 +1,7 @@
 // Exercise: the Activity (AAR) panel.
 
 import { formatDtg } from '../../../src/dtg.js';
-import { can, sessionMode } from '../../../src/session.js';
+import { can, isWhite, sessionMode } from '../../../src/session.js';
 
 import { createElement, elements, formatDate, renderPanel, requestJson, state } from './view.js';
 
@@ -38,7 +38,7 @@ async function loadAudit(offset = 0) {
 }
 
 function renderAuditSection(container) {
-  if (sessionMode() !== 'on' || !can('game-master')) return;
+  if (sessionMode() !== 'on' || !isWhite() || !can('game-master')) return;
   const section = createElement('section', 'field-group audit-section');
   section.append(createElement('h3', null, 'Audit trail'));
   if (!state.audit.loaded) {
