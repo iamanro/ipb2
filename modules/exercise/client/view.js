@@ -2372,7 +2372,7 @@ async function loadAudit(offset = 0) {
 }
 
 function renderAuditSection(container) {
-  if (sessionMode() !== 'on' || !can('game-master')) return;
+  if (sessionMode() !== 'on' || !isWhite() || !can('game-master')) return;
   const section = createElement('section', 'field-group audit-section');
   section.append(createElement('h3', null, 'Audit trail'));
   if (!state.audit.loaded) {
@@ -2546,7 +2546,8 @@ export function mount({ root, status }) {
   // one live event per fired inject now (docs/adr/0002-item-scoped-requests.md:
   // each is announced only to its own cells), not one flat tick.
   state.unsubscribeTick = subscribe(
-    (event) => event.module === 'exercise' && /^scenario-events\/\d+\/fire$/.test(event.route),
+    (event) =>
+      event.module === 'exercise' && /^(scenario-events\/\d+\/fire|resync)$/.test(event.route),
     async () => {
       try {
         await loadAll();

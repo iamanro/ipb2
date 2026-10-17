@@ -314,6 +314,8 @@ describe('on mode, with users', () => {
     seed.setMembership('gm', { cell: 'white', role: 'game-master' });
     await seed.createUser('observer1', 'observer pw 1234');
     seed.setMembership('observer1', { cell: 'blue', role: 'observer' });
+    await seed.createUser('redgm', 'red game master pw');
+    seed.setMembership('redgm', { cell: 'red', role: 'game-master' });
     // Dedicated to the SSE-cap test below, so a stream another test opened
     // and is still tearing down can't make that count flaky.
     await seed.createUser('capuser', 'cap user password');
@@ -408,6 +410,21 @@ describe('on mode, with users', () => {
     });
     const audit = await api.request('/api/auth/audit');
     expect(audit.status).toBe(403);
+  });
+
+  test('the audit trail holds every cell, so only White reads it: Red game-master and unassigned get 403', async () => {
+    for (const [name, password] of [
+      ['redgm', 'red game master pw'],
+      ['unassigned', 'unassigned pw 12345'],
+    ]) {
+      const api = client(server.origin);
+      await api.request('/api/auth/login', { body: { name, password } });
+      const audit = await api.request('/api/auth/audit');
+      expect(audit.status).toBe(403);
+    }
+    const white = client(server.origin);
+    await white.request('/api/auth/login', { body: { name: 'gm', password: 'game master pw' } });
+    expect((await white.request('/api/auth/audit')).status).toBe(200);
   });
 
   test('CSRF: a foreign Origin is rejected even with a valid session', async () => {

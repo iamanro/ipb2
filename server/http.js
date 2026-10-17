@@ -45,8 +45,9 @@ export function numberParameter(query, name, fallback, minimum, maximum) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-/** Read a JSON request body. Rejects anything larger than `limit` bytes. */
-export async function readJson(request, limit = 1 << 20) {
+/** Read a JSON request body. Rejects anything larger than `limit` bytes. An
+ * empty body is a 400, or null when `optional` (a bodiless POST/DELETE). */
+export async function readJson(request, limit = 1 << 20, { optional = false } = {}) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -54,7 +55,10 @@ export async function readJson(request, limit = 1 << 20) {
     if (size > limit) throw new HttpError(413, 'Request body too large.');
     chunks.push(chunk);
   }
-  if (!size) throw new HttpError(400, 'A JSON body is required.');
+  if (!size) {
+    if (optional) return null;
+    throw new HttpError(400, 'A JSON body is required.');
+  }
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {

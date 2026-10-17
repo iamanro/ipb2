@@ -49,7 +49,7 @@
  * injects) gets `connect({ runAs })` once: `runAs(actor, method, route,
  * body)` runs one of its routes without HTTP, announced like any other.
  */
-import { HttpError, sendJson } from './http.js';
+import { HttpError, readJson, sendJson } from './http.js';
 import {
   canEdit,
   canRelease,
@@ -98,7 +98,11 @@ function compilePath(path) {
       const segment = segments[index];
       if (segment.startsWith(':')) {
         if (!parts[index]) return null;
-        params[segment.slice(1)] = decodeURIComponent(parts[index]);
+        try {
+          params[segment.slice(1)] = decodeURIComponent(parts[index]);
+        } catch {
+          return null; // malformed %-escape: no such route, not a 500
+        }
       } else if (segment !== parts[index]) {
         return null;
       }
@@ -119,24 +123,6 @@ function requireRevision(label, item, body) {
       code: 'stale_revision',
       current_revision: item.revision,
     });
-  }
-}
-
-/** Reads a JSON body, or null when there is none (a bodiless POST/DELETE). */
-async function readBody(request, limit) {
-  if (!request) return null;
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > limit) throw new HttpError(413, 'The request body is too large.');
-    chunks.push(chunk);
-  }
-  if (!size) return null;
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  } catch {
-    throw new HttpError(400, 'The body is not valid JSON.');
   }
 }
 
@@ -346,7 +332,7 @@ export function createDispatcher(modules, { publish = () => {}, audit = () => {}
       givenBody !== undefined
         ? givenBody
         : MUTATION_METHODS.has(method)
-          ? await readBody(request, route.bodyLimit ?? DEFAULT_BODY_LIMIT)
+          ? await readJson(request, route.bodyLimit ?? DEFAULT_BODY_LIMIT, { optional: true })
           : null;
     const actorName = actor.name;
 

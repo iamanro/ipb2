@@ -16,12 +16,11 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
+import { requireExerciseName } from './auth.js';
 import { archiveRoot, integrityCheck } from './dbArchive.js';
 import { HttpError } from './http.js';
 import { publish } from './live.js';
 import { EXERCISE_DATABASES } from './stateDatabases.js';
-
-const EXERCISE_NAME_MAX_LENGTH = 80;
 
 function now() {
   return new Date().toISOString();
@@ -63,12 +62,6 @@ async function fileExists(file) {
  * observe the lock below rather than queueing invisibly behind it. */
 function yieldTick() {
   return new Promise((resolve) => setImmediate(resolve));
-}
-
-function assertExerciseName(name) {
-  if (typeof name !== 'string' || !name.trim() || name.trim().length > EXERCISE_NAME_MAX_LENGTH) {
-    throw new HttpError(400, `Exercise name must be 1-${EXERCISE_NAME_MAX_LENGTH} characters.`);
-  }
 }
 
 /**
@@ -184,7 +177,7 @@ export function createExerciseLifecycle({ getAuthStore }) {
      * typed confirmation, not just a click, before every membership and
      * every study/track/ORBAT in the running exercise is gone. */
     async reset({ name, confirm }) {
-      assertExerciseName(name);
+      requireExerciseName(name);
       const store = getAuthStore();
       const current = store.getExercise().name;
       if (confirm !== current) {

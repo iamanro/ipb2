@@ -117,7 +117,7 @@ test('bounds the number of concurrent subscribers, across many distinct users', 
   const connections = [];
   let opened = 0;
   let rejectedStatus = null;
-  for (let i = 0; i < 200 && rejectedStatus === null; i += 1) {
+  for (let i = 0; i < 1000 && rejectedStatus === null; i += 1) {
     const connection = fakeConnection();
     try {
       handleLive(connection.request, connection.response, { user: `user-${i}` });
@@ -129,7 +129,7 @@ test('bounds the number of concurrent subscribers, across many distinct users', 
   }
   expect(rejectedStatus).toBe(503);
   expect(opened).toBeGreaterThan(0);
-  expect(opened).toBeLessThan(200);
+  expect(opened).toBeLessThan(1000);
 });
 
 test('bounds the number of concurrent subscribers for one user (IPB-AUTH-005)', () => {

@@ -5,9 +5,9 @@ import { HttpError } from './http.js';
  * re-checked (IPB-AUTH-005): a stream outliving a logout elsewhere or a
  * removed/repassworded account is closed within one tick of this. */
 const KEEPALIVE_MS = 25000;
-/** A dev box serving a classroom, not the public internet: bounded so a
- * runaway client (or a hundred stale tabs) can't exhaust file descriptors. */
-const MAX_CLIENTS = 64;
+/** A classroom of ~30, each with a few tabs (one stream per tab), not the
+ * public internet: bounded so runaway clients can't exhaust file descriptors. */
+const MAX_CLIENTS = 256;
 /** One signed-in user (the lowest role included) can't starve everyone
  * else's live updates by opening every global slot (IPB-AUTH-005). */
 const MAX_CLIENTS_PER_USER = 8;
