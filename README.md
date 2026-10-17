@@ -921,7 +921,7 @@ cells"), not a property of the account itself. Every GET is `observer`.
 Most mutations need `analyst`. `collection-manager` (and above) is needed
 for `exercise`'s collectors and taskings. `game-master` (and above) is
 needed for the exercise's own controls — the scenario clock and the
-scenario/country/place library — plus the audit trail below. An admin with
+scenario/country/place library — plus, in White only, the audit trail below. An admin with
 no membership acts as White's game-master by default; one _with_ a
 membership uses it instead for these role checks (their cell visibility
 stays unrestricted regardless). Each route declares the role it needs in
@@ -1012,8 +1012,9 @@ proxy itself appended, not whatever a client claimed before it), and
 flag. Without it, both headers are ignored — a client could otherwise spoof
 either one directly.
 
-**Audit**: `GET /api/auth/audit` (game-master and above, or any admin
-regardless of their exercise role; paginated with `limit`/`offset`) lists
+**Audit**: `GET /api/auth/audit` (White's game-master, or any admin
+regardless of their exercise role — it holds every cell's activity, so a
+Blue or Red game-master gets 403; paginated with `limit`/`offset`) lists
 every mutation with who made it, the method, path, the response status,
 and which browser tab (`X-Client-Id`) — including user/membership/exercise
 management actions (`/api/auth/users*`, `/api/auth/members*`,

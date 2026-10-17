@@ -41,14 +41,14 @@ describe('users', () => {
     expect(store.hasUsers()).toBe(false);
     await store.createUser('alice', 'correct horse');
     expect(store.hasUsers()).toBe(true);
-    expect(store.listUsers()).toEqual([
+    expect(store.listUsersDetailed()).toMatchObject([
       { name: 'alice', admin: false, created_at: expect.any(String) },
     ]);
   });
 
   test('createUser({ admin: true }) flags the global admin bit', async () => {
     await store.createUser('root', 'correct horse battery', { admin: true });
-    expect(store.listUsers()).toEqual([
+    expect(store.listUsersDetailed()).toMatchObject([
       { name: 'root', admin: true, created_at: expect.any(String) },
     ]);
   });
@@ -74,7 +74,7 @@ describe('users', () => {
     await store.createUser('alice', 'correct horse');
     await store.createUser('other-admin', 'correct horse battery', { admin: true });
     store.setAdmin('alice', true);
-    expect(store.listUsers().find((u) => u.name === 'alice').admin).toBe(true);
+    expect(store.listUsersDetailed().find((u) => u.name === 'alice').admin).toBe(true);
     await store.setPassword('alice', 'new correct horse');
     await expectStatus(
       store.login({ name: 'alice', password: 'correct horse', ip: '1.1.1.1' }),
@@ -87,7 +87,7 @@ describe('users', () => {
     });
     expect(result.user.name).toBe('alice');
     store.removeUser('alice');
-    expect(store.listUsers().map((u) => u.name)).toEqual(['other-admin']);
+    expect(store.listUsersDetailed().map((u) => u.name)).toEqual(['other-admin']);
   });
 
   test('setAdmin/setPassword/removeUser 404 on an unknown name', async () => {
@@ -379,6 +379,17 @@ describe('login', () => {
     );
   });
 
+  test('parallel guesses are rate-limited too, not only sequential ones', async () => {
+    const results = await Promise.allSettled(
+      Array.from({ length: 30 }, (_, i) =>
+        store.login({ name: 'alice', password: `wrong ${i}`, ip: '9.9.9.9' }),
+      ),
+    );
+    const statuses = results.map((result) => result.reason?.status);
+    expect(statuses.filter((status) => status === 401)).toHaveLength(10);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(20);
+  });
+
   test('IPv6 addresses in the same /64 share one rate-limit bucket', async () => {
     // fe80::1 and fe80::2 are both fe80:0:0:0::/64 — 5 failures each should
     // exhaust the *shared* 10-failure budget for that block.
@@ -661,7 +672,7 @@ test('two independent stores against the same file do not clobber each other', a
   const second = openAuthStore(file);
   await store.createUser('alice', 'correct horse battery');
   expect(second.hasUsers()).toBe(true);
-  expect(second.listUsers()[0].name).toBe('alice');
+  expect(second.listUsersDetailed()[0].name).toBe('alice');
   second.close();
 });
 

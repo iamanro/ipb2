@@ -326,8 +326,8 @@ export function openAuthStore(file = authState.path) {
   /** Counts `key`'s hits inside the window, without writing anything —
    * `checkRateLimit` must stay read-only so a flood of never-valid names
    * can't each pin a Map entry before validation even rejects them
-   * (IPB-AUTH-002); only `recordFailure` (after a real failed attempt)
-   * writes. */
+   * (IPB-AUTH-002); only `recordFailure` (an attempt that passed this
+   * check, cleared again if it succeeds) writes. */
   function recentHitCount(map: Map<string, number[]>, key: string) {
     const hits = map.get(key);
     if (!hits) return 0;
@@ -683,6 +683,10 @@ export function openAuthStore(file = authState.path) {
       const ipKey = rateLimitKey(ip, name);
       const nameKey = `name::${name}`;
       checkRateLimit(ipKey, nameKey);
+      // Counted before the hash, not after: parallel guesses would all pass
+      // the check above while the first ones are still hashing. A success
+      // clears it again below.
+      recordFailure(ipKey, nameKey);
       const user = findUser(name);
       // Always scrypt something, real user or not, so an unknown name
       // doesn't return faster than a known one (IPB-AUTH-008).
@@ -691,7 +695,6 @@ export function openAuthStore(file = authState.path) {
       // separate message): telling an attacker "that account exists but is
       // disabled" is its own small leak.
       if (!user || !valid || user.disabled) {
-        recordFailure(ipKey, nameKey);
         throw new HttpError(401, 'Invalid name or password.');
       }
       ipAttempts.delete(ipKey);

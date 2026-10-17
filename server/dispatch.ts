@@ -220,7 +220,11 @@ function compilePath(path: string | RegExp): (route: string) => Record<string, s
       const segment = segments[index];
       if (segment.startsWith(':')) {
         if (!parts[index]) return null;
-        params[segment.slice(1)] = decodeURIComponent(parts[index]);
+        try {
+          params[segment.slice(1)] = decodeURIComponent(parts[index]);
+        } catch {
+          return null; // malformed %-escape: no such route, not a 500
+        }
       } else if (segment !== parts[index]) {
         return null;
       }
