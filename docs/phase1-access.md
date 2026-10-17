@@ -1,6 +1,6 @@
 # Phase 1: exercise lifecycle, cells, release
 
-> **Superseded in part** by [ADR 0002](adr/0002-item-scoped-requests.md): the cell rules below (C1, C2, C2b, C6) still hold, but _where_ they are applied changed. `server/access.js` and `request.liveCells` are gone; `server/dispatch.js` resolves the item named in each URL, checks role and cell, generates release/reassign (C3) and announces each change to the item's cells (C4). Evidence links are now parts of the requirement they support.
+> **Superseded in part** by [ADR 0002](adr/0002-item-scoped-requests.md): the cell rules below (C1, C2, C2b, C6) still hold, but _where_ they are applied changed. `server/access.js` and `request.liveCells` are gone; `server/dispatch.ts` resolves the item named in each URL, checks role and cell, generates release/reassign (C3) and announces each change to the item's cells (C4). Evidence links are now parts of the requirement they support.
 
 Decisions (user, 2026-09-26):
 
@@ -20,7 +20,7 @@ Decisions (user, 2026-09-26):
 - **Global** (not cell-owned, visible to every member): the scenario clock, scenario geography (countries/places, regions), and reference data (terrain, equipment).
 - **Existing rows** migrate with `owner_cell = 'white'` and `releasable_to = '[]'`: nothing leaks. White can reassign or release them.
 
-## C1 `request.user` (set by server/api.js for every /api request)
+## C1 `request.user` (set by server/api.ts for every /api request)
 
 `{ name, admin: boolean, cell: 'white'|'blue'|'red'|null, role: 'observer'|'analyst'|'collection-manager'|'game-master'|null, must_change_password }`
 
@@ -28,7 +28,7 @@ Decisions (user, 2026-09-26):
 - Off mode (loopback, no auth) acts as `{ name: 'local', admin: true, cell: 'white', role: 'game-master' }`.
 - A non-admin with no membership gets **403** "You are not assigned to the current exercise." on every module route (`/api/auth/*` still works).
 
-## C2 `server/policy.js` (Core owns; pure, no I/O)
+## C2 `server/policy.ts` (Core owns; pure, no I/O)
 
 - `CELLS = ['white', 'blue', 'red']`
 - `isWhite(user)`: admin or cell white.
@@ -42,7 +42,7 @@ Decisions (user, 2026-09-26):
 
 ## C2b Release is read-only
 
-`canEdit(user, item)` / `assertCanEdit(user, item)` in `server/policy.js`; `canEditClient(item)` in `src/release.js`.
+`canEdit(user, item)` / `assertCanEdit(user, item)` in `server/policy.ts`; `canEditClient(item)` in `src/release.js`.
 
 - Changing a cell-owned item or any child row under it (PATCH, DELETE, adding children, reorder, bulk import into it, indicators, positions, units) takes White or membership of the owning cell. The route's role requirement still applies on top.
 - A visible but not editable item answers 403; an invisible one answers 404.
@@ -59,7 +59,7 @@ Decisions (user, 2026-09-26):
 
 ## C4 Live events
 
-A module handler sets `request.liveCells = liveCellsFor(item)` for mutations of cell-owned items (or the union, for changes that affect several). server/api.js adds `cells` to the published event. server/live.js delivers an event to a stream when:
+A module handler sets `request.liveCells = liveCellsFor(item)` for mutations of cell-owned items (or the union, for changes that affect several). server/api.ts adds `cells` to the published event. server/live.ts delivers an event to a stream when:
 
 - the event has no `cells` (a global change), or
 - the stream's user is White/admin, or
@@ -85,14 +85,14 @@ Masthead: the exercise name, the user's cell badge and role. Replace the stale "
 
 ## C6 Exercise lifecycle API (admin only, Core owns)
 
-`server/exerciseLifecycle.js` + routes under `/api/auth/exercise`:
+`server/exerciseLifecycle.ts` + routes under `/api/auth/exercise`:
 
 - `GET /api/auth/exercise` → `{ name, started_at, members: n }`; any signed-in user may read the name.
 - `PATCH {name}` (admin).
 - `GET /api/auth/exercise/archives` (admin) → `[{ id, name, archived_at, sizes }]`.
 - `POST /api/auth/exercise/archive {note?}` (admin): VACUUM INTO `$IPB_STATE_ROOT/archives/<ts>-<slug>/{ipb,exercise,orbat}.db` + `meta.json`.
 - `POST /api/auth/exercise/reset {name, confirm: '<current name>'}` (admin): always archives first, then empties the exercise. While it runs, other /api requests get 503. It publishes the live event `{module:'auth', route:'exercise/reset'}` so clients reload.
-- `POST /api/auth/exercise/restore {archive}` (admin): archives the current exercise, then swaps the archive's DBs in; memberships are kept only for users that still exist. **Emptying or swapping a module's DB**: call that module's `close()` (server/modules.js), delete or replace the files (+ `-wal`/`-shm`); the module's store reopens lazily on the next request.
+- `POST /api/auth/exercise/restore {archive}` (admin): archives the current exercise, then swaps the archive's DBs in; memberships are kept only for users that still exist. **Emptying or swapping a module's DB**: call that module's `close()` (server/modules.ts), delete or replace the files (+ `-wal`/`-shm`); the module's store reopens lazily on the next request.
 
 Memberships API (admin): `GET /api/auth/members`, `PUT /api/auth/members/:name {cell, role}`, `DELETE /api/auth/members/:name`. The users list includes each user's membership.
 

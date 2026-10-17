@@ -31,7 +31,7 @@ _Avoid_: superuser, administrator role
 ## Ownership and sharing
 
 **Cell-owned item**:
-A study, ORBAT, requirement, report, RFI, track, collector, tasking, INTSUM, NAI or message: something that belongs to exactly one cell.
+A study, ORBAT, requirement, report, RFI, track, collector, tasking, INTSUM, NAI, message or document: something that belongs to exactly one cell.
 _Avoid_: resource, record, document
 
 **Part**:
@@ -57,3 +57,11 @@ _Avoid_: transfer, hand over
 **Inject**:
 A scheduled event White prepares in advance (a report or a message) that fires at a scenario time and is released to chosen cells.
 _Avoid_: event (alone), scenario event
+
+**Document**:
+An uploaded scenario file (OPLAN, annex, plan) a cell owns and releases; a new edition replaces its file and keeps its release.
+_Avoid_: attachment, upload
+
+**Scenario package**:
+The instructor's whole script — story, situations and their injects — as one file, exported from one exercise and imported into another.
+_Avoid_: template, backup

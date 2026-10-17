@@ -2,9 +2,9 @@ import { rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
-import { openStore } from './store.js';
+import { openStore } from './store.ts';
 
 function tempFile() {
   return path.join(
@@ -1110,7 +1110,7 @@ describe('openStore: listStudies uses the access capability', () => {
   });
 
   /** Asserts the store calls `access.visible('study', { alias: 's' })` (the
-   * exact contract `server/dispatch.js` relies on) and threads its SQL
+   * exact contract `server/dispatch.ts` relies on) and threads its SQL
    * fragment into the query untouched. */
   function access(sql, params = [], options = { white: true, cell: 'white' }) {
     return {

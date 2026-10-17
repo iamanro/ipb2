@@ -1,0 +1,548 @@
+/* IPB: Map panel, map menu (basemap + overlays), bottom status bar. */
+@layer components {
+  [data-module='ipb'] {
+    /* -- map panel -- */
+
+    .map-panel {
+      z-index: 0;
+      position: relative;
+      overflow: hidden;
+      background: var(--map-land);
+    }
+
+    .map-target {
+      position: absolute;
+      inset: 0;
+    }
+
+    /* Map chrome sits in the free map area between the sheets and moves
+     * with them. Hints/click-info: bottom-left, above the status bar. */
+    .map-hint,
+    .map-click-info {
+      position: absolute;
+      z-index: 4;
+      bottom: calc(var(--chrome-b) + 8px);
+      left: var(--sheet-l);
+      max-width: 420px;
+      padding: 6px 10px;
+      font: var(--t-sm) / 1.4 var(--data);
+      transition:
+        left var(--d-slow) var(--ease-out),
+        bottom var(--d-slow) var(--ease-out),
+        opacity var(--d-med) var(--ease-out),
+        translate var(--d-med) var(--ease-out);
+
+      @starting-style {
+        opacity: 0;
+        translate: 0 4px;
+      }
+    }
+
+    .map-hint,
+    .map-click-info,
+    .map-menu-toggle,
+    .map-popover,
+    .status-bar,
+    .row-menu,
+    .info-popover,
+    .map-panel .ol-control button {
+      border: 1px solid var(--line-dark);
+      color: var(--ink);
+      background: var(--sheet);
+      backdrop-filter: blur(12px);
+    }
+
+    .readout-label {
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    #pointer-mgrs,
+    #pointer-elevation {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* OpenLayers's default Zoom and Attribution controls stay functional
+     * (view.js proxy-clicks Zoom and reads Attribution's <li> text) but are
+     * visually replaced by the status bar below, so they're hidden here
+     * rather than duplicated. The bare ScaleLine control is relocated into
+     * the status bar by view.js and styled below as .ipb-scale. */
+    .map-panel .ol-zoom,
+    .map-panel .ol-rotate,
+    .map-panel .ol-attribution {
+      display: none;
+    }
+
+    .map-panel .ol-control button {
+      width: var(--target);
+      height: var(--target);
+      margin: 0 0 2px;
+      border-radius: 0;
+      font: 500 var(--t-lg) / 1 var(--body);
+    }
+
+    /* -- Map menu: basemap + overlays popover -- */
+
+    .map-menu {
+      position: absolute;
+      z-index: 4;
+      top: var(--sheet-gap);
+      right: var(--sheet-r);
+      transition: right var(--d-slow) var(--ease-out);
+    }
+
+    .map-menu-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: var(--target);
+      padding: 0 12px;
+      font: 600 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition: background-color var(--d-fast) var(--ease-out);
+    }
+
+    .map-menu-toggle:hover,
+    .map-menu-toggle[aria-expanded='true'] {
+      background: var(--surface-hover);
+    }
+
+    .map-popover {
+      z-index: 5;
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      width: 280px;
+      max-height: calc(100vh - var(--masthead) - var(--chrome-b) - 80px);
+      overflow-y: auto;
+      padding: 10px 0 12px;
+      box-shadow: var(--shadow);
+      transition:
+        opacity var(--d-med) var(--ease-out),
+        translate var(--d-med) var(--ease-out);
+
+      @starting-style {
+        opacity: 0;
+        translate: 0 -4px;
+      }
+    }
+
+    .map-popover-section {
+      padding: 0 12px;
+    }
+
+    .map-popover-section + .map-popover-section {
+      margin-top: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+
+    .map-popover-section h3 {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font: 600 var(--t-xs) / 1.2 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .map-popover-scenario {
+      margin: 10px 12px 0;
+      border-top: 1px solid var(--line);
+      padding: 10px 0 0;
+      color: var(--signal);
+      font: var(--t-xs) / 1.4 var(--data);
+    }
+
+    .overlay-list {
+      display: grid;
+      gap: 2px;
+      padding: 0 10px 9px;
+    }
+
+    .overlay-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 4px 0;
+      cursor: pointer;
+    }
+
+    .overlay-option input {
+      accent-color: var(--blue);
+    }
+
+    /* The MGRS grid switch reads as the first overlay row: a box that is
+     * ticked while the grid shows (aria-pressed carries the state). */
+    .grid-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: calc(100% - 20px);
+      margin: 0 10px 2px;
+      border: 0;
+      padding: 4px 0;
+      color: var(--ink);
+      background: transparent;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .grid-switch::before {
+      content: '';
+      width: 13px;
+      height: 13px;
+      border: 1px solid var(--line-dark);
+      border-radius: 2px;
+      background: transparent;
+    }
+
+    .grid-switch[aria-pressed='true']::before {
+      border-color: var(--blue);
+      background: var(--blue)
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6 9.5 3.5' fill='none' stroke='white' stroke-width='1.8'/%3E%3C/svg%3E")
+        center / 11px no-repeat;
+    }
+
+    .overlay-option.unavailable {
+      color: var(--muted);
+      cursor: not-allowed;
+    }
+
+    .overlay-text {
+      display: grid;
+      gap: 2px;
+    }
+
+    .overlay-text small {
+      color: var(--muted);
+      font-size: var(--t-xs);
+    }
+
+    .overlay-legend {
+      display: flex;
+      gap: 4px;
+    }
+
+    .overlay-chip {
+      border-left: 10px solid var(--chip);
+      padding-left: 4px;
+      color: var(--muted);
+      font-size: var(--t-xs);
+    }
+
+    .overlay-group {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-top: 6px;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      color: var(--muted);
+      font: 500 var(--t-xs) / 1.3 var(--data);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .overlay-text small.weather-error {
+      color: var(--danger);
+    }
+
+    .radar-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 0 4px 21px;
+    }
+
+    .radar-controls .readout-toggle {
+      margin-left: 0;
+    }
+
+    .radar-controls input[type='range'] {
+      flex: 1;
+      min-width: 0;
+      accent-color: var(--blue);
+    }
+
+    /* The one active scenario (Exercise module): in the masthead, next to
+     * Study, unmissable but not floating over the map. */
+    .scenario-chip {
+      padding: 4px 10px;
+      border: 1px solid var(--signal);
+      color: var(--signal);
+      background: transparent;
+      font: 600 var(--t-xs) / 1 var(--data);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      cursor: default;
+    }
+
+    .basemap-group {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .basemap-group-online {
+      margin-top: 8px;
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
+
+    /* "Online" is a caution, not an error: amber, and worded once, not
+     * badged on every online basemap button. */
+    .basemap-online-note {
+      margin: 0 0 4px;
+      color: var(--caution);
+      font: 600 var(--t-xs) / 1.2 var(--data);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .basemap-option {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-height: var(--target);
+      border: 0;
+      padding: 0 8px;
+      color: var(--ink);
+      background: transparent;
+      font: 500 var(--t-sm) / 1 var(--body);
+      text-align: left;
+      cursor: pointer;
+      transition: background-color var(--d-fast) var(--ease-out);
+    }
+
+    .basemap-option:hover:not([aria-checked='true'], :disabled) {
+      background: var(--surface-hover);
+    }
+
+    .basemap-option[aria-checked='true'] {
+      color: var(--on-fill);
+      background: var(--fill);
+    }
+
+    .basemap-option:disabled {
+      color: var(--muted);
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+
+    .readout-toggle {
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      padding: 0 8px;
+      color: var(--muted);
+      background: transparent;
+      font: 600 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition:
+        background-color var(--d-fast) var(--ease-out),
+        color var(--d-fast) var(--ease-out);
+    }
+
+    .readout-toggle[aria-pressed='true'] {
+      border-color: var(--fill);
+      color: var(--on-fill);
+      background: var(--fill);
+    }
+
+    .map-hint {
+      border-color: var(--signal);
+      box-shadow: inset 3px 0 0 var(--signal);
+    }
+
+    .map-click-info {
+      color: var(--ink);
+    }
+
+    /* -- Bottom status bar: pointer/elevation/scale, map-tools, sheet
+     * toggles, zoom, info. Replaces the previously scattered widgets. -- */
+    .status-bar {
+      position: absolute;
+      z-index: 6;
+      bottom: var(--sheet-gap);
+      left: var(--sheet-l);
+      right: var(--sheet-r);
+      display: flex;
+      align-items: stretch;
+      justify-content: space-between;
+      gap: 6px;
+      min-height: var(--target);
+      padding: 0 6px;
+      container: status-bar / inline-size;
+      transition:
+        left var(--d-slow) var(--ease-out),
+        right var(--d-slow) var(--ease-out);
+    }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .status-icon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .status-left,
+    .status-right {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+
+    .status-center {
+      display: flex;
+      align-items: center;
+      flex: 1 1 auto;
+      justify-content: center;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      font: var(--t-sm) / 1 var(--data);
+      white-space: nowrap;
+    }
+
+    .ipb-scale {
+      position: static !important;
+      color: var(--ink);
+      font: var(--t-sm) / 1 var(--data);
+    }
+
+    /* A bracket as wide as the distance it names, so it reads as a scale,
+     * not as a third number beside the grid reference and elevation. */
+    .ipb-scale .ipb-scale-inner {
+      border: 1px solid currentColor;
+      border-top: 0;
+      padding: 0 2px 1px;
+      color: inherit;
+      text-align: center;
+    }
+
+    .status-left {
+      gap: 10px;
+    }
+
+    .status-left > * + * {
+      padding-left: 10px;
+      border-left: 1px solid var(--line-dark);
+    }
+
+    .sheet-toggle,
+    .zoom-button,
+    .info-toggle,
+    .map-tools-toolbar {
+      flex-shrink: 0;
+    }
+
+    .sheet-toggle {
+      display: grid;
+      place-items: center;
+      width: var(--target);
+      min-height: var(--target);
+      padding: 0;
+      font: 500 var(--t-sm) / 1 var(--body);
+      cursor: pointer;
+      transition: background-color var(--d-fast) var(--ease-out);
+    }
+
+    .sheet-toggle:hover {
+      background: var(--surface-hover);
+    }
+
+    .sheet-toggle[aria-expanded='true'] {
+      border-color: var(--fill);
+      color: var(--on-fill);
+      background: var(--fill);
+    }
+
+    .zoom-button {
+      width: var(--target);
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      color: var(--ink);
+      background: transparent;
+      font: 600 var(--t-lg) / 1 var(--body);
+      cursor: pointer;
+      transition: background-color var(--d-fast) var(--ease-out);
+    }
+
+    .zoom-button:hover {
+      background: var(--surface-hover);
+    }
+
+    .info-toggle {
+      width: var(--target);
+      min-height: var(--target);
+      border: 1px solid var(--line-dark);
+      color: var(--ink);
+      background: transparent;
+      font: 600 var(--t-md) / 1 var(--body);
+      cursor: pointer;
+      transition: background-color var(--d-fast) var(--ease-out);
+    }
+
+    .info-toggle:hover,
+    .info-toggle[aria-expanded='true'] {
+      background: var(--surface-hover);
+    }
+
+    .info-popover {
+      z-index: 7;
+      position: absolute;
+      bottom: calc(100% + 8px);
+      right: 6px;
+      width: 320px;
+      max-width: calc(100vw - 2 * var(--sheet-gap));
+      padding: 10px 12px;
+      box-shadow: var(--shadow);
+      font: var(--t-sm) / 1.4 var(--body);
+      transition:
+        opacity var(--d-med) var(--ease-out),
+        translate var(--d-med) var(--ease-out);
+
+      @starting-style {
+        opacity: 0;
+        translate: 0 4px;
+      }
+    }
+
+    .info-popover-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .info-popover-attribution {
+      margin: 0;
+      color: var(--muted);
+      font: var(--t-xs) / 1.4 var(--data);
+    }
+  }
+}

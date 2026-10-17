@@ -2,9 +2,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 
-import { createDispatcher } from '../../../server/dispatch.js';
+import { createDispatcher } from '../../../server/dispatch.ts';
 
 let stateRoot;
 let dataRoot;
@@ -35,7 +35,7 @@ beforeAll(async () => {
     path.join(dataRoot, 'exercise', 'regions.json'),
     JSON.stringify({ type: 'FeatureCollection', features: [] }),
   );
-  routes = (await import('./routes.js')).default;
+  routes = (await import('./routes.ts')).default;
 });
 
 afterAll(() => {

@@ -4,16 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp dev --host 127.0.0.1 --port 5180 --strictPort",
-    "dev:lan": "IPB_AUTH=on vp dev --host :: --port 5180 --strictPort",
-    "build": "vp build",
-    "start": "node server/index.js",
-    "start:lan": "IPB_AUTH=on IPB_HOST=:: node server/index.js",
-    "test": "vp test run",
-    "test:e2e": "playwright test",
-    "check": "vp check",
-    "format": "vp fmt --write",
-    "lint": "vp lint"
+    "dev": "bun --watch dev.ts",
+    "dev:lan": "IPB_AUTH=on IPB_HOST=:: bun --watch dev.ts",
+    "build": "bun build.ts",
+    "start": "bun server/index.ts",
+    "start:lan": "IPB_AUTH=on IPB_HOST=:: bun server/index.ts",
+    "test": "bun test",
+    "test:e2e": "bun --bun playwright test",
+    "format": "bun --bun oxfmt",
+    "lint": "bun --bun oxlint --type-aware && bun --bun oxfmt --check",
+    "verify": "bun check && bun run lint"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
@@ -30,11 +30,16 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "@types/bun": "1.4.3",
+    "@types/node": "24.19.1",
     "geotiff": "^3.1.0-beta.0",
     "mapshaper": "^0.7.67",
-    "vite-plus": "0.3.0"
+    "oxfmt": "0.64.0",
+    "oxlint": "1.79.0",
+    "oxlint-tsgolint": "7.0.2001"
   },
   "engines": {
-    "node": ">=22.5.0"
-  }
+    "bun": ">=1.4.3"
+  },
+  "packageManager": "bun@1.4.3"
 }

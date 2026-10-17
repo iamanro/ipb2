@@ -2,7 +2,7 @@
  * Cell release (C5, docs/phase1-access.md): the badge every cell-owned
  * item's owner/release state renders as, and the release control a
  * module's list/detail view embeds next to one. Mirrors
- * `server/policy.js`'s `canRelease`/`CELLS` in miniature — duplicated, not
+ * `server/policy.ts`'s `canRelease`/`CELLS` in miniature — duplicated, not
  * imported, the same reason `src/session.js` duplicates `ROLES`: that file
  * pulls in `node:sqlite` and has no business in a browser bundle. The
  * server enforces regardless of what this predicate shows.
@@ -43,7 +43,7 @@ export function renderCellBadge(cell) {
   );
 }
 
-/** Mirrors `server/policy.js`'s `canRelease`: White (incl. admin), or an
+/** Mirrors `server/policy.ts`'s `canRelease`: White (incl. admin), or an
  * analyst-or-above member of the item's owning cell. */
 export function canReleaseClient(item) {
   if (sessionMode() === 'off') return true;
@@ -54,7 +54,7 @@ export function canReleaseClient(item) {
   return can('analyst');
 }
 
-/** Mirrors `server/policy.js`'s `canEdit`: release grants read access only,
+/** Mirrors `server/policy.ts`'s `canEdit`: release grants read access only,
  * so edit/delete controls on an item (and its children) show for White or
  * the owning cell. The role check (`can(...)`) still applies on top. */
 export function canEditClient(item) {

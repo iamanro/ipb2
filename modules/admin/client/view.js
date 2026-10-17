@@ -3,7 +3,7 @@
  * exercise's membership roster (cell + role, per docs/phase1-access.md),
  * the exercise lifecycle (rename/archive/reset/restore), and the audit
  * trail (`GET /api/auth/audit`). Every write goes through `/api/auth/*`
- * (`server/api.js`); this module has no server route of its own (see
+ * (`server/api.ts`); this module has no server route of its own (see
  * `module.js`).
  */
 import { formatDtg } from '../../../src/dtg.js';
@@ -11,7 +11,7 @@ import { renderCellBadge } from '../../../src/release.js';
 import { can, currentUser, handleUnauthorized, sessionMode } from '../../../src/session.js';
 
 import './styles.css';
-import template from './view.html?raw';
+import template from './view.html' with { type: 'text' };
 
 const CELLS = ['white', 'blue', 'red'];
 const CELL_LABELS = { white: 'White', blue: 'Blue', red: 'Red' };

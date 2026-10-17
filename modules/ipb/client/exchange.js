@@ -74,7 +74,7 @@ function xmlUnescape(text) {
 // a Point/LineString/Polygon(/MultiGeometry of one), one Folder per layer,
 // and a flat ExtendedData — exactly the shapes `export.js#toKml` produces —
 // so a small, dependency-free, environment-agnostic parser (works the same
-// under Vitest as in the browser) is enough for a real round-trip, without
+// under `bun test` as in the browser) is enough for a real round-trip, without
 // pulling in a full XML/KML library for one feature.
 
 function firstTag(xml, tag) {

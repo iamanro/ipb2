@@ -162,7 +162,7 @@ export function mountBuilder({ root, params, confirm }) {
    * release grants read access only, so an ORBAT visible only because it
    * was released to your cell locks every mutating control the same way a
    * below-analyst role does. True with nothing open. Mirrors
-   * `server/policy.js`'s `canEdit`. */
+   * `server/policy.ts`'s `canEdit`. */
   function canEditOrbat() {
     return !state.doc || canEditClient(state.doc.orbat);
   }

@@ -11,7 +11,7 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { fromArrayBuffer } from 'geotiff';
 
 import { lonLatToUtm33, utm33ToLonLat } from './utm33.mjs';
-import { readZipEntries } from './zip.mjs';
+import { readZipEntries } from '../../../server/zip.ts';
 
 const { cellsPerDegree, tileSize } = workerData;
 

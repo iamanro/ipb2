@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test } from 'bun:test';
 
-import { referenceFile } from './reference.js';
+import { referenceFile } from './reference.ts';
 
 let file;
 let reference;

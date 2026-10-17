@@ -21,27 +21,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Node 24 LTS, as in the Dockerfile: the server needs `node:sqlite`.
-      - uses: actions/setup-node@v7
+      # The same Bun as the Dockerfile and package.json `packageManager`.
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-          cache: npm
+          bun-version: 1.4.3
 
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
-      - name: Format, lint and typecheck
-        run: npm run check
+      - name: Typecheck, lint and format check
+        run: bun run verify
 
       - name: Unit tests
-        run: npm test
+        run: bun test
 
       # No reference data (terrain, equipment, geography) in CI: the e2e
       # tests run against an empty install, as a fresh clone does.
       - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+        run: bunx --bun playwright install --with-deps chromium
 
       - name: E2E tests
-        run: npm run test:e2e
+        run: bun run test:e2e
 
       - name: Upload Playwright results
         if: failure()
@@ -73,7 +72,7 @@ jobs:
         run: |
           docker run -d --name ipb-ci -e IPB_ADMIN_PASSWORD=ci-bootstrap-password ipb:ci
           for attempt in $(seq 1 30); do
-            if docker exec ipb-ci node -e "fetch('http://127.0.0.1:8000/api/auth/me').then((r) => process.exit(r.status < 500 ? 0 : 1), () => process.exit(1))"; then
+            if docker exec ipb-ci bun -e "fetch('http://127.0.0.1:8000/api/auth/me').then((r) => process.exit(r.status < 500 ? 0 : 1), () => process.exit(1))"; then
               echo "server up"; exit 0
             fi
             sleep 1

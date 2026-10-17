@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 
-import { geometryContains, haversineMetres } from './geoMatch.js';
+import { geometryContains, haversineMetres } from './geoMatch.ts';
 
 const SQUARE = {
   type: 'Polygon',

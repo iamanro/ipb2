@@ -21,6 +21,7 @@ import { symbolElement } from '../../../src/symbols/symbol.js';
 
 import { createLocationField } from './locationField.js';
 import { appendOwnerReassign } from './ownerReassign.js';
+import { reportTimeLabel, resolveObservedAt } from './reportTime.js';
 
 export const REPORT_TYPES = ['free', 'spotrep', 'salute'];
 export const REPORT_TYPE_LABEL = { free: 'Free text', spotrep: 'SPOTREP', salute: 'SALUTE' };
@@ -283,7 +284,7 @@ export function createReportFieldset({ initial = null, ariaLabel = 'Report locat
 export function createReportsController(ctx) {
   const { requestJson, createElement: el, askConfirm, showError, api, evidenceTargets } = ctx;
 
-  const data = { reports: [], nais: [], tracks: [] };
+  const data = { reports: [], nais: [], tracks: [], clock: null };
   const filters = { type: 'all', nai: 'all' };
   let panel = null;
   let unsubscribe = null;
@@ -299,14 +300,16 @@ export function createReportsController(ctx) {
   let formNote = null;
 
   async function load() {
-    const [reports, nais, tracks] = await Promise.all([
+    const [reports, nais, tracks, clock] = await Promise.all([
       requestJson(`${api}/reports`),
       requestJson(`${api}/nais`),
       requestJson(`${api}/tracks`),
+      requestJson(`${api}/clock`),
     ]);
     data.reports = reports;
     data.nais = nais;
     data.tracks = tracks;
+    data.clock = clock;
   }
 
   function naiLabel(naiId) {
@@ -651,16 +654,39 @@ export function createReportsController(ctx) {
       newTrackRow.hidden = select.value !== '__new__';
     });
 
+    // A report entered without an observation time can't be plotted at its
+    // receipt time: ask for when it was observed instead (backlog gate 2).
+    let observedInput = null;
+    const observedRow = [];
+    if (!report.occurred_at) {
+      observedInput = document.createElement('input');
+      observedInput.type = 'text';
+      observedInput.className = 'plot-track-observed';
+      observedInput.placeholder = 'Observed (DTG, e.g. 281000ZSEP26)';
+      observedInput.setAttribute('aria-label', 'Observation time for this plot');
+      observedRow.push(
+        el('p', 'panel-note', 'Observation time unknown \u2014 enter when this was seen.'),
+        observedInput,
+      );
+    }
+
     const plotButton = el('button', 'primary-button', 'Plot');
     plotButton.type = 'button';
-    plotButton.addEventListener('click', () =>
+    plotButton.addEventListener('click', () => {
+      const resolved = resolveObservedAt(report, observedInput?.value, data.clock?.now);
+      if (resolved.error) {
+        showError(panelEl, resolved.error);
+        observedInput?.focus();
+        return;
+      }
       plotTrack(
         report,
         select.value,
         { designation: designationInput.value.trim(), sidc: newTrackSidc },
         panelEl,
-      ),
-    );
+        resolved.observedAt,
+      );
+    });
     const closeButton = el('button', 'text-button', 'Close');
     closeButton.type = 'button';
     closeButton.addEventListener('click', () => {
@@ -668,11 +694,11 @@ export function createReportsController(ctx) {
       render();
     });
 
-    panelEl.append(select, newTrackRow, plotButton, closeButton);
+    panelEl.append(select, newTrackRow, ...observedRow, plotButton, closeButton);
     container.append(panelEl);
   }
 
-  async function plotTrack(report, selectValue, newTrack, container) {
+  async function plotTrack(report, selectValue, newTrack, container, observedAt) {
     try {
       if (selectValue === '__new__') {
         const created = await requestJson(`${api}/tracks`, {
@@ -683,7 +709,7 @@ export function createReportsController(ctx) {
             status: 'confirmed',
             lon: report.lon,
             lat: report.lat,
-            observed_at: report.occurred_at,
+            observed_at: observedAt,
           },
         });
         await requestJson(`${api}/tracks/${created.id}/positions`, {
@@ -691,7 +717,7 @@ export function createReportsController(ctx) {
           body: {
             lon: report.lon,
             lat: report.lat,
-            observed_at: report.occurred_at,
+            observed_at: observedAt,
             report_id: report.id,
           },
         });
@@ -702,7 +728,7 @@ export function createReportsController(ctx) {
           body: {
             lon: report.lon,
             lat: report.lat,
-            observed_at: report.occurred_at,
+            observed_at: observedAt,
             report_id: report.id,
           },
         });
@@ -885,7 +911,7 @@ export function createReportsController(ctx) {
     row.append(toggleCell);
     row.append(el('td', null, REPORT_TYPE_LABEL[report.report_type]));
     row.append(
-      el('td', null, formatDtg(new Date(report.occurred_at || report.created_at).getTime())),
+      el('td', report.occurred_at ? null : 'report-time-unknown', reportTimeLabel(report)),
     );
     row.append(el('td', null, report.lon != null ? formatMgrs(report.lon, report.lat) : '\u2014'));
     row.append(el('td', null, naiLabel(report.nai_id) ?? '\u2014'));
@@ -1010,7 +1036,7 @@ export function createReportsController(ctx) {
     table.className = 'data-table report-table';
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
-    ['', 'Type', 'DTG', 'MGRS', 'NAI', 'Cell', 'Admiralty', 'Actions'].forEach((label) =>
+    ['', 'Type', 'Observed', 'MGRS', 'NAI', 'Cell', 'Admiralty', 'Actions'].forEach((label) =>
       headRow.append(el('th', null, label)),
     );
     thead.append(headRow);

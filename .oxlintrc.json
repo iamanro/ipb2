@@ -1,0 +1,59 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Correctness, suspicious and perf as errors, with the plugins this codebase
+  // actually uses (setting `plugins` replaces the default set, so the defaults
+  // — eslint, typescript, unicorn, oxc — are listed too). Rules switched off
+  // below were measured against the code and found to be noise here; the
+  // reason is next to each one. Type-aware rules run with `--type-aware`
+  // (package.json `lint`); type checking itself is `bun check`.
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "promise", "vitest", "node"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "rules": {
+    // Closures over render state are the pattern of every client view.
+    "unicorn/consistent-function-scoping": "off",
+    // Almost all sorts/reverses are on arrays just built by map/filter.
+    "unicorn/no-array-sort": "off",
+    "unicorn/no-array-reverse": "off",
+    // Every postMessage here is worker_threads, which has no target origin.
+    "unicorn/require-post-message-target-origin": "off",
+    // Sequential awaits are deliberate: SQLite migrations, backup steps,
+    // load-test pacing, rate-limited upstream fetches.
+    "eslint/no-await-in-loop": "off",
+    // Small arrays; the spread keeps rows immutable and readable.
+    "oxc/no-map-spread": "off",
+    // `.then()` runs UI side effects after a fetch; nothing chains on it.
+    "promise/always-return": "off",
+    // Side-effect imports are stylesheets and @fontsource faces.
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    // Type-aware rules with many existing hits, kept visible as warnings
+    // until fixed: un-awaited async calls (mostly UI event handlers that
+    // report their own errors), and non-string values in template text.
+    // Every value has a declared type: no `any`. `unknown` only where outside
+    // data enters (request JSON, catch, worker messages), narrowed at once.
+    "typescript/no-explicit-any": "error",
+    "typescript/no-floating-promises": "warn",
+    "typescript/restrict-template-expressions": "warn",
+    // Tests (bun:test, whose API the `vitest` rule plugin understands) assert through
+    // expectStatus()/assertNoOverlaps()-style helpers.
+    "vitest/expect-expect": ["error", { "assertFunctionNames": ["expect", "expect*", "assert*"] }]
+  },
+  "overrides": [
+    {
+      // bun:test's types give `expect(promise).rejects.*` a void result, but
+      // it is a promise at runtime and must be awaited for the assertion to run.
+      "files": ["**/*.test.js"],
+      "rules": { "typescript/await-thenable": "off" }
+    }
+  ],
+  "ignorePatterns": [
+    "dist/**",
+    "dist.next/**",
+    "modules/*/data/**",
+    "modules/*/state/**",
+    "node_modules/**"
+  ]
+}

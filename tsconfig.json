@@ -1,0 +1,37 @@
+{
+  // Type checking, run by `bun check` (Bun's built-in tsc-compatible checker);
+  // Oxlint's type-aware rules read it too. For JavaScript, opt-in per file: only files that start with
+  // `// @ts-check` are checked, so modules join one at a time as they are
+  // split or touched (docs: tech debt review, "No real type checking").
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    // .ts files run as-is under Node's type stripping: import them by their
+    // .ts name, use only erasable syntax, and mark type-only imports.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "target": "es2024",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["bun"],
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "server/**/*.ts",
+    "server/**/*.js",
+    "server/**/*.mjs",
+    "src/**/*.js",
+    "modules/**/*.ts",
+    "modules/**/*.js",
+    "modules/**/*.mjs",
+    "e2e/**/*.js",
+    "deploy/**/*.mjs",
+    "build.ts",
+    "dev.ts"
+  ],
+  "exclude": ["node_modules", "dist", "modules/*/data", "modules/*/state"]
+}

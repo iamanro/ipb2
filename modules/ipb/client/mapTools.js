@@ -637,14 +637,14 @@ export function initMapToolbar({
     if (ringForm.searchResults.length) {
       const results = createElement('ul', 'graphics-list');
       ringForm.searchResults.forEach((item) => {
-        const row = createElement('li', 'graphic-row');
+        const resultRow = createElement('li', 'graphic-row');
         const button = createElement('button', 'text-button', item.display_name || item.name);
         button.type = 'button';
         button.addEventListener('click', () =>
           loadRanges(item.identifier, item.display_name || item.name),
         );
-        row.append(button);
-        results.append(row);
+        resultRow.append(button);
+        results.append(resultRow);
       });
       fromWeapon.append(results);
     }
@@ -660,7 +660,7 @@ export function initMapToolbar({
       } else {
         const list = createElement('ul', 'graphics-list');
         ringForm.rangeEntries.forEach((entry, index) => {
-          const row = createElement('li', 'graphic-row');
+          const rangeRow = createElement('li', 'graphic-row');
           const label = document.createElement('label');
           label.className = 'inline-field inline-field-row';
           const checkbox = document.createElement('input');
@@ -676,8 +676,8 @@ export function initMapToolbar({
             checkbox,
             createElement('span', null, ` ${entry.system} — ${entry.kind}: ${min}–${max}`),
           );
-          row.append(label);
-          list.append(row);
+          rangeRow.append(label);
+          list.append(rangeRow);
         });
         fromWeapon.append(list);
         const useButton = createElement('button', 'chip-button', 'Use selected ranges');

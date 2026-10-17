@@ -1,14 +1,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'bun:test';
 
-import { HttpError } from '../../../server/http.js';
-import { createTerrainPool } from './pool.js';
+import { HttpError } from '../../../server/http.ts';
+import { createTerrainPool } from './pool.ts';
 
 const FIXTURE_WORKER = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  'pool.fixture.worker.js',
+  'pool.fixture.worker.ts',
 );
 
 let pool;
@@ -150,12 +150,8 @@ describe('createTerrainPool', () => {
 
   test('HttpError instances survive instanceof checks', async () => {
     pool = createTerrainPool({ size: 1, workerFile: FIXTURE_WORKER });
-    try {
-      await pool.submit('fail', { status: 404, message: 'nope' }, { user: 'eve' });
-      throw new Error('expected rejection');
-    } catch (error) {
-      expect(error).toBeInstanceOf(HttpError);
-      expect(error.status).toBe(404);
-    }
+    const rejection = pool.submit('fail', { status: 404, message: 'nope' }, { user: 'eve' });
+    await expect(rejection).rejects.toBeInstanceOf(HttpError);
+    await expect(rejection).rejects.toMatchObject({ status: 404 });
   });
 });

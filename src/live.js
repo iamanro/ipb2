@@ -47,14 +47,14 @@ function deliver(event) {
 function connect() {
   if (source || !subscribers.size) return;
   source = new EventSource('/api/live');
-  source.onopen = () => {
+  source.addEventListener('open', () => {
     backoff = MIN_BACKOFF_MS;
     // Events sent while the stream was down are gone for good: tell every
     // module's subscribers to reload, as if each module had changed.
     if (wasOpen) for (const { id } of modules) deliver({ module: id, route: 'resync' });
     wasOpen = true;
-  };
-  source.onmessage = (message) => {
+  });
+  source.addEventListener('message', (message) => {
     let event;
     try {
       event = JSON.parse(message.data);
@@ -63,15 +63,15 @@ function connect() {
     }
     if (event.client === clientIdHash) return;
     deliver(event);
-  };
-  source.onerror = () => {
+  });
+  source.addEventListener('error', () => {
     source?.close();
     source = null;
     if (!subscribers.size) return;
     window.clearTimeout(reconnectTimer);
     reconnectTimer = window.setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
-  };
+  });
 }
 
 function disconnectIfIdle() {
