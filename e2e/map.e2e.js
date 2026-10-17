@@ -120,14 +120,14 @@ test('printing includes a snapshot of the map although print styles hide the map
 
 test('the MGRS grid toggle survives a reload', async ({ page, request }) => {
   await openStudy(page, request);
-  // The grid switch lives in the Map popover, with the other overlays.
-  await page.locator('#map-menu-toggle').click();
-  const toggle = page.getByRole('button', { name: 'MGRS grid', exact: true });
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  // The grid switch lives in the Layers popover, off until turned on.
+  await page.locator('#layers-menu-toggle').click();
+  const toggle = page.getByRole('checkbox', { name: 'MGRS grid', exact: true });
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(toggle).toBeChecked();
   await page.reload();
-  await expect(page.locator('#grid-toggle')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('#grid-toggle')).toBeChecked();
 });
 
 test('a point added by clicking the map keeps its name and multi-line note', async ({
@@ -251,6 +251,8 @@ test('the forecast request to Open-Meteo carries no custom header (it would fail
     });
   });
   await openStudy(page, request);
+  // The forecast lives in the worksheet, one tab away from the steps.
+  await page.getByRole('tab', { name: 'Worksheet' }).click();
   await page.locator('.weather-forecast').getByRole('button', { name: 'Get weather' }).click();
   await expect.poll(() => forecastHeaders.length).toBeGreaterThan(0);
   expect(forecastHeaders[0]).not.toHaveProperty('x-client-id');

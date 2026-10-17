@@ -34,8 +34,64 @@ import {
   saveMapView,
   state,
 } from './view.js';
+import { latestAnalysis } from './step2.js';
 
 const RADAR_FRAME_MS = 700;
+
+/** The study's own map layers, toggled from the Layers popover's Study section. */
+const LAYER_ROWS = [
+  { id: 'areas', label: 'Areas', hint: 'AO and AOI outlines' },
+  { id: 'oakoc', label: 'OAKOC', hint: 'Key terrain, avenues, obstacles, NAI/TAI' },
+  { id: 'mcoo', label: 'MCOO' },
+  { id: 'viewshed', label: 'Viewshed' },
+  { id: 'units', label: 'Units' },
+  { id: 'graphics', label: 'Graphics & range rings' },
+  { id: 'custom', label: 'Custom layers' },
+];
+
+/** A short "nothing to show yet" note for the two computed layers, rather
+ * than disabling their checkbox silently. */
+function layerRowHint(id) {
+  if (id === 'mcoo' && !state.mobility.grid) {
+    if (state.mobility.restoring) return 'Restoring the saved run…';
+    return state.study && latestAnalysis('mobility')
+      ? 'Saved run not shown — see step 2'
+      : 'Not run yet — Run MCOO in step 2';
+  }
+  if (id === 'viewshed' && !state.viewshedResult) {
+    if (state.viewshedRestoring) return 'Restoring the saved run…';
+    return state.study && latestAnalysis('viewshed')
+      ? 'Saved run not shown — see step 2'
+      : 'Not run yet — add posts in step 2';
+  }
+  return null;
+}
+
+function renderLayersStudyList() {
+  if (!elements.layersStudyList) return;
+  elements.layersStudyList.replaceChildren(
+    ...LAYER_ROWS.map((entry) => {
+      const row = createElement('label', 'overlay-option');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.dataset.layer = entry.id;
+      checkbox.checked = state.layers[entry.id];
+      const text = createElement('span', 'overlay-text', entry.label);
+      const hint = layerRowHint(entry.id) ?? entry.hint;
+      if (hint) text.append(createElement('small', null, hint));
+      row.append(checkbox, text);
+      return row;
+    }),
+  );
+}
+
+/** Refreshes the Layers popover's Study section just before it opens — it is
+ * rarely open, so a lazy re-render beats threading updates through every
+ * place that changes a study feature, MCOO run or viewshed result. */
+export function renderLayersPopover() {
+  if (elements.layersStudySection) elements.layersStudySection.hidden = !state.study;
+  renderLayersStudyList();
+}
 
 // --- Weather (online) ------------------------------------------------------------
 

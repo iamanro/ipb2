@@ -3,21 +3,16 @@
   [data-module='ipb'] {
     @media (max-width: 1280px) {
       .workspace {
-        --sheet-l: calc(300px + 2 * var(--sheet-gap));
-        --sheet-r: calc(360px + 2 * var(--sheet-gap));
+        --sheet-l: calc(340px + 2 * var(--sheet-gap));
       }
 
-      .control-panel {
-        width: 300px;
-      }
-
-      .detail-panel {
-        width: 360px;
+      .sheet-panel {
+        width: 340px;
       }
     }
 
-    /* Narrow: the sheets dock to the bottom half, one at a time (view.js
-     * closes the other); map chrome rides above whichever is open. */
+    /* Narrow: the sheet docks to the bottom half instead of the left edge;
+     * map chrome rides above it when open. */
     @media (max-width: 980px) {
       .workspace {
         --sheet-l: var(--sheet-gap);
@@ -27,12 +22,11 @@
         height: calc(100dvh - var(--masthead));
       }
 
-      .workspace[data-tools='closed'][data-worksheet='closed'] {
+      .workspace[data-sheet='none'] {
         --chrome-b: calc(var(--target) + 2 * var(--sheet-gap));
       }
 
-      .control-panel,
-      .detail-panel {
+      .sheet-panel {
         align-self: end;
         justify-self: stretch;
         width: auto;
@@ -41,8 +35,7 @@
         margin: 0 var(--sheet-gap) var(--sheet-gap);
       }
 
-      .workspace[data-tools='closed'] .control-panel,
-      .workspace[data-worksheet='closed'] .detail-panel {
+      .workspace[data-sheet='none'] .sheet-panel {
         translate: 0 calc(100% + 2 * var(--sheet-gap));
       }
 
@@ -53,12 +46,13 @@
         transition: bottom var(--d-slow) var(--ease-out);
       }
 
-      .workspace[data-tools='closed'][data-worksheet='closed'] .status-bar {
+      .workspace[data-sheet='none'] .status-bar {
         bottom: var(--sheet-gap);
       }
     }
 
     @media print {
+      .sheet-tabs,
       .control-panel,
       .map-panel {
         display: none;
@@ -69,8 +63,26 @@
         height: auto;
       }
 
-      /* The worksheet sheet prints as the page, open or put away. */
-      .detail-panel {
+      /* The worksheet prints as the page whether its tab is active, the
+       * other tab is, or the sheet is put away entirely: equal-specificity
+       * overrides of the data-sheet hide/slide rules, winning by being last. */
+      .workspace[data-sheet] .sheet-panel {
+        display: block;
+        width: auto;
+        max-height: none;
+        margin: 0;
+        overflow: visible;
+        border: 0;
+        background: none;
+        backdrop-filter: none;
+        box-shadow: none;
+        translate: none;
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .workspace[data-sheet] .detail-panel {
+        display: block;
         width: auto;
         max-height: none;
         margin: 0;

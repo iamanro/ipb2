@@ -17,7 +17,7 @@ import {
 import { applyClassificationBanner } from './exchange.js';
 import { initMapToolbar } from './mapTools.js';
 import { areaFeatures } from './areas.js';
-import { filterByCoa, initSitemp, refreshOrbatLinks } from './sitemp.js';
+import { filterByCoa, initSitemp, refreshOrbatLinks, renderUnitsPanel } from './sitemp.js';
 import { destroySituation, renderSituationOverlayRow, setSituationEnabled } from './situation.js';
 import { destroyTimeline } from './timeline.js';
 import { customLayerFeatures, renderCustomLayers, renderLayersPrint } from './customLayers.js';
@@ -41,7 +41,13 @@ import {
   siteKey,
   weatherPoint,
 } from './step1.js';
-import { keyTerrainLabel, renderStep2Worksheet } from './step2.js';
+import {
+  keyTerrainLabel,
+  paintMobility,
+  paintViewshed,
+  renderStep2Worksheet,
+  restoreSavedAnalyses,
+} from './step2.js';
 import { loadEquipmentBookmarks, renderReorderButtons, renderStep3Worksheet } from './step3.js';
 import { renderStep4Worksheet } from './step4.js';
 import { refreshGuideStatus, renderToolPanel } from './toolPanel.js';
@@ -50,6 +56,7 @@ import {
   onWeatherViewChange,
   refreshWeather,
   renderBasemapSwitch,
+  renderLayersPopover,
   renderScenarioChip,
   renderWeatherRows,
   scenarioBlocksBasemap,
@@ -256,8 +263,19 @@ function loadMapView() {
       situation: false,
       ...Object.fromEntries(WEATHER_OVERLAYS.map((overlay) => [overlay.id, false])),
     },
-    grid: true,
+    grid: false,
     symbolSize: 'medium',
+    // The study's own layers, toggled from the Layers popover; on by default
+    // so a first-time analyst sees everything, like before this existed.
+    layers: {
+      areas: true,
+      oakoc: true,
+      mcoo: true,
+      viewshed: true,
+      units: true,
+      graphics: true,
+      custom: true,
+    },
   };
   try {
     const saved = JSON.parse(window.localStorage.getItem(MAP_VIEW_KEY) ?? 'null');
@@ -267,6 +285,9 @@ function loadMapView() {
     }
     if (typeof saved?.grid === 'boolean') view.grid = saved.grid;
     if (Object.hasOwn(SYMBOL_SIZES, saved?.symbolSize ?? '')) view.symbolSize = saved.symbolSize;
+    for (const id of Object.keys(view.layers)) {
+      if (typeof saved?.layers?.[id] === 'boolean') view.layers[id] = saved.layers[id];
+    }
   } catch {
     // Unreadable or blocked storage: fall back to the defaults above.
   }
@@ -282,6 +303,7 @@ function saveMapView() {
         overlays: state.overlays,
         grid: state.grid,
         symbolSize: state.symbolSize,
+        layers: state.layers,
       }),
     );
   } catch {
@@ -289,28 +311,33 @@ function saveMapView() {
   }
 }
 
-/** Which floating sheets are out; remembered like the map view. */
+/** Which floating sheet is out ('tools' | 'worksheet' | null); remembered like the map view. */
 const SHEETS_KEY = 'ipb.sheets';
 
-/** Below this width the sheets dock to the bottom half, one at a time. */
+/** Below this width the sheet docks to the bottom half instead of the left edge. */
 const NARROW_QUERY = '(max-width: 980px)';
 
-function loadSheets() {
-  const sheets = { tools: true, worksheet: true };
+function loadSheet() {
+  const raw = window.localStorage.getItem(SHEETS_KEY);
+  if (raw === null) return 'tools';
   try {
-    const saved = JSON.parse(window.localStorage.getItem(SHEETS_KEY) ?? 'null');
-    for (const name of Object.keys(sheets)) {
-      if (typeof saved?.[name] === 'boolean') sheets[name] = saved[name];
+    const saved = JSON.parse(raw);
+    if (saved === 'tools' || saved === 'worksheet' || saved === null) return saved;
+    // Migrate the old { tools, worksheet } boolean shape: tools wins ties.
+    if (saved && typeof saved === 'object') {
+      if (saved.tools) return 'tools';
+      if (saved.worksheet) return 'worksheet';
+      return null;
     }
   } catch {
-    // Unreadable or blocked storage: both sheets out.
+    // Unreadable or blocked storage: default to the tools sheet.
   }
-  return sheets;
+  return 'tools';
 }
 
-function saveSheets() {
+function saveSheet() {
   try {
-    window.localStorage.setItem(SHEETS_KEY, JSON.stringify(state.sheets));
+    window.localStorage.setItem(SHEETS_KEY, JSON.stringify(state.sheet));
   } catch {
     // Storage full or blocked: the layout just won't survive a reload.
   }
@@ -319,7 +346,7 @@ function saveSheets() {
 function createState() {
   return {
     session: new AbortController(),
-    sheets: loadSheets(),
+    sheet: loadSheet(),
     // The one active scenario (Exercise module), or null; see loadScenario.
     scenario: null,
     studies: [],
@@ -332,14 +359,30 @@ function createState() {
     losPicks: [],
     losForm: { observer: 1.8, target: 1.8 },
     losResult: null,
+    /** Restoring the saved line-of-sight run after reopening the study, and
+     * what went wrong, if anything (see restoreSavedAnalyses). */
+    losRestoring: false,
+    losRestoreError: null,
+    losAoiChanged: false,
     viewshedForm: { radius: 3000, observer: 1.8, target: 1.8 },
     lightForm: { start: localDateInputValue(new Date()), days: 7 },
     viewshedResult: null,
     /** Observation posts of the combined viewshed, in the order added. */
     viewshedPosts: [],
+    viewshedRestoring: false,
+    viewshedRestoreError: null,
+    viewshedAoiChanged: false,
     keyTerrain: { prominence: 30, running: false, candidates: null },
     avenues: { width: 500, picks: [], running: false, routes: null },
-    mobility: { cell: 100, opacity: 0.55, grid: null, running: false },
+    mobility: {
+      cell: 100,
+      opacity: 0.55,
+      grid: null,
+      running: false,
+      restoring: false,
+      restoreError: null,
+      aoiChanged: false,
+    },
     selectedFeatureId: null,
     selectedCoaId: null,
     /** SITEMP (step 4): show every COA's units/graphics instead of only the
@@ -404,6 +447,7 @@ function queryElements(root) {
     printMap: pick('#print-map'),
     studyToggle: pick('#study-toggle'),
     studyName: pick('#study-name'),
+    studyCellBadge: pick('#study-cell-badge'),
     studyMenu: pick('#study-menu'),
     studySearch: pick('#study-search'),
     studyList: pick('#study-list'),
@@ -412,10 +456,13 @@ function queryElements(root) {
     stepNav: pick('#step-nav'),
     toolPanel: pick('#tool-panel'),
     workspace: pick('#workspace'),
+    sheetPanel: pick('#sheet-panel'),
     controlPanel: pick('#control-panel'),
     detailPanel: pick('#detail-panel'),
     toolsToggle: pick('#tools-toggle'),
     worksheetToggle: pick('#worksheet-toggle'),
+    sheetTabTools: pick('#sheet-tab-tools'),
+    sheetTabWorksheet: pick('#sheet-tab-worksheet'),
     mapTarget: pick('#map-target'),
     mapTools: pick('#map-tools'),
     classificationTop: pick('#classification-banner-top'),
@@ -430,6 +477,10 @@ function queryElements(root) {
     mapPopoverScenario: pick('#map-popover-scenario'),
     basemapSwitch: pick('#basemap-switch'),
     scenarioChip: pick('#scenario-chip'),
+    layersMenuToggle: pick('#layers-menu-toggle'),
+    layersPopover: pick('#layers-popover'),
+    layersStudySection: pick('#layers-study-section'),
+    layersStudyList: pick('#layers-study-list'),
     overlayList: pick('#overlay-list'),
     mapHint: pick('#map-hint'),
     mapClickInfo: pick('#map-click-info'),
@@ -440,6 +491,7 @@ function queryElements(root) {
     infoPopover: pick('#info-popover'),
     mapEmpty: pick('#map-empty'),
     mapEmptyCreate: pick('#map-empty-create'),
+    mapEmptyHint: pick('#map-empty-hint'),
     worksheetStudyName: pick('#worksheet-study-name'),
     worksheetStudyRelease: pick('#worksheet-study-release'),
     worksheet1: pick('#worksheet-1'),
@@ -515,13 +567,6 @@ function applyLock(el, { hide = el.tagName === 'BUTTON' } = {}) {
  */
 function editable(el, opts) {
   if (can('analyst') && canEditStudy()) return el;
-  return applyLock(el, opts);
-}
-
-/** Like `editable()`, but gated on a given `study` (e.g. a study-list row)
- * rather than the currently open one. */
-function editableFor(study, el, opts) {
-  if (can('analyst') && canEditClient(study)) return el;
   return applyLock(el, opts);
 }
 
@@ -871,29 +916,30 @@ function closeStudyMenu() {
 
 function renderStudyRow(study) {
   const row = createElement('div', 'study-row');
-  if (String(study.id) === String(state.studyId)) row.classList.add('active');
-  const body = createElement('div', 'study-row-body');
-  const open = createElement('button', 'study-open', study.name);
+  const isActive = String(study.id) === String(state.studyId);
+  if (isActive) row.classList.add('active');
+  const open = createElement('button', 'study-row-open');
   open.type = 'button';
+  if (isActive) open.setAttribute('aria-current', 'true');
+  open.append(
+    createElement('span', 'study-row-name', study.name),
+    renderCellBadge(study.owner_cell),
+    createElement(
+      'span',
+      'study-row-meta',
+      `${study.feature_count} feature${study.feature_count === 1 ? '' : 's'} · ${study.coa_count} COA${study.coa_count === 1 ? '' : 's'}`,
+    ),
+  );
   open.addEventListener('click', () => {
     closeStudyMenu();
     selectStudy(study.id);
   });
-  const meta = createElement(
-    'span',
-    'study-row-meta',
-    `${study.feature_count} feature${study.feature_count === 1 ? '' : 's'} · ${study.coa_count} COA${study.coa_count === 1 ? '' : 's'}`,
-  );
-  body.append(open, renderCellBadge(study.owner_cell), meta);
-  const actions = createElement('div', 'study-row-actions');
-  const rename = editableFor(study, createElement('button', 'icon-button', 'Rename'));
-  rename.type = 'button';
-  rename.addEventListener('click', () => renameStudy(study));
-  const remove = editableFor(study, createElement('button', 'icon-button danger', 'Delete'));
-  remove.type = 'button';
-  remove.addEventListener('click', () => deleteStudy(study));
-  actions.append(rename, remove);
-  row.append(body, actions);
+  row.append(open);
+  const menu = renderRowMenu([
+    { label: 'Rename', action: () => renameStudy(study) },
+    { label: 'Delete', action: () => deleteStudy(study), danger: true },
+  ]);
+  if (menu) row.append(menu);
   return row;
 }
 
@@ -920,6 +966,7 @@ async function loadStudies() {
   const list = await requestJson(`${API}/studies`);
   state.studies = list.items;
   renderStudyList();
+  if (!state.study) renderEmptyState();
 }
 
 export async function createStudy() {
@@ -1005,12 +1052,21 @@ function beginStudyLoad(id, { preserveFeature = false } = {}) {
   state.activeLayerId = null;
   state.losPicks = [];
   state.losResult = null;
+  state.losRestoring = false;
+  state.losRestoreError = null;
+  state.losAoiChanged = false;
   state.viewshedResult = null;
   state.viewshedPosts = [];
+  state.viewshedRestoring = false;
+  state.viewshedRestoreError = null;
+  state.viewshedAoiChanged = false;
   state.keyTerrain.candidates = null;
   state.avenues.picks = [];
   state.avenues.routes = null;
   state.mobility.grid = null;
+  state.mobility.restoring = false;
+  state.mobility.restoreError = null;
+  state.mobility.aoiChanged = false;
   state.tool = null;
   state.orbatUnits = new Map();
   state.guide.open = {};
@@ -1025,6 +1081,7 @@ function finishStudyLoad(payload, controller) {
   renderStudyLoaded();
   writeLocation();
   refreshOrbatLinks().catch(() => {});
+  restoreSavedAnalyses(controller);
   return true;
 }
 
@@ -1120,6 +1177,7 @@ function renderStudyReleaseControl() {
 function renderEmptyState() {
   elements.mapEmpty.hidden = false;
   elements.studyName.textContent = 'No study selected';
+  elements.studyCellBadge.replaceChildren();
   elements.worksheetStudyName.textContent = 'No study open';
   const emptyTitle = elements.mapEmpty.querySelector('h2');
   const emptyCopy = elements.mapEmpty.querySelector('p:nth-of-type(2)');
@@ -1131,6 +1189,21 @@ function renderEmptyState() {
     emptyCopy.textContent = canSwitchStudies()
       ? 'The map and worksheet activate once a study is open.'
       : 'The map and worksheet activate automatically for your cell’s study.';
+  }
+  if (canSwitchStudies() && state.studies.length) {
+    const names = state.studies
+      .slice(0, 5)
+      .map((study) => study.name)
+      .join(', ');
+    elements.mapEmptyHint.hidden = false;
+    elements.mapEmptyHint.replaceChildren(
+      document.createTextNode(`Existing studies: ${names}. Press `),
+      createElement('kbd', null, '/'),
+      document.createTextNode(' to open one.'),
+    );
+  } else {
+    elements.mapEmptyHint.hidden = true;
+    elements.mapEmptyHint.replaceChildren();
   }
   renderStudyReleaseControl();
   updateStepNavAvailability();
@@ -1179,6 +1252,7 @@ async function refetchOpenStudy() {
 function renderStudyLoaded() {
   const study = state.study.study;
   elements.studyName.textContent = study.name;
+  elements.studyCellBadge.replaceChildren(renderCellBadge(study.owner_cell));
   elements.worksheetStudyName.textContent = study.name;
   elements.mapEmpty.hidden = true;
   renderStudyReleaseControl();
@@ -1249,11 +1323,12 @@ function playStepMotion(direction) {
   );
 }
 
-// --- Floating sheets -----------------------------------------------------
+// --- Floating sheet -------------------------------------------------------
 
+/** The Steps and Worksheet tabs of the one left-docked sheet. */
 const SHEET_ELEMENTS = {
-  tools: { panel: 'controlPanel', toggle: 'toolsToggle' },
-  worksheet: { panel: 'detailPanel', toggle: 'worksheetToggle' },
+  tools: { panel: 'controlPanel', toggle: 'toolsToggle', tab: 'sheetTabTools' },
+  worksheet: { panel: 'detailPanel', toggle: 'worksheetToggle', tab: 'sheetTabWorksheet' },
 };
 
 function isNarrow() {
@@ -1261,39 +1336,36 @@ function isNarrow() {
 }
 
 function renderSheets() {
-  // Docked sheets share the bottom half: never both out on a narrow screen.
-  if (isNarrow() && state.sheets.tools && state.sheets.worksheet) state.sheets.worksheet = false;
-  for (const [name, { panel, toggle }] of Object.entries(SHEET_ELEMENTS)) {
-    const open = state.sheets[name];
-    elements.workspace.dataset[name] = open ? 'open' : 'closed';
+  elements.workspace.dataset.sheet = state.sheet ?? 'none';
+  for (const [name, { panel, toggle, tab }] of Object.entries(SHEET_ELEMENTS)) {
+    const open = state.sheet === name;
     elements[toggle].setAttribute('aria-expanded', String(open));
-    // A sheet sliding away must not keep keyboard focus inside it.
+    elements[tab].setAttribute('aria-selected', String(open));
+    // A sheet sliding away or switching tabs must not keep keyboard focus inside it.
     if (!open && elements[panel].contains(document.activeElement)) elements[toggle].focus();
   }
 }
 
-export function toggleSheet(name) {
-  const open = !state.sheets[name];
-  state.sheets[name] = open;
-  if (open && isNarrow()) {
-    for (const other of Object.keys(SHEET_ELEMENTS))
-      if (other !== name) state.sheets[other] = false;
-  }
+/** Switches to (and opens) the given tab, without closing on a repeat call. */
+export function setSheet(name) {
+  state.sheet = name;
   renderSheets();
-  saveSheets();
+  saveSheet();
 }
 
-/** Map pixels hidden under the open sheets, for fitting features into view. */
+/** Status-bar toggle and [ / ] keys: open that tab, or close it if already active. */
+export function toggleSheet(name) {
+  setSheet(state.sheet === name ? null : name);
+}
+
+/** Map pixels hidden under the open sheet, for fitting features into view. */
 function coveredInsets() {
   const map = elements.mapTarget.getBoundingClientRect();
   const insets = [0, 0, 0, 0];
-  for (const [name, { panel }] of Object.entries(SHEET_ELEMENTS)) {
-    if (!state.sheets[name]) continue;
-    const box = elements[panel].getBoundingClientRect();
-    if (isNarrow()) insets[2] = Math.max(insets[2], map.bottom - box.top);
-    else if (name === 'tools') insets[3] = Math.max(0, box.right - map.left);
-    else insets[1] = Math.max(0, map.right - box.left);
-  }
+  if (!state.sheet) return insets;
+  const box = elements.sheetPanel.getBoundingClientRect();
+  if (isNarrow()) insets[2] = Math.max(0, map.bottom - box.top);
+  else insets[3] = Math.max(0, box.right - map.left);
   return insets;
 }
 
@@ -1324,6 +1396,10 @@ function visibleFeatures() {
     // selected COA, unless "show all COAs" is on; those with no COA show on every COA.
     const coaFiltered = (list) => filterByCoa(list, state.selectedCoaId, state.showAllCoas);
     features.push(...coaFiltered(byLayer('coa')), ...coaFiltered(byLayer('unit')));
+  } else {
+    // Off step 4 only the units that belong to no COA show: one COA's
+    // positions would otherwise sit on top of another's.
+    features.push(...byLayer('unit').filter((feature) => feature.properties?.coa_id == null));
   }
   const marker = (id, label, { lon, lat }, layer = 'note', properties = {}) => ({
     id,
@@ -1383,7 +1459,24 @@ function visibleFeatures() {
       });
     });
   }
-  return features;
+  return features.filter(layerGroupVisible);
+}
+
+/** Maps a feature to its Layers-popover group and checks state.layers; drafts
+ * and the transient markers above (LOS/OP/weather points) always show, since
+ * they are the analyst's current tool, not a study layer to hide. */
+function layerGroupVisible(feature) {
+  if (feature.properties?.draft || feature.layer === 'note' || feature.layer === 'weather') {
+    return true;
+  }
+  if (feature.layer === 'ao' || feature.layer === 'aoi') return state.layers.areas;
+  if (OAKOC_LAYERS.includes(feature.layer) || feature.layer === 'nai' || feature.layer === 'tai') {
+    return state.layers.oakoc;
+  }
+  if (feature.layer === 'unit') return state.layers.units;
+  if (['graphic', 'range-ring', 'coa'].includes(feature.layer)) return state.layers.graphics;
+  if (feature.layer === 'custom') return state.layers.custom;
+  return true;
 }
 
 function syncMapFeatures() {
@@ -1398,8 +1491,9 @@ export function reRenderContainingWorksheet(layer) {
   }
 }
 
-function cancelActiveTool() {
-  mapToolsController?.cancelActiveTool();
+/** Clears any armed `state.tool` (place-unit, draw-feature, modify-feature,
+ * …) and its map-side effects, without touching the map-tools toolbar. */
+function cancelGlobalTool() {
   if (!state.tool) return;
   if (state.tool.type === 'draw-feature' || state.tool.type === 'draw-area') {
     mapController.cancelDraw();
@@ -1413,6 +1507,19 @@ function cancelActiveTool() {
   syncMapFeatures();
   renderToolPanel();
   renderCustomLayers();
+}
+
+function cancelActiveTool() {
+  mapToolsController?.cancelActiveTool();
+  cancelGlobalTool();
+}
+
+/** Stops Measure/Graphics/Rings (but keeps the toolbar's Unit panel open)
+ * and clears any armed `state.tool`; called when arming unit placement so
+ * starting it from the Unit popover doesn't close that same popover. */
+function cancelOtherTools() {
+  mapToolsController?.cancelDrawTools();
+  cancelGlobalTool();
 }
 
 export async function showElevationReadout(lon, lat) {
@@ -1550,6 +1657,7 @@ function renderOverlayList() {
       return row;
     }),
     ...renderWeatherRows(),
+    createElement('div', 'overlay-group', 'Exercise'),
     renderSituationOverlayRow(),
   );
 }
@@ -1571,6 +1679,21 @@ function toggleMapPopover(force) {
 function closeMapPopover() {
   if (elements.mapPopover.hidden) return;
   toggleMapPopover(false);
+}
+
+function toggleLayersPopover(force) {
+  const next = force ?? elements.layersPopover.hidden;
+  if (next) {
+    closeAllPopovers();
+    renderLayersPopover();
+  }
+  elements.layersPopover.hidden = !next;
+  elements.layersMenuToggle.setAttribute('aria-expanded', String(next));
+}
+
+function closeLayersPopover() {
+  if (elements.layersPopover.hidden) return;
+  toggleLayersPopover(false);
 }
 
 function renderInfoPopover() {
@@ -1618,6 +1741,7 @@ function closeInfoPopover() {
 export function closeAllPopovers() {
   closeStudyMenu();
   closeMapPopover();
+  closeLayersPopover();
   closeInfoPopover();
   closeRowMenu();
 }
@@ -1848,6 +1972,13 @@ function handleOutsideClick(event) {
     closeMapPopover();
   }
   if (
+    !elements.layersPopover.hidden &&
+    !path.includes(elements.layersPopover) &&
+    !path.includes(elements.layersMenuToggle)
+  ) {
+    closeLayersPopover();
+  }
+  if (
     !elements.infoPopover.hidden &&
     !path.includes(elements.infoPopover) &&
     !path.includes(elements.infoToggle)
@@ -1879,6 +2010,11 @@ function onGlobalKeydown(event) {
     if (!elements.mapPopover.hidden) {
       closeMapPopover();
       elements.mapMenuToggle.focus();
+      return;
+    }
+    if (!elements.layersPopover.hidden) {
+      closeLayersPopover();
+      elements.layersMenuToggle.focus();
       return;
     }
     if (!elements.infoPopover.hidden) {
@@ -1924,6 +2060,7 @@ export function mount({ root, status }) {
   window.addEventListener('afterprint', clearPrintMap);
   elements.studyToggle.addEventListener('click', () => toggleStudyMenu());
   elements.mapMenuToggle.addEventListener('click', () => toggleMapPopover());
+  elements.layersMenuToggle.addEventListener('click', () => toggleLayersPopover());
   elements.infoToggle.addEventListener('click', () => toggleInfoPopover());
   // Zoom +/- proxy the map's own (native OpenLayers) zoom control rather than
   // duplicating its logic, so the status bar's buttons stay in one place
@@ -1955,6 +2092,8 @@ export function mount({ root, status }) {
   document.addEventListener('keydown', onGlobalKeydown);
   elements.toolsToggle.addEventListener('click', () => toggleSheet('tools'));
   elements.worksheetToggle.addEventListener('click', () => toggleSheet('worksheet'));
+  elements.sheetTabTools.addEventListener('click', () => setSheet('tools'));
+  elements.sheetTabWorksheet.addEventListener('click', () => setSheet('worksheet'));
   const narrowQuery = window.matchMedia(NARROW_QUERY);
   narrowQuery.addEventListener('change', renderSheets, { signal: session.signal });
   renderSheets();
@@ -1973,7 +2112,7 @@ export function mount({ root, status }) {
     coveredInsets,
   });
   mapController.setMgrsGrid(state.grid);
-  elements.gridToggle.setAttribute('aria-pressed', String(state.grid));
+  elements.gridToggle.checked = state.grid;
   mapController.setSymbolSize(SYMBOL_SIZES[state.symbolSize]);
   elements.symbolSizeSwitch.querySelector(`input[value="${state.symbolSize}"]`).checked = true;
   elements.symbolSizeSwitch.addEventListener('change', (event) => {
@@ -2002,6 +2141,8 @@ export function mount({ root, status }) {
       syncMapFeatures();
       reRenderContainingWorksheet(feature.layer);
     },
+    renderUnitsPanel,
+    cancelOtherTool: cancelGlobalTool,
   });
 
   // Restores a persisted "on" situation overlay before the Layers panel's
@@ -2044,10 +2185,18 @@ export function mount({ root, status }) {
   });
   refreshWeather();
   scheduleWeatherRefresh();
-  elements.gridToggle.addEventListener('click', () => {
-    state.grid = !state.grid;
-    elements.gridToggle.setAttribute('aria-pressed', String(state.grid));
+  elements.gridToggle.addEventListener('change', () => {
+    state.grid = elements.gridToggle.checked;
     mapController.setMgrsGrid(state.grid);
+    saveMapView();
+  });
+  elements.layersStudyList.addEventListener('change', (event) => {
+    const id = event.target.dataset.layer;
+    if (!id) return;
+    state.layers[id] = event.target.checked;
+    if (id === 'mcoo') paintMobility();
+    else if (id === 'viewshed') paintViewshed();
+    else syncMapFeatures();
     saveMapView();
   });
 
@@ -2185,6 +2334,7 @@ export {
   jumpToCoordinate,
   renderMapHint,
   cancelActiveTool,
+  cancelOtherTools,
   showToast,
   deleteFeature,
   armFeatureModify,

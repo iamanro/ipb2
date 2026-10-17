@@ -24,7 +24,7 @@ import {
   state,
   switchStep,
   syncMapFeatures,
-  toggleSheet,
+  setSheet,
 } from './view.js';
 import { renderWeatherPointGroup } from './step1.js';
 import {
@@ -56,9 +56,9 @@ function canEditHere() {
   return can('analyst') && canEditStudy();
 }
 
-/** Shows the worksheet (opening its sheet if put away) scrolled to `selector` in this step. */
+/** Shows the worksheet (switching to its tab if needed) scrolled to `selector` in this step. */
 function showInWorksheet(selector) {
-  if (!state.sheets.worksheet) toggleSheet('worksheet');
+  if (state.sheet !== 'worksheet') setSheet('worksheet');
   const target = elements[`worksheet${state.step}`].querySelector(selector);
   if (!target) return;
   target.scrollIntoView({ behavior: 'smooth', block: 'start' });
